@@ -1,0 +1,59 @@
+# Git
+.git
+.gitignore
+
+# IDE
+.idea
+.vscode
+.trae
+.opencode
+.omo
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+.venv
+venv
+env
+.env
+.env.local
+.env.*.local
+
+# Node
+node_modules
+dist
+.pnpm-store
+
+# Logs
+*.log
+logs/
+.launcher/
+
+# Data
+data/
+media/
+chromadb/
+
+# Database
+*.db
+*.sqlite3
+
+# Build
+build/
+dist/
+*.egg-info/
+
+# Testing
+.coverage
+.cache
+test/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Docker
+docker-compose.yml
+*.md
+images/

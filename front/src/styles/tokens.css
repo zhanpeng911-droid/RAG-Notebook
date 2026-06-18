@@ -1,0 +1,147 @@
+/* ============================================
+   设计令牌系统 — 深蓝 · 科技感 · 更有层次
+   ============================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&display=swap');
+
+:root {
+  /* ---- 字体 ---- */
+  --font-heading: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-body: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'Consolas', 'Monaco', 'Courier New', monospace;
+
+  /* ---- 颜色（浅色主题 — 深蓝体系） ---- */
+  --color-primary: #3478df;
+  --color-primary-hover: #2a6dcc;
+  --color-primary-active: #1f5fb8;
+  --color-primary-light: rgba(52, 120, 223, 0.12);
+  --color-primary-softer: rgba(52, 120, 223, 0.07);
+  --color-primary-soft: #c7ddf7;
+  --color-bg: #e7eef7;
+  --color-surface: #d9e5f2;
+  --color-card: #f8fbff;
+  --color-sidebar: #edf3fa;
+  --color-text: #102033;
+  --color-text-light: #38506f;
+  --color-text-lighter: #647b97;
+  --color-text-lightest: #8aa0b8;
+  --color-border: #b2c7de;
+  --color-border-light: #c9d8e8;
+  --color-divider: #d5e1ee;
+  --color-shadow: rgba(31, 60, 96, 0.12);
+  --color-shadow-strong: rgba(31, 60, 96, 0.22);
+  --color-success: #22a060;
+  --color-error: #d93025;
+  --color-warning: #e6940a;
+
+  /* ---- 间距 ---- */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-2xl: 32px;
+
+  /* ---- 圆角 ---- */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 9999px;
+
+  /* ---- 排版 ---- */
+  --line-height-tight: 1.4;
+  --line-height-normal: 1.6;
+  --line-height-loose: 1.8;
+
+  /* ---- Z-index 层级 ---- */
+  --z-sidebar: 50;
+  --z-topbar: 100;
+  --z-tabbar: 100;
+  --z-toast: 300;
+  --z-overlay: 400;
+
+  /* ---- 布局尺寸 ---- */
+  --sidebar-width: 240px;
+  --sidebar-collapsed-width: 64px;
+  --topbar-height: 48px;
+  --tabbar-height: 56px;
+  --statusbar-height: 32px;
+
+  /* ---- 安全区 ---- */
+  --safe-area-inset-bottom: env(safe-area-inset-bottom);
+
+  font-family: var(--font-body);
+  line-height: var(--line-height-normal);
+  font-weight: 400;
+  color-scheme: light dark;
+  color: var(--color-text);
+  background-color: var(--color-bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* ---- 暗色主题覆盖 ---- */
+[data-theme="dark"] {
+  --color-bg: #0c1622;
+  --color-surface: #131f30;
+  --color-card: #1a2a3e;
+  --color-sidebar: #131f30;
+  --color-text: #d4e2f0;
+  --color-text-light: #8ea8c4;
+  --color-text-lighter: #5e7d9e;
+  --color-text-lightest: #3e5878;
+  --color-primary: #5ea8ff;
+  --color-primary-hover: #7dbdff;
+  --color-primary-active: #4a96f5;
+  --color-border: #263c58;
+  --color-border-light: #1e3048;
+  --color-divider: #1a2a3e;
+  --color-shadow: rgba(0, 0, 0, 0.30);
+  --color-shadow-strong: rgba(0, 0, 0, 0.45);
+  --color-success: #2dbd6e;
+  --color-error: #f25c50;
+  --color-warning: #f5b731;
+}
+
+/* ---- Vant 4 主题覆写 ---- */
+:root {
+  --van-primary-color: var(--color-primary);
+  --van-background-color: var(--color-bg);
+  --van-background-color-light: var(--color-surface);
+  --van-cell-background: var(--color-card);
+  --van-cell-title-text-color: var(--color-text);
+  --van-cell-text-color: var(--color-text-light);
+  --van-cell-value-color: var(--color-text-light);
+  --van-cell-title-font-size: 14px;
+  --van-nav-bar-background: var(--color-card);
+  --van-nav-bar-title-text-color: var(--color-text);
+  --van-nav-bar-title-font-size: 17px;
+  --van-nav-bar-icon-color: var(--color-text-light);
+  --van-cell-right-icon-color: var(--color-text-lighter);
+  --van-tabbar-background: var(--color-card);
+  --van-tabbar-item-active-color: var(--color-primary);
+  --van-tabbar-item-text-color: var(--color-text-lighter);
+  --van-text-color: var(--color-text);
+  --van-text-color-2: var(--color-text-light);
+  --van-text-color-3: var(--color-text-lighter);
+  --van-button-primary-background: var(--color-primary);
+  --van-button-primary-border-color: var(--color-primary);
+  --van-button-default-color: var(--color-text);
+  --van-button-default-background: var(--color-card);
+  --van-button-default-border-color: var(--color-border);
+  --van-field-label-color: var(--color-text-light);
+  --van-field-input-text-color: var(--color-text);
+  --van-field-placeholder-text-color: var(--color-text-lighter);
+  --van-field-background: var(--color-surface);
+  --van-cell-group-background: transparent;
+  --van-cell-group-inset-padding: 0;
+  --van-cell-group-title-color: var(--color-text-lighter);
+  --van-popup-background: var(--color-card);
+  --van-dialog-background: var(--color-card);
+  --van-toast-background: rgba(15, 29, 48, 0.90);
+  --van-loading-spinner-color: var(--color-primary);
+  --van-nav-bar-height: 46px;
+}
