@@ -19,8 +19,33 @@ from app.core.exceptions import NoteNotFoundException
 from app.core.rate_limit import rate_limit
 from app.db.db_config import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.config.validator import get_settings
+from app.core.logger_handler import logger
 
 note_router = APIRouter(prefix="/note", tags=["note"])
+
+
+def _enqueue_note_vector_sync(note_id: str, user_id: str) -> None:
+    """Best-effort queue submission; never delay a completed MySQL save."""
+    if not get_settings().NOTE_VECTOR_INDEX_ENABLED:
+        return
+    try:
+        from app.tasks.celery_app import sync_note_vector_task
+        sync_note_vector_task.delay(note_id, user_id)
+    except Exception as exc:
+        logger.warning(f"Vector sync task was not submitted for {note_id}: {exc}")
+
+
+def _enqueue_note_vector_delete(note_id: str, user_id: str) -> None:
+    """Best-effort asynchronous vector cleanup."""
+    if not get_settings().NOTE_VECTOR_INDEX_ENABLED:
+        return
+    try:
+        from app.tasks.celery_app import delete_note_vector_task
+        delete_note_vector_task.delay(note_id, user_id)
+    except Exception as exc:
+        logger.warning(f"Vector delete task was not submitted for {note_id}: {exc}")
+
 
 
 @note_router.post("/create")
@@ -30,28 +55,22 @@ async def create_note(
     db: AsyncSession = Depends(get_db),
     _: None = Depends(rate_limit(limit=10, window=60)),
 ):
-    """
-    创建笔记：
-    1. MySQL 写入 + ChromaDB 向量化
-    2. 立即返回笔记（tags/category 初始为空）
-    3. 后台异步生成标签和回顾记录（通过 Celery 任务）
-    """
-    from app.core.logger_handler import logger
+    """Create a note quickly; non-critical AI work is queued after commit."""
     llm_config = payload.llm_config if isinstance(payload.llm_config, dict) else (payload.llm_config.model_dump() if payload.llm_config else None)
     note = await note_service.create_note(db, user_id, payload, llm_config=llm_config)
-    logger.info(f"【笔记创建】user_id={user_id}, note_id={note.id}")
+    logger.info(f"Note created user_id={user_id}, note_id={note.id}")
 
-    # 异步生成标签（Celery 任务，替代 asyncio.create_task）
-    if not payload.category and not payload.tags:
+    _enqueue_note_vector_sync(note.id, user_id)
+    if get_settings().NOTE_AUTO_TAG_ENABLED and not payload.category and not payload.tags:
         try:
             from app.tasks.celery_app import generate_tags_task
             generate_tags_task.delay(note.id, user_id, payload.content, llm_config)
-        except Exception as e:
-            logger.warning(f"Celery 任务提交失败，回退到本地异步: {e}")
-            import asyncio
-            asyncio.create_task(note_service._auto_tag_and_review(note.id, user_id, payload.content, llm_config=llm_config))
+        except Exception as exc:
+            # Do not fall back to in-process LLM work: it can monopolize FastAPI
+            # while a local Ollama endpoint is unavailable.
+            logger.warning(f"Auto-tag task was not submitted for {note.id}: {exc}")
 
-    return success_response(message="笔记创建成功", data=note)
+    return success_response(message="Note created", data=note)
 
 
 @note_router.get("/list")
@@ -165,13 +184,13 @@ async def update_note(
     db: AsyncSession = Depends(get_db),
     _: None = Depends(rate_limit(limit=10, window=60)),
 ):
-    """
-    更新笔记：修改 title/content，content 变更时同步更新 ChromaDB 向量。
-    """
+    """Save MySQL changes first and refresh the semantic index in Celery."""
     note = await note_service.update_note(db, note_id, user_id, payload)
     if not note:
         raise NoteNotFoundException()
-    return success_response(message="笔记更新成功", data=note)
+    if {"title", "content"}.intersection(payload.model_fields_set):
+        _enqueue_note_vector_sync(note_id, user_id)
+    return success_response(message="Note updated", data=note)
 
 
 @note_router.delete("/{note_id}")
@@ -181,13 +200,12 @@ async def delete_note(
     db: AsyncSession = Depends(get_db),
     _: None = Depends(rate_limit(limit=10, window=60)),
 ):
-    """
-    删除笔记：联删 MySQL 记录、ChromaDB 向量、以及级联的 review_records。
-    """
+    """Delete MySQL data immediately and clean the vector store asynchronously."""
     deleted = await note_service.delete_note(db, note_id, user_id)
     if not deleted:
         raise NoteNotFoundException()
-    return success_response(message="笔记删除成功")
+    _enqueue_note_vector_delete(note_id, user_id)
+    return success_response(message="Note deleted")
 
 
 @note_router.get("/{note_id}")

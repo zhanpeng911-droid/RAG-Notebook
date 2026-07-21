@@ -110,3 +110,8 @@ docker-compose.override.yml
 /script.js
 /styles.css
 
+
+# P0 hygiene
+backend/data/
+**/chromadb/
+front/pnpm-lock.yaml

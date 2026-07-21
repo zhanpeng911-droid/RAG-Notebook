@@ -2,7 +2,7 @@
 chcp 65001 >nul
 
 echo ==========================================
-echo   RAG-Notebook Docker部署
+echo   Notebook Docker部署
 echo ==========================================
 echo.
 
@@ -49,6 +49,14 @@ echo 首次构建可能需要几分钟时间...
 echo.
 
 REM 构建并启动
+REM 拒绝弱口令
+findstr /i /c:"change-me" /c:"replace-me" /c:"replace-with" .env >nul
+if %errorlevel% equ 0 (
+    echo ERROR: .env still contains placeholder secrets
+    pause
+    exit /b 1
+)
+
 docker compose up -d --build
 
 echo.

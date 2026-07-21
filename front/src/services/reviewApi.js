@@ -8,4 +8,8 @@ export const reviewApi = {
   markDone(noteId) {
     return http.post(`/review/done/${noteId}`).then(r => r.data)
   },
+
+  dueCount() {
+    return http.get('/review/due-count', { skipAuthRedirect: true }).then(r => r.data)
+  },
 }

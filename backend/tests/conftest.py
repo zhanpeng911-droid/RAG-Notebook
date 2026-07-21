@@ -93,3 +93,11 @@ sys.modules.setdefault("app.rag.task_queue", _mock_tq)
 # Mock app.utils.image_extractor
 _mock_ie = MagicMock()
 sys.modules.setdefault("app.utils.image_extractor", _mock_ie)
+
+# Mock app.services.knowledge_file_validator
+_mock_kfv = MagicMock()
+_mock_kfv.MAX_FILE_SIZE = 20 * 1024 * 1024
+_mock_kfv.safe_filename = lambda f: f.filename if hasattr(f, 'filename') else str(f)
+_mock_kfv.validate_file_type = MagicMock(return_value=None)
+_mock_kfv.validate_total_size = MagicMock(return_value=None)
+sys.modules.setdefault("app.services.knowledge_file_validator", _mock_kfv)

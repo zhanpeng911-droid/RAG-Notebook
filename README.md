@@ -1,10 +1,10 @@
-# RAG-Notebook - 智能笔记助手
+﻿# Notebook — Agentic RAG 智能知识工作台
 
 <div align="center">
 
-一个把 **笔记管理、RAG 知识库、AI 问答、间隔回顾、写作辅助** 放进同一工作流的个人知识管理项目。
+**把笔记、文档、检索、回顾与 AI 问答整合为可追踪、可引用、可恢复的个人知识工作流。**
 
-基于 `Vue 3 + FastAPI + LangChain + Django` 构建，支持 `Ollama`、`DashScope`、`OpenAI 兼容接口` 三类模型接入方式。
+基于 `Vue 3 + FastAPI + LangChain + Django + MySQL + Redis + ChromaDB` 构建，支持 `Ollama`、`DashScope` 与 `OpenAI 兼容接口`。
 
 </div>
 
@@ -12,43 +12,102 @@
 
 ## 目录
 
-- [项目简介](#项目简介)
-- [核心特性](#核心特性)
+- [项目定位](#项目定位)
+- [相比传统 RAG 的提升](#相比传统-rag-的提升)
+- [核心能力](#核心能力)
 - [系统架构](#系统架构)
 - [技术栈](#技术栈)
 - [快速开始](#快速开始)
 - [Docker 部署](#docker-部署)
 - [配置说明](#配置说明)
-- [API 文档](#api-文档)
-- [测试说明](#测试说明)
+- [关键 API](#关键-api)
+- [测试与质量验证](#测试与质量验证)
 - [项目结构](#项目结构)
-- [公开仓库说明](#公开仓库说明)
-- [联系方式](#联系方式)
+- [GitHub 上传前检查](#github-上传前检查)
+- [许可证与交流](#许可证与交流)
 
-## 项目简介
+## 项目定位
 
-RAG-Notebook 的目标不是只做一个“能聊天的 RAG Demo”，而是把记录、整理、检索、回顾、问答整合成一个能长期使用的知识工作流。
+Notebook 不是一个只把文档塞进向量库、再直接调用 LLM 的 RAG Demo。它面向长期使用的个人知识管理场景，将以下能力放在同一条工作流中：
 
-当前仓库由三个服务组成：
+```text
+记录笔记 -> 管理文档 -> 异步索引 -> 统一检索 -> Agent 证据判断 -> 带引用回答 -> 反馈与持续优化
+```
 
-- `front/`：Vue 3 + Vite 前端，负责笔记编辑、知识库管理、AI 对话、设置页和用户界面
-- `backend/`：FastAPI + LangChain 主服务，负责 RAG 检索、Agent 对话、笔记服务、回顾服务和健康检查
-- `DjangoUserService/`：Django 用户服务，负责注册、登录、JWT、用户资料和文件相关接口
+仓库由三个服务组成：
 
-这套结构把“用户认证”和“AI / RAG 业务”拆开，前后端边界更清晰。
+- `front/`：Vue 3 + Vite 前端，负责笔记编辑、知识库、AI 对话、会话、设置与用户界面；
+- `backend/`：FastAPI + LangChain 主服务，负责 Agentic RAG、检索、文档索引、笔记、回顾、评估与健康检查；
+- `DjangoUserService/`：Django 用户服务，负责注册、登录、JWT、用户资料与文件相关接口。
 
-## 核心特性
+用户认证与 AI/RAG 业务分离，前后端和服务边界更清晰，也便于分别部署与扩展。
 
-- **智能笔记管理**：支持笔记创建、编辑、删除、列表浏览、分类筛选与基础组织管理
-- **Markdown 写作体验**：前端内置 Markdown 编辑能力，配合快捷工具栏和标签展示
-- **AI 写作辅助**：支持联机补全、续写、扩写、摘要等写作辅助能力
-- **RAG 知识库问答**：支持上传知识文件后进行向量检索与问答
-- **多格式文档接入**：知识库支持 `txt`、`pdf`、`md`、`pptx`、`docx`
-- **间隔回顾**：提供每日回顾能力，帮助把笔记从“记录过”变成“真正复习过”
-- **会话管理**：聊天会话支持持久化与多轮上下文管理
-- **多模型切换**：支持 `OLLAMA`、`ALIYUN`、`OPENAI` 三类 LLM 接入方式
-- **用户隔离**：通过 JWT 和用户服务实现用户级数据隔离
-- **组织能力预留**：已包含组织、空间、权限、审计相关路由与页面基础结构
+## 相比传统 RAG 的提升
+
+Notebook 已从传统的“检索后直接回答”升级为**受控 Agentic RAG**。这里的 Agent 是有明确边界、可观测、有限循环的检索编排，而非不可控的自由自治 Agent。
+
+| 维度 | 传统 RAG 流程 | Notebook 的增强 |
+|---|---|---|
+| 检索决策 | 固定地检索后回答 | Planner 根据问题制定检索范围和参数 |
+| 检索范围 | 单一知识库为主 | 统一检索知识库、笔记、混合范围与空间范围 |
+| 证据不足 | 容易直接生成或回答不完整 | Evidence Grader 评估证据，必要时改写查询并补检索 |
+| 循环控制 | 通常没有显式限制 | 有最大补检索轮数，避免无界循环和成本失控 |
+| 答案可信度 | 检索结果与答案关联较弱 | 基于 evidence 生成，并由 Citation Manager 管理引用 |
+| 过程体验 | 用户只看到最终答案 | SSE 实时返回 planning、retrieving、grading、citation 等阶段 |
+| 文档上传 | 上传、解析、向量写入强耦合 | 文件持久化与异步索引解耦，索引状态可见、可重试 |
+| 失败恢复 | 依赖人工排查 | `pending_index` 状态、手动 reindex 与 Celery Beat 定时补偿 |
+| 可观测性 | 日志为主 | 记录 Agent run、step、耗时、引用数和用户 feedback |
+| 安全边界 | 基础登录鉴权 | 用户/空间隔离、输入防护、只读工具和检索轮次限制 |
+
+### Agentic RAG 工作流
+
+```text
+用户问题
+  -> Guardrails（输入校验 / 基础注入防护）
+  -> Planner（问题分类、检索范围、top_k）
+  -> RetrievalService（知识库 / 笔记 / 空间统一检索）
+  -> Evidence Grader（评估证据相关性与充分性）
+  -> Query Rewrite（证据不足时，有限次数补检索）
+  -> Answer Generator（基于证据作答）
+  -> Citation Manager（归一化引用）
+  -> SSE 输出 + Agent Run/Step/Feedback 记录
+```
+
+## 核心能力
+
+### 知识与笔记
+
+- **智能笔记管理**：创建、编辑、删除、浏览、分类筛选和基础组织管理；
+- **Markdown 写作体验**：内置 Markdown 编辑与渲染、快捷工具栏、标签展示；
+- **AI 写作辅助**：联机补全、续写、扩写、摘要等；
+- **间隔回顾**：每日回顾能力，帮助把记录转化为长期记忆；
+- **会话管理**：持久化聊天会话与多轮上下文。
+
+### 文档知识库与索引治理
+
+- 支持 `txt`、`pdf`、`md`、`pptx`、`docx` 等文档；
+- 上传文件先安全持久化，再由后台任务解析、切片和向量化；
+- 索引状态覆盖 `uploaded`、`parsed`、`pending_index`、`indexing`、`indexed`、`index_failed`；
+- 列表可查看索引状态、切片数、失败信息；
+- 支持按 `document_id` 删除、按旧文件名兼容删除、重新索引；
+- Celery Beat 会定时扫描 pending 文档，补偿未完成索引。
+
+### Agentic RAG 对话
+
+- `knowledge`、`notes`、`all` 和 `space:{space_id}` 统一检索范围；
+- 证据去重与相邻片段合并，降低上下文冗余；
+- 可控的查询改写与补检索；
+- 基于证据的回答和引用；
+- SSE 流式返回阶段进度、答案和引用；
+- Agent 运行、步骤、反馈的持久化记录；
+- 用户和空间级检索隔离、基础 Prompt Injection 清洗、只读工具与限流。
+
+### 模型与部署
+
+- 支持 `OLLAMA`、`ALIYUN`（DashScope）与 `OPENAI` 兼容接口；
+- 前端可传入动态模型配置；未传入时后端使用环境变量中的默认配置；
+- 支持本地运行、Docker Compose 与健康检查；
+- MySQL、Redis、ChromaDB、Celery worker/beat 组成完整运行闭环。
 
 ## 系统架构
 
@@ -57,74 +116,56 @@ Browser
   |
   v
 front/ (Vue 3 + Vite + Vant)
-  | \
-  |  \-- /user, /file --------------------------> DjangoUserService/ (Django)
-  |                                             |-- 用户注册 / 登录 / 用户资料
-  |                                             \-- JWT / 文件相关接口
+  |\
+  | \-- /user, /file --------------------------> DjangoUserService/ (Django)
+  |                                             |-- 注册 / 登录 / JWT / 用户资料
+  |                                             \-- 文件相关接口
   |
-  \----- /chat, /note, /knowledge, /review ----> backend/ (FastAPI + LangChain)
-                                                |-- Agent 对话
-                                                |-- RAG 检索
-                                                |-- 笔记服务
-                                                |-- 回顾服务
-                                                |-- 健康检查
-                                                |
-                                                |-- MySQL
-                                                |-- Redis
-                                                |-- ChromaDB
-                                                \-- Ollama / DashScope / OpenAI 兼容接口
+  \----- /chat, /knowledge, /note, /review ---> backend/ (FastAPI)
+                                                |-- Agent Router / SSE
+                                                |-- AgentGraph
+                                                |   |-- Planner
+                                                |   |-- RetrievalService
+                                                |   |-- Evidence Grader
+                                                |   |-- Answer Generator
+                                                |   \-- Citation / Guardrails
+                                                |-- DocumentIndexService
+                                                |-- MySQL: 文档索引、Agent Run/Step/Feedback
+                                                |-- Redis + Celery: 异步索引与补偿任务
+                                                \-- ChromaDB: 向量检索
 ```
 
 ## 技术栈
 
-### 前端
-
-| 技术 | 说明 |
-|------|------|
-| Vue 3 | 前端框架 |
-| Vite | 本地开发与构建工具 |
-| Vant 4 | 移动端风格 UI 组件库 |
-| Vue Router | 路由与登录守卫 |
-| Pinia | 状态管理 |
-| Vue I18n | 国际化 |
-| ByteMD | Markdown 编辑与渲染能力 |
-| Axios | HTTP 请求 |
-| Playwright | E2E 测试 |
-
-### 后端
-
-| 技术 | 说明 |
-|------|------|
-| FastAPI | 主业务 API 服务 |
-| LangChain | LLM 应用编排 |
-| ChromaDB | 向量存储 |
-| SQLAlchemy | 数据模型与数据库访问 |
-| aiomysql | MySQL 异步连接 |
-| Redis | 缓存与运行态依赖 |
-| Celery | 异步任务支持 |
-| sentence-transformers | 向量嵌入 |
-| DashScope / OpenAI Compatible / Ollama | 模型接入方式 |
-| Django + DRF + drf-yasg | 用户认证与用户服务 API |
+| 层级 | 技术 |
+|---|---|
+| 前端 | Vue 3、Vite、Vant 4、Vue Router、Pinia、Vue I18n、ByteMD、Axios、Playwright |
+| API 与编排 | FastAPI、Pydantic、LangChain、SSE |
+| Agentic RAG | Planner、统一检索、Evidence Grader、Query Rewrite、Citation Manager、Guardrails |
+| 数据与检索 | MySQL、SQLAlchemy、aiomysql、Redis、ChromaDB、sentence-transformers（可选本地 embedding） |
+| 异步任务 | Celery、Redis、Celery Beat |
+| 用户服务 | Django、Django REST Framework、drf-yasg、JWT |
+| 模型接入 | Ollama、DashScope、OpenAI-compatible API |
 
 ## 快速开始
 
 ### 环境要求
 
-| 环境 | 版本 |
-|------|------|
+| 环境 | 建议版本 |
+|---|---|
 | Python | 3.12+ |
 | Node.js | 20+ |
-| uv | 已安装即可 |
+| uv | 已安装 |
 | MySQL | 8.x |
 | Redis | 7.x |
-| Ollama | 可选 |
 | Docker | 可选 |
+| Ollama | 使用本地模型时可选 |
 
 ### 1. 克隆项目
 
 ```bash
 git clone <your-repo-url>
-cd RAG-Notebook
+cd Notebook
 ```
 
 ### 2. 安装依赖
@@ -137,59 +178,47 @@ cd ..\backend
 uv sync
 
 cd ..\front
-npm install
+npm ci
 ```
 
-### 3. 准备环境变量
+> 若首次安装后没有 lockfile 对应依赖，使用 `npm install`；常规 CI/本地复现优先使用 `npm ci`。
 
-复制示例配置文件：
+### 3. 配置环境变量
 
 ```powershell
 Copy-Item backend/.env.example backend/.env
 Copy-Item DjangoUserService/.env.example DjangoUserService/.env
 ```
 
-至少需要确认这些配置项已经填写：
+至少检查以下配置：
 
-#### `backend/.env`
+- `backend/.env`：`SECRET_KEY`、MySQL、Redis、`DJANGO_API_URL`、`CORS_ORIGINS`、`LLM_TYPE` 及对应模型 Key/URL；
+- `DjangoUserService/.env`：`JWT_SECRET_KEY`、数据库、Redis Cache、Celery broker/backend；
+- `SECRET_KEY` 与 `JWT_SECRET_KEY` 必须一致；
+- 本地 `.env` 含敏感信息，**不要提交到 Git**。
 
-- `SECRET_KEY`
-- `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PASSWORD`、`MYSQL_DATABASE`
-- `REDIS_HOST`、`REDIS_PORT`
-- `DJANGO_API_URL`
-- `CORS_ORIGINS`
-- `LLM_TYPE`
-- 对应模型供应商需要的 Key 或 URL
-
-#### `DjangoUserService/.env`
-
-- `JWT_SECRET_KEY`
-- `DB_HOST`、`DB_PORT`、`DB_USER`、`DB_PASSWORD`、`DB_NAME`
-- `REDIS_CACHE_URL`
-- `CELERY_BROKER_URL`
-- `CELERY_RESULT_BACKEND`
-
-注意：
-
-- `backend/.env` 中的 `SECRET_KEY` 与 `DjangoUserService/.env` 中的 `JWT_SECRET_KEY` 应保持一致
-- 这两个 `.env` 文件只用于本地运行，不应提交到仓库
-
-### 4. 执行 Django 数据库迁移
+### 4. 执行数据库迁移
 
 ```powershell
+# Django 用户服务
 cd DjangoUserService
-uv run python manage.py makemigrations
 uv run python manage.py migrate
+
+# FastAPI 业务库（Alembic）
+cd ..\backend
+uv run alembic upgrade head
 ```
 
-### 5. 启动 MySQL、Redis 和可选模型服务
+> 表结构变更应新增 Alembic revision；不要依赖应用启动时自动建表。
+
+### 5. 启动基础设施和可选模型服务
 
 ```powershell
 net start mysql80
 redis-server
 ```
 
-如果你使用本地 Ollama：
+如使用本地 Ollama：
 
 ```bash
 ollama serve
@@ -197,56 +226,56 @@ ollama pull qwen3.5:0.8b
 ollama pull qwen3-embedding:0.6b
 ```
 
-### 6. 启动三个服务
+### 6. 启动服务与异步任务
+
+在五个终端中分别执行：
 
 ```powershell
-# 终端 1
+# 终端 1：Django 用户服务
 cd DjangoUserService
 uv run python manage.py runserver 8001
 
-# 终端 2
+# 终端 2：FastAPI 主服务
 cd backend
-uv run uvicorn main:app --reload --port 8000
+uv run uvicorn main:app --reload --port 8002 --host 127.0.0.1
 
-# 终端 3
+# 终端 3：Celery worker（文档索引等异步任务）
+cd backend
+uv run celery -A app.tasks.celery_app:celery_app worker --loglevel=info
+
+# 终端 4：Celery Beat（pending_index 补偿扫描）
+cd backend
+uv run celery -A app.tasks.celery_app:celery_app beat --loglevel=info
+
+# 终端 5：前端
 cd front
 npm run dev
 ```
 
-### 7. 默认访问地址
+默认访问地址：
 
 - 前端：`http://127.0.0.1:3000`
-- FastAPI 文档：`http://127.0.0.1:8000/docs`
+- FastAPI 文档：`http://127.0.0.1:8002/docs`
 - Django Swagger：`http://127.0.0.1:8001/docs/`
 
 ## Docker 部署
 
-仓库已经提供以下 Docker 相关文件：
+仓库提供 `.env.example`、`docker-compose.yml`、`docker-start.bat` 和 `docker-start.sh`。
 
-- `.env.example`
-- `docker-compose.yml`
-- `backend/.env.docker`
-- `DjangoUserService/.env.docker`
-- `docker-start.bat`
-- `docker-start.sh`
-
-### 1. 准备根目录 `.env`
+### 1. 准备根目录配置
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-至少替换以下变量：
+替换至少以下变量：
 
 - `MYSQL_ROOT_PASSWORD`
 - `MYSQL_PASSWORD`
+- `REDIS_PASSWORD`
 - `JWT_SECRET_KEY`
 
-如需云端模型，还需要按需填写：
-
-- `ALIYUN_ACCESS_KEY_SECRET`
-- `DASHSCOPE_API_KEY`
-- `OPENAI_API_KEY`
+需要云端模型时，按使用的模型供应商补充 `DASHSCOPE_API_KEY`、`OPENAI_API_KEY` 等变量。
 
 ### 2. 启动容器
 
@@ -254,13 +283,13 @@ Copy-Item .env.example .env
 docker compose up -d --build
 ```
 
-也可以直接使用仓库根目录脚本：
+或在 Windows 直接运行：
 
 ```powershell
 .\docker-start.bat
 ```
 
-Docker 默认端口：
+Compose 会启动 MySQL、Redis、FastAPI、Celery worker、Celery Beat、Django 和前端服务。默认端口：
 
 - 前端：`http://127.0.0.1:3000`
 - FastAPI：`http://127.0.0.1:8000`
@@ -268,75 +297,64 @@ Docker 默认端口：
 
 ## 配置说明
 
-### LLM 模型切换
+### LLM 与 Embedding
 
-后端支持三种模型接入模式：
+后端支持以下模型接入模式：
 
-- `LLM_TYPE=OLLAMA`：本地模型
-- `LLM_TYPE=ALIYUN`：阿里云百炼
-- `LLM_TYPE=OPENAI`：OpenAI 兼容接口，例如 DeepSeek 一类服务
+- `LLM_TYPE=OLLAMA`：本地模型；
+- `LLM_TYPE=ALIYUN`：阿里云百炼 / DashScope；
+- `LLM_TYPE=OPENAI`：OpenAI 兼容接口。
 
-前端设置页也支持动态传入模型配置，包含：
+知识库需要可用的 embedding 配置。请在上传文档后确认文档最终状态为 `indexed` 且 `chunk_count > 0`；模型凭据、网络、额度或向量库异常会导致 `index_failed` 或 pending 状态。
 
-- `provider`
-- `model`
-- `api_key`
-- `base_url`
-- `protocol`
-
-如果前端请求没有携带 `llm_config`，后端会回退到 `backend/.env` 中的默认模型配置。
-
-### 向量检索与知识库配置
-
-知识库配置文件位于：
+默认 Chroma 配置在：
 
 ```text
 backend/app/config/chroma.yaml
 ```
 
-当前默认配置要点：
+默认关键参数：
 
-- 知识库支持 `txt`、`pdf`、`md`、`pptx`、`docx`
-- 检索默认 `k=5`
-- 文本切片默认 `chunk_size=200`
-- 文本切片默认 `chunk_overlap=20`
+- 支持格式：`txt`、`pdf`、`md`、`pptx`、`docx`；
+- 默认检索 `k=5`；
+- 默认 `chunk_size=200`；
+- 默认 `chunk_overlap=20`。
 
-### 用户认证与隔离
+### 数据隔离与安全
 
-- Django 用户服务负责注册、登录、资料与鉴权相关接口
-- FastAPI 业务服务通过 JWT 识别用户身份
-- 知识库、会话、笔记等业务按用户维度隔离
+- Django 用户服务负责用户认证，FastAPI 用 JWT 识别用户；
+- 知识库、笔记、会话、Agent run 等数据按用户维度隔离；
+- Agent 检索还会按 `space_id` 约束范围；
+- Agent 工具为只读，且有基础输入防护、限流和检索轮次上限；
+- `.env`、数据目录、日志、虚拟环境和构建产物已通过 `.gitignore` 排除。
 
-## API 文档
+## 关键 API
 
-### FastAPI 主服务
+完整接口请以 FastAPI Swagger 为准：`/docs`。
 
-- 交互式文档：`http://127.0.0.1:8000/docs`
-- 健康检查：
-  - `GET /health/live`
-  - `GET /health/ready`
-  - `GET /health/db`
-  - `GET /health/redis`
-  - `GET /health/vector-store`
-  - `GET /health/model`
+### Agentic RAG
 
-主要业务路由前缀：
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/chat/agent/query/stream` | SSE 流式 Agent 查询 |
+| `POST` | `/chat/agent/query` | 非流式 Agent 查询 |
+| `GET` | `/chat/agent/runs/{run_id}` | 查询一次 Agent 运行记录 |
+| `GET` | `/chat/agent/runs` | 查询 Agent 运行列表 |
+| `POST` | `/chat/agent/feedback` | 提交答案评分与反馈 |
 
-- `/chat`
-- `/knowledge`
-- `/note`
-- `/review`
-- `/org`
-- `/space`
-- `/audit`
+SSE 事件包括：`started`、`planning`、`retrieving`、`retrieval_completed`、`grading_evidence`、`rewriting_query`、`generating_answer`、`citation`、`completed`、`error`。
 
-### Django 用户服务
+### 知识库索引管理
 
-- 文档文件：[DjangoUserService/api.md](./DjangoUserService/api.md)
-- Swagger UI：`http://127.0.0.1:8001/docs/`
-- Redoc：`http://127.0.0.1:8001/redoc/`
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/knowledge/add/single/v2` | 上传单个文档并创建异步索引任务 |
+| `POST` | `/knowledge/add/multiple/v2` | 批量上传并创建索引任务 |
+| `GET` | `/knowledge/index-status` | 查询文档索引状态、切片数与失败信息 |
+| `POST` | `/knowledge/{document_id}/reindex` | 重新提交索引 |
+| `DELETE` | `/knowledge/documents/{document_id}` | 删除 v2 文档、索引元数据和向量数据 |
 
-## 测试说明
+## 测试与质量验证
 
 ### 后端测试
 
@@ -345,16 +363,25 @@ cd backend
 uv run pytest tests
 ```
 
-### 前端 E2E
+### Agentic RAG 定向回归测试
+
+```powershell
+cd backend
+uv run pytest -q `
+  tests/test_agentic_rag_regressions.py `
+  tests/test_eval_runner_agent_tool_mock.py `
+  tests/test_eval_tool_call_grader.py
+```
+
+### 前端构建与 E2E
 
 ```powershell
 cd front
+npm run build
 npm run test:e2e
 ```
 
-### 前端全链路 E2E
-
-这组测试依赖真实后端与显式传入的本地测试账号：
+如需真实后端全链路 E2E，请显式传入本地测试账号：
 
 ```powershell
 cd front
@@ -367,60 +394,61 @@ npm run test:e2e:full -- --project=chromium
 ## 项目结构
 
 ```text
-RAG-Notebook/
+Notebook/
 ├── backend/
 │   ├── app/
-│   │   ├── agent/             # Agent 相关逻辑
-│   │   ├── cache/             # 缓存相关逻辑
-│   │   ├── config/            # 配置文件
-│   │   ├── core/              # 中间件、异常、日志等核心能力
-│   │   ├── db/                # MySQL / Redis 配置
-│   │   ├── models/            # 数据模型
-│   │   ├── prompt/            # Prompt 模板
-│   │   ├── rag/               # RAG 核心逻辑
-│   │   ├── repositories/      # 仓储层
-│   │   ├── router/            # API 路由
-│   │   ├── schemas/           # Pydantic Schema
-│   │   ├── services/          # 服务层
-│   │   ├── tasks/             # 任务逻辑
-│   │   └── utils/             # 工具函数
-│   ├── evals/                 # Eval 框架
+│   │   ├── agentic/           # AgentGraph、规划、证据评估、引用和安全边界
+│   │   ├── rag/               # 统一检索、向量库与传统 RAG 能力
+│   │   ├── services/          # 文档索引、笔记、回顾等服务
+│   │   ├── tasks/             # Celery worker / Beat 任务
+│   │   ├── models/            # document_index、agent_run 等数据模型
+│   │   ├── repositories/      # 数据访问层
+│   │   └── router/            # Chat、Agent、Knowledge 等 API
+│   ├── alembic/               # MySQL schema migrations
+│   ├── evals/                 # Agent/RAG 评估框架
 │   ├── tests/                 # 后端测试
-│   ├── .env.example
-│   ├── .env.docker
 │   └── main.py
 ├── front/
 │   ├── src/
-│   │   ├── components/        # 通用组件
-│   │   ├── composables/       # 组合式逻辑
-│   │   ├── i18n/              # 国际化
-│   │   ├── layouts/           # 布局
-│   │   ├── pages/             # 业务页面
-│   │   ├── router/            # 路由
-│   │   ├── services/          # 前端请求封装
+│   │   ├── pages/             # 聊天、知识库、笔记等页面
+│   │   ├── services/          # API 与 SSE 客户端封装
 │   │   ├── store/             # Pinia 状态管理
-│   │   ├── styles/            # 样式
-│   │   └── views/             # 视图页面
-│   ├── tests/                 # Playwright 测试
-│   ├── package.json
-│   └── vite.config.js
+│   │   └── composables/       # 组合式逻辑
+│   └── tests/                 # Playwright E2E
 ├── DjangoUserService/
-│   ├── apps/
-│   │   ├── user/              # 用户注册、登录、资料
-│   │   ├── file/              # 文件相关接口
-│   │   └── utils/             # 工具模块
-│   ├── DjangoUserService/     # Django 项目配置
-│   ├── .env.example
-│   ├── .env.docker
-│   ├── api.md
-│   └── manage.py
-├── .env.example               # Docker Compose 根配置示例
+│   ├── apps/                  # 用户、文件与工具模块
+│   └── DjangoUserService/     # Django 配置
+├── docs/
+│   └── AGENTIC_RAG_PLAN.md    # Agentic RAG 设计与阶段说明
 ├── docker-compose.yml
-├── docker-start.bat
-├── docker-start.sh
-└── plan.md
+└── README.md
 ```
 
-## 联系方式
+## GitHub 上传前检查
 
-如有问题，欢迎通过 GitHub Issues 交流。
+在推送前建议执行：
+
+```powershell
+# 前端构建
+cd front
+npm run build
+
+# 后端测试
+cd ..\backend
+uv run pytest tests
+```
+
+并确认：
+
+- [ ] `.env`、私钥、真实 API Key、运行日志、Chroma 数据、上传文件、虚拟环境和 `node_modules` 没有进入暂存区；
+- [ ] `backend/.env.example`、`DjangoUserService/.env.example` 与当前需要的配置项一致，但不含真实密钥；
+- [ ] 数据库迁移文件已纳入提交，且可以在干净数据库运行 `alembic upgrade head`；
+- [ ] Docker Compose 可以启动 `backend`、`celery-worker` 与 `celery-beat`；
+- [ ] 至少完成一次文档上传 -> `indexed` -> 可检索 -> 删除 的真实环境验收；
+- [ ] README 中的仓库地址、截图、许可证和联系方式按你的公开仓库信息补全。
+
+## 许可证与交流
+
+当前仓库尚未声明许可证。公开发布前建议添加 `LICENSE`（例如 MIT 或 Apache-2.0），并在此处补充许可证说明。
+
+问题、建议和贡献欢迎通过 GitHub Issues 与 Pull Requests 交流。

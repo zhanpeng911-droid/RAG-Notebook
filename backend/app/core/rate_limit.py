@@ -1,7 +1,8 @@
 """
 基于 Redis 的限流工具 —— 提供路由级限流依赖函数。
 
-使用 Redis 的 INCR + EXPIRE 实现滑动窗口限流，
+使用 Redis 的 INCR + EXPIRE 实现固定窗口限流。
+优先按 bearer token 分桶，匿名请求再回退到 IP，避免 NAT 场景互相误伤。
 当 Redis 不可用时自动降级放行（不影响正常请求）。
 
 用法:
@@ -9,6 +10,7 @@
     async def endpoint(_: None = Depends(rate_limit(limit=10, window=60))):
         ...
 """
+import hashlib
 import os
 
 from fastapi import Request, HTTPException
@@ -21,12 +23,31 @@ def _is_rate_limit_enabled() -> bool:
     return os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
 
 
+def _build_rate_limit_key(request: Request) -> str:
+    """按路由 + 认证主体分桶，匿名请求回退到客户端 IP。"""
+    route_key = request.url.path.strip("/").replace("/", ":") or "root"
+
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header.split(" ", 1)[1].strip()
+        if token:
+            token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+            return f"rate_limit:{route_key}:token:{token_hash}"
+
+    forwarded_for = request.headers.get("X-Forwarded-For", "")
+    client_ip = forwarded_for.split(",")[0].strip() if forwarded_for else ""
+    if not client_ip and request.client:
+        client_ip = request.client.host
+    client_ip = client_ip or "unknown"
+    return f"rate_limit:{route_key}:ip:{client_ip}"
+
+
 def rate_limit(limit: int = 1, window: int = 60):
     """
     限流依赖函数 —— 用于 FastAPI 的 Depends()。
 
-    原理：基于 Redis 的滑动窗口计数器。
-    - 每个客户端 IP 对应一个 Redis key
+    原理：基于 Redis 的固定窗口计数器。
+    - 每个客户端身份（token 或 IP）+ 路由对应一个 Redis key
     - 第一次请求时设置 EXPIRE（窗口过期时间）
     - 后续请求 INCR 自增计数
     - 超过 limit 则返回 429
@@ -40,12 +61,7 @@ def rate_limit(limit: int = 1, window: int = 60):
         if not _is_rate_limit_enabled() or not is_redis_available():
             return
 
-        # 获取客户端 IP（支持反向代理）
-        client_ip = request.client.host
-        if not client_ip:
-            client_ip = request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or 'unknown'
-
-        key = f"rate_limit:aichat:{client_ip}"
+        key = _build_rate_limit_key(request)
 
         try:
             redis = await connect_redis()

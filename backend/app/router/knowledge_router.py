@@ -1,4 +1,4 @@
-"""
+﻿"""
 知识库路由 —— 处理文档上传、管理、检索的 API 接口。
 
 接口列表：
@@ -37,6 +37,7 @@ from app.utils.image_extractor import get_image_storage_dir
 from app.utils.path_tool import get_data_path
 from app.core.success_response import success_response
 from app.core.rate_limit import rate_limit
+from app.core.logger_handler import logger
 
 
 knowledge_router = APIRouter(prefix="/knowledge", tags=["knowledge"])
@@ -112,10 +113,29 @@ async def add_vector_multiple_stream(
 
 
 @knowledge_router.delete("/clean")
-async def clean_user_vectors(user_id: str = Depends(get_current_user_id), knowledge_service: KnowledgeService = Depends(get_knowledge_service)):
-    """删除用户上传的所有向量"""
+async def clean_user_vectors(
+    user_id: str = Depends(get_current_user_id),
+    space_id: Optional[str] = Query(None, description="按空间清理"),
+    knowledge_service: KnowledgeService = Depends(get_knowledge_service),
+):
+    """
+    清除用户上传的所有向量（同时清理 v1 旧路径和 v2 document_index）。
+
+    - Chroma 向量
+    - 旧 MD5 记录
+    - document_index 记录
+    - knowledge_files 下的物理文件
+    """
+    # 清理 v1 旧路径
     await knowledge_service.clean_user_upload(user_id)
-    return success_response(message="已成功删除用户上传的所有向量")
+
+    # 清理 v2 document_index
+    from app.services.document_index_service import clean_user_index_records
+    result = await clean_user_index_records(user_id, space_id=space_id)
+
+    return success_response(
+        message=f"已成功清除用户上传的所有向量（v2 删除 {result['deleted_count']} 条记录）"
+    )
 
 
 @knowledge_router.delete("/md5/clear")
@@ -165,10 +185,38 @@ async def delete_by_filename(
         knowledge_service: KnowledgeService = Depends(get_knowledge_service)
 ):
     """
-    通过文件名删除MD5记录及其对应的知识库文档
-    :param filename: 要删除的文件名
-    :param delete_documents: 是否同时删除知识库文档（默认True）
+    通过文件名删除文档（兼容 v1 旧路径和 v2 document_index）。
+
+    删除策略：
+    1. 先从 document_index 表查找匹配的 v2 文档
+    2. 如果找到，使用 v2 删除逻辑（清理向量、物理文件、document_index 记录）
+    3. 如果没找到 v2 记录，回退到旧 MD5 删除逻辑
     """
+    from app.services.document_index_service import delete_index_record
+
+    # 先尝试 v2 路径：从 document_index 表查找
+    deleted_via_v2 = False
+    try:
+        from app.db.db_config import AsyncSessionLocal
+        from app.repositories.document_index_repository import DocumentIndexRepository
+
+        async with AsyncSessionLocal() as session:
+            repo = DocumentIndexRepository(session)
+            # 按 original_filename 查找 v2 记录
+            docs = await repo.get_user_documents(user_id)
+            for doc in docs:
+                if doc.original_filename == filename:
+                    result = await delete_index_record(doc.id, user_id, delete_file=delete_documents)
+                    if result["success"]:
+                        deleted_via_v2 = True
+                        break
+    except Exception as e:
+        logger.warning(f"【删除】v2 路径查找失败，回退到 v1: {e}")
+
+    if deleted_via_v2:
+        return success_response(message=f"已成功删除文件 {filename}")
+
+    # 回退到 v1 旧路径
     success = await knowledge_service.handle_delete_by_filename(user_id, filename, delete_documents)
     if success:
         if delete_documents:
@@ -216,6 +264,7 @@ async def get_user_knowledge_list(
         user_id: str = Depends(get_current_user_id),
         knowledge_service: KnowledgeService = Depends(get_knowledge_service),
         space_id: Optional[str] = Query(None, description="按空间筛选"),
+        include_index_status: bool = Query(False, description="是否包含索引状态信息"),
         db: AsyncSession = Depends(get_db),
         _: None = Depends(rate_limit(limit=10, window=60))
 ):
@@ -223,6 +272,20 @@ async def get_user_knowledge_list(
     await _ensure_space_member(space_id, user_id, db)
     documents_user_id = None if space_id else user_id
     documents = await knowledge_service.handle_get_user_knowledge(documents_user_id, space_id=space_id or None)
+
+    # 如果需要包含索引状态，合并 document_index 表的数据
+    if include_index_status:
+        from app.services.document_index_service import get_user_index_status
+        index_records = await get_user_index_status(user_id, space_id=space_id)
+        index_map = {r["md5"]: r for r in index_records}
+
+        for doc in documents:
+            doc_md5 = doc.get("md5") or ""
+            if doc_md5 in index_map:
+                doc["index_status"] = index_map[doc_md5]["status"]
+                doc["index_error"] = index_map[doc_md5].get("error_message")
+                doc["indexed_at"] = index_map[doc_md5].get("indexed_at")
+
     return success_response(data=KnowledgeListResponse(
         documents=documents,
         total_count=len(documents)
@@ -334,3 +397,208 @@ async def serve_batch_images(
     """返回指定PDF的所有图片（单次请求，JSON + base64）"""
     result = await knowledge_service.handle_get_batch_images(user_id, md5)
     return success_response(data=result)
+
+
+# ==================== M0: 文档索引状态管理 ====================
+
+@knowledge_router.get("/index-status")
+async def get_index_status(
+        user_id: str = Depends(get_current_user_id),
+        space_id: Optional[str] = Query(None, description="按空间筛选"),
+        db: AsyncSession = Depends(get_db),
+        _: None = Depends(rate_limit(limit=10, window=60))
+):
+    """获取用户的文档索引状态列表"""
+    from app.services.document_index_service import get_user_index_status
+    await _ensure_space_member(space_id, user_id, db)
+    records = await get_user_index_status(user_id, space_id=space_id)
+    return success_response(data={"documents": records, "total_count": len(records)})
+
+
+@knowledge_router.get("/embedding-health")
+async def get_embedding_health(
+        user_id: str = Depends(get_current_user_id),
+        _: None = Depends(rate_limit(limit=5, window=60))
+):
+    """
+    获取 embedding 服务健康状态。
+
+    返回：
+        - available: 是否可用
+        - error: 错误信息（如果有）
+        - checked_at: 上次检查时间戳
+    """
+    from app.services.document_index_service import get_embedding_health_status
+    status = get_embedding_health_status()
+    return success_response(data=status)
+
+
+@knowledge_router.post("/embedding-test")
+async def test_embedding(
+        user_id: str = Depends(get_current_user_id),
+        _: None = Depends(rate_limit(limit=3, window=60))
+):
+    """
+    测试 embedding 服务连通性。
+
+    执行一次真实的 embed_query 调用，验证：
+    1. 模型能否正常创建
+    2. API Key 是否有效
+    3. 网络是否可达
+    4. 模型名称是否正确
+
+    返回：
+        - success: 是否成功
+        - model_type: 模型类型（ALIYUN/OLLAMA）
+        - model_name: 模型名称
+        - vector_dim: 返回向量维度（成功时）
+        - error: 错误信息（失败时）
+    """
+    try:
+        from app.utils.factory import embed_model
+        from app.config.validator import get_settings
+        settings = get_settings()
+
+        embed = embed_model.resolve()
+        if embed is None:
+            return success_response(data={
+                "success": False,
+                "model_type": settings.EMBED_MODEL_TYPE,
+                "error": "模型对象为空，检查配置"
+            })
+
+        model_type = type(embed).__name__
+        model_name = getattr(embed, 'model_name', 'unknown')
+
+        # 执行真实调用
+        import time
+        start = time.time()
+        vector = embed.embed_query("测试连接")
+        elapsed = time.time() - start
+
+        return success_response(data={
+            "success": True,
+            "model_type": settings.EMBED_MODEL_TYPE,
+            "model_name": model_name,
+            "vector_dim": len(vector),
+            "latency_ms": round(elapsed * 1000),
+        })
+
+    except Exception as e:
+        return success_response(data={
+            "success": False,
+            "model_type": settings.EMBED_MODEL_TYPE if 'settings' in dir() else "unknown",
+            "error": str(e)[:500],
+        })
+
+
+@knowledge_router.post("/{document_id}/reindex")
+async def reindex_document(
+        document_id: str,
+        user_id: str = Depends(get_current_user_id),
+        _: None = Depends(rate_limit(limit=5, window=60))
+):
+    """重新索引文档（用于索引失败后的重试）"""
+    from app.services.document_index_service import reindex_document as _reindex
+    result = await _reindex(document_id, user_id)
+    if result["success"]:
+        return success_response(message=result["message"])
+    else:
+        raise HTTPException(status_code=400, detail=result["message"])
+
+
+@knowledge_router.delete("/documents/{document_id}")
+async def delete_document_by_id(
+        document_id: str,
+        user_id: str = Depends(get_current_user_id),
+        _: None = Depends(rate_limit(limit=10, window=60))
+):
+    """
+    v2 删除单个文档（按 document_id）。
+
+    删除顺序和一致性：
+    1. 查询 DocumentIndex（按 document_id + user_id）
+    2. 如有向量，按 user_id + md5 删除 Chroma 向量和旧 MD5 记录
+    3. 安全删除 knowledge_files 下的物理文件（校验 realpath 必须在用户目录内）
+    4. 删除 document_index 记录并显式 commit
+    5. 返回结构化结果
+
+    幂等：文档不存在也返回成功。
+    """
+    from app.services.document_index_service import delete_index_record
+    result = await delete_index_record(document_id, user_id, delete_file=True)
+    if result["success"]:
+        return success_response(message=result["message"])
+    else:
+        raise HTTPException(status_code=500, detail=result["message"])
+
+
+@knowledge_router.post("/add/single/v2")
+async def add_vector_single_v2(
+        file: UploadFile = File(...),
+        user_id: str = Depends(get_current_user_id),
+        space_id: Optional[str] = Query(None, description="归属空间ID"),
+        db: AsyncSession = Depends(get_db),
+        _: None = Depends(rate_limit(limit=5, window=60))
+):
+    """
+    上传单个文件（v2 解耦版本）。
+
+    与 /add/single 的区别：
+    - 上传和索引解耦，文件保存后立即返回
+    - 索引在后台异步进行（如果 embedding 可用）
+    - embedding 不可用时文件仍可保存，状态为 pending_index
+    - 用户可通过 /index-status 查看索引进度
+    """
+    from app.services.document_index_service import save_uploaded_file
+    await _ensure_space_member(space_id, user_id, db)
+    result = await save_uploaded_file(file, user_id, space_id=space_id or "")
+    if result.get("duplicate"):
+        return success_response(message=f"文件 {result['filename']} 已存在")
+    return success_response(
+        data=result,
+        message=result.get("message", "文件上传成功")
+    )
+
+
+@knowledge_router.post("/add/multiple/v2")
+async def add_vector_multiple_v2(
+        files: List[UploadFile] = File(..., description="要上传的文件列表"),
+        user_id: str = Depends(get_current_user_id),
+        space_id: Optional[str] = Query(None, description="归属空间ID"),
+        db: AsyncSession = Depends(get_db),
+        _: None = Depends(rate_limit(limit=3, window=60))
+):
+    """
+    上传多个文件（v2 解耦版本）。
+
+    逐个处理文件，每个文件独立保存和索引。
+    """
+    from app.services.document_index_service import save_uploaded_file
+    from app.services.knowledge_file_validator import validate_total_size
+
+    await _ensure_space_member(space_id, user_id, db)
+
+    # 验证总大小
+    total_size = sum(f.size or 0 for f in files)
+    size_error = validate_total_size(total_size)
+    if size_error:
+        raise HTTPException(status_code=400, detail=size_error)
+
+    results = []
+    for file in files:
+        try:
+            result = await save_uploaded_file(file, user_id, space_id=space_id or "")
+            results.append(result)
+        except Exception as e:
+            logger.error(f"【上传v2】处理文件 {file.filename} 失败: {e}")
+            results.append({
+                "filename": file.filename,
+                "status": "error",
+                "message": str(e),
+            })
+
+    return success_response(
+        data={"results": results, "total_count": len(results)},
+        message=f"已处理 {len(results)} 个文件"
+    )

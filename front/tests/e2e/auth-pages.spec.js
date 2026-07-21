@@ -78,6 +78,50 @@ test.describe('注册页 /register', () => {
     await expect(page).toHaveURL(/\/login/);
     await expect(page.getByText('欢迎回来')).toBeVisible();
   });
+  test('手机号留空时不会发送空字符串并可注册', async ({ page }) => {
+    let requestBody;
+    await page.route('**/user/register/', async (route) => {
+      requestBody = route.request().postDataJSON();
+      await route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          status: 201,
+          message: '注册成功',
+          user: { username: 'no-phone', email: 'no-phone@example.com', telephone: null },
+          token: 'test-token'
+        })
+      });
+    });
+
+    await page.getByPlaceholder('请输入用户名').fill('no-phone');
+    await page.getByPlaceholder('请输入邮箱地址').fill('no-phone@example.com');
+    await page.getByPlaceholder('请输入密码（6-20位）').fill('TestPwd123');
+    await page.getByPlaceholder('请确认密码').fill('TestPwd123');
+    await page.getByRole('button', { name: '注册' }).click();
+
+    await expect.poll(() => requestBody).toBeTruthy();
+    expect(requestBody).not.toHaveProperty('telephone');
+    await expect(page.getByText('注册成功')).toBeVisible();
+  });
+
+  test('后端字段错误会显示可读提示', async ({ page }) => {
+    await page.route('**/user/register/', async (route) => {
+      await route.fulfill({
+        status: 400,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: { email: ['该邮箱已被注册'] } })
+      });
+    });
+
+    await page.getByPlaceholder('请输入用户名').fill('duplicate-email');
+    await page.getByPlaceholder('请输入邮箱地址').fill('duplicate@example.com');
+    await page.getByPlaceholder('请输入密码（6-20位）').fill('TestPwd123');
+    await page.getByPlaceholder('请确认密码').fill('TestPwd123');
+    await page.getByRole('button', { name: '注册' }).click();
+
+    await expect(page.getByText('邮箱：该邮箱已被注册')).toBeVisible();
+  });
 });
 
 // ==================== 移动端登录页 ====================

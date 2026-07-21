@@ -88,23 +88,11 @@ class NoteService:
         )
 
     async def create_note(self, db: AsyncSession, user_id: str, payload: NoteCreate, llm_config: dict = None) -> NoteResponse:
-        """
-        创建笔记 —— 双写 MySQL + ChromaDB。
+        """Create a note in one MySQL transaction.
 
-        执行流程：
-        1. 生成 UUID 作为笔记ID
-        2. MySQL 写入笔记（支持用户指定 category/tags）
-        3. ChromaDB 写入向量（用于语义搜索）
-        4. 立即返回笔记 ID（不等待后台任务）
-        5. 后台异步任务：
-           - 如果用户未指定 category/tags → 调用 LLM 自动生成
-           - 创建回顾记录（艾宾浩斯遗忘曲线）
-
-        :param db: 数据库会话
-        :param user_id: 用户ID
-        :param payload: 笔记创建请求（title, content, category, tags）
-        :param llm_config: 前端 LLM 配置
-        :return: 笔记响应模型
+        Vector indexing and automatic tags are intentionally scheduled by the
+        router after this method returns, so an unavailable embedding model
+        never delays the user-visible save operation.
         """
         note_id = str(uuid.uuid4())
         note = Note(
@@ -115,33 +103,27 @@ class NoteService:
             category=payload.category,
             tags=payload.tags,
         )
+        # Store the first review record in the same transaction. The prior
+        # implementation performed a second SELECT + COMMIT after the note save.
+        review = ReviewRecord(
+            id=str(uuid.uuid4()),
+            note_id=note_id,
+            user_id=user_id,
+            next_review_at=datetime.now() + timedelta(days=1),
+            interval_days=1,
+            review_count=0,
+        )
         await self.note_repo.add(db, note)
+        db.add(review)
         await db.commit()
         await db.refresh(note)
-
-        # 向量化写入 ChromaDB
-        try:
-            await asyncio.to_thread(
-                self.note_index.add_note, note_id, user_id, payload.title, payload.content
-            )
-        except Exception as e:
-            logger.error(f"笔记向量化失败 note_id={note_id}: {e}")
-
-        # 标签生成已移至 note_router.py，由 Celery 任务处理
-
         return self._doc_to_response(note)
 
     async def update_note(self, db: AsyncSession, note_id: str, user_id: str, payload: NoteUpdate) -> Optional[NoteResponse]:
-        """
-        更新笔记：
-        1. 更新 MySQL 中的 title/content
-        2. 如果 content 变更，删除旧向量并写入新向量
-        """
+        """Update MySQL only; vector synchronization runs asynchronously."""
         note = await self.note_repo.get_by_id(db, note_id, user_id)
         if not note:
             return None
-
-        content_changed = payload.content is not None
 
         if payload.title is not None:
             note.title = payload.title
@@ -150,36 +132,14 @@ class NoteService:
 
         await db.commit()
         await db.refresh(note)
-
-        # content 变更时同步更新向量
-        if content_changed:
-            try:
-                await asyncio.to_thread(
-                    self.note_index.update_note, note_id, user_id, note.title, note.content
-                )
-            except Exception as e:
-                logger.error(f"更新笔记向量失败 note_id={note_id}: {e}")
-
         return self._doc_to_response(note)
 
     async def delete_note(self, db: AsyncSession, note_id: str, user_id: str) -> bool:
-        """
-        删除笔记：
-        1. 删除 MySQL 中的笔记（review_records 通过 FK CASCADE 自动删除）
-        2. 删除 ChromaDB 中的向量
-        """
+        """Delete MySQL data immediately; the router queues vector cleanup."""
         deleted = await self.note_repo.delete_by_id(db, note_id, user_id)
         if not deleted:
             return False
-
         await db.commit()
-
-        # 清理向量
-        try:
-            await asyncio.to_thread(self.note_index.delete_note, note_id, user_id)
-        except Exception as e:
-            logger.error(f"删除笔记向量失败 note_id={note_id}: {e}")
-
         return True
 
     async def get_note(self, db: AsyncSession, note_id: str, user_id: str) -> Optional[NoteResponse]:
@@ -356,6 +316,41 @@ class NoteService:
 
         return text
 
+
+    async def ensure_review_record(
+        self,
+        db: AsyncSession,
+        note_id: str,
+        user_id: str,
+        *,
+        initial_interval_days: int = 1,
+    ) -> bool:
+        """
+        确保笔记进入复习队列。已存在记录则不改写。
+        :return: True 表示新建了记录
+        """
+        existing = await db.execute(
+            select(ReviewRecord).where(
+                ReviewRecord.note_id == note_id,
+                ReviewRecord.user_id == user_id,
+            )
+        )
+        if existing.scalar_one_or_none():
+            return False
+        now = datetime.now()
+        review = ReviewRecord(
+            id=str(uuid.uuid4()),
+            note_id=note_id,
+            user_id=user_id,
+            next_review_at=now + timedelta(days=initial_interval_days),
+            interval_days=initial_interval_days,
+            review_count=0,
+        )
+        db.add(review)
+        await db.commit()
+        logger.info(f"已入复习队列 note_id={note_id}, next=+{initial_interval_days}d")
+        return True
+
     async def _auto_tag_and_review(self, note_id: str, user_id: str, content: str, llm_config: dict = None):
         """
         后台异步任务：LLM 分析笔记内容 → 生成标签和分类 → 更新 MySQL → 创建回顾记录。
@@ -369,7 +364,8 @@ class NoteService:
             prompt = prompt_template.replace("{content}", content)
 
             # 优先使用用户配置的模型
-            from app.utils.factory import create_chat_model_from_config, llm_config_is_usable
+            from app.utils.factory import create_chat_model_from_config, llm_config_is_usable, sanitize_client_llm_config
+            llm_config = sanitize_client_llm_config(llm_config)
             if llm_config_is_usable(llm_config):
                 model = create_chat_model_from_config(llm_config)
                 model_name = llm_config.get("model", "custom")
@@ -404,25 +400,8 @@ class NoteService:
             async with AsyncSessionLocal() as session:
                 await self.note_repo.update_tags_and_category(session, note_id, user_id, tags, category)
 
-                # 创建回顾记录（首次间隔 1 天），避免重复
-                existing = await session.execute(
-                    select(ReviewRecord).where(
-                        ReviewRecord.note_id == note_id,
-                        ReviewRecord.user_id == user_id,
-                    )
-                )
-                if not existing.scalar_one_or_none():
-                    now = datetime.now()
-                    review = ReviewRecord(
-                        id=str(uuid.uuid4()),
-                        note_id=note_id,
-                        user_id=user_id,
-                        next_review_at=now + timedelta(days=1),
-                        interval_days=1,
-                        review_count=0,
-                    )
-                    session.add(review)
-                await session.commit()
+                # 复习队列：create_note 已入队；此处幂等补齐
+                await self.ensure_review_record(session, note_id, user_id, initial_interval_days=1)
 
         except json.JSONDecodeError as e:
             logger.error(f"解析 LLM 标签输出失败 note_id={note_id}, raw={raw_output[:200]}, extracted={json_str[:200]}: {e}")
@@ -438,7 +417,8 @@ class NoteService:
             from langchain_core.messages import HumanMessage
             from app.cache.llm_cache import get_cached_llm_response, set_cached_llm_response
 
-            from app.utils.factory import create_chat_model_from_config, llm_config_is_usable
+            from app.utils.factory import create_chat_model_from_config, llm_config_is_usable, sanitize_client_llm_config
+            llm_config = sanitize_client_llm_config(llm_config)
             if llm_config_is_usable(llm_config):
                 model = create_chat_model_from_config(llm_config)
                 model_name = llm_config.get("model", "custom")

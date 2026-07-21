@@ -2,15 +2,15 @@ services:
   # ==================== 基础设施服务 ====================
   mysql:
     image: mysql:8.0
-    container_name: rag-mysql
+    container_name: notebook-mysql
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change-me-local-root-password}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-chat_history}
-      MYSQL_USER: ${MYSQL_USER:-rag_user}
+      MYSQL_USER: ${MYSQL_USER:-notebook_user}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-change-me-local-app-password}
     ports:
-      - "${MYSQL_PORT:-3306}:3306"
+      - "127.0.0.1:${MYSQL_PORT:-3306}:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
@@ -20,30 +20,31 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - rag-network
+      - notebook-network
 
   redis:
     image: redis:7-alpine
-    container_name: rag-redis
+    container_name: notebook-redis
     restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-change-me-local-redis-password}"]
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-change-me-local-redis-password}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
-      - rag-network
+      - notebook-network
 
   # ==================== 应用服务 ====================
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: rag-backend
+    container_name: notebook-backend
     restart: unless-stopped
     env_file:
       - ./backend/.env.docker
@@ -63,13 +64,53 @@ services:
       timeout: 10s
       retries: 3
     networks:
-      - rag-network
+      - notebook-network
+
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: notebook-celery-worker
+    restart: unless-stopped
+    command: ["celery", "-A", "app.tasks.celery_app:celery_app", "worker", "--loglevel=info"]
+    env_file:
+      - ./backend/.env.docker
+    volumes:
+      - backend_data:/app/data
+      - backend_logs:/app/logs
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - notebook-network
+
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: notebook-celery-beat
+    restart: unless-stopped
+    command: ["celery", "-A", "app.tasks.celery_app:celery_app", "beat", "--loglevel=info"]
+    env_file:
+      - ./backend/.env.docker
+    volumes:
+      - backend_data:/app/data
+      - backend_logs:/app/logs
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - notebook-network
 
   django:
     build:
       context: ./DjangoUserService
       dockerfile: Dockerfile
-    container_name: rag-django
+    container_name: notebook-django
     restart: unless-stopped
     env_file:
       - ./DjangoUserService/.env.docker
@@ -86,7 +127,7 @@ services:
       timeout: 10s
       retries: 3
     networks:
-      - rag-network
+      - notebook-network
 
   frontend:
     build:
@@ -95,7 +136,7 @@ services:
       args:
         - VITE_BACKEND_TARGET=http://backend:8000
         - VITE_USER_TARGET=http://django:8001
-    container_name: rag-frontend
+    container_name: notebook-frontend
     restart: unless-stopped
     ports:
       - "3000:80"
@@ -105,20 +146,20 @@ services:
       django:
         condition: service_healthy
     networks:
-      - rag-network
+      - notebook-network
 
   # ==================== 可选服务：Ollama (本地LLM) ====================
   # 取消注释以下配置以启用本地Ollama服务
   # ollama:
   #   image: ollama/ollama:latest
-  #   container_name: rag-ollama
+  #   container_name: notebook-ollama
   #   restart: unless-stopped
   #   ports:
   #     - "11434:11434"
   #   volumes:
   #     - ollama_data:/root/.ollama
   #   networks:
-  #     - rag-network
+  #     - notebook-network
   #   # GPU支持（需要安装nvidia-container-toolkit）
   #   # deploy:
   #   #   resources:
@@ -136,5 +177,5 @@ volumes:
   # ollama_data:
 
 networks:
-  rag-network:
+  notebook-network:
     driver: bridge

@@ -1,10 +1,21 @@
 collection_name: rag_collection
 persist_directory: data/chromadb
-k: 5
+# 检索 top-k（中文长文建议 5–8）
+k: 6
 data_path: data
 md5_hex_store: data/md5_hex_store/md5_hex_store.txt
 allow_knowledge_file_types: ["txt", "pdf", "md", "pptx", "docx"]
 
-chunk_size: 200
-chunk_overlap: 20
-separators : ["\n\n", "\n", "。", "！", "？", "!", "?", " ", ""]
+# 中文默认切片：400–800 字级，重叠约 10–15%
+chunk_size: 500
+chunk_overlap: 60
+
+# 按扩展名覆盖（DocumentProcessor 可读取）
+chunk_by_extension:
+  md: { chunk_size: 600, chunk_overlap: 80 }
+  txt: { chunk_size: 500, chunk_overlap: 60 }
+  pdf: { chunk_size: 450, chunk_overlap: 50 }
+  docx: { chunk_size: 500, chunk_overlap: 60 }
+  pptx: { chunk_size: 350, chunk_overlap: 40 }
+
+separators: ["\n\n", "\n", "。", "！", "？", "；", "!", "?", ";", " ", ""]

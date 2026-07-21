@@ -6,16 +6,22 @@
 - max_overflow: 20（最大溢出连接）
 - pool_recycle: 3600（连接回收时间，防止 MySQL 断开空闲连接）
 - pool_pre_ping: True（使用前检测连接有效性）
+
+表结构变更请使用 Alembic：
+    alembic upgrade head
+启动时只做连通性检查，不再 create_all。
 """
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy import text
 from app.models.chat_history import Base
-from app.models.note import Note
-from app.models.review_record import ReviewRecord
-from app.models.organization import Organization, OrganizationMember
-from app.models.space import Space
-from app.models.space_document import SpaceDocument
-from app.models.audit_log import AuditLog
+from app.models.note import Note  # noqa: F401
+from app.models.review_record import ReviewRecord  # noqa: F401
+from app.models.organization import Organization, OrganizationMember  # noqa: F401
+from app.models.space import Space  # noqa: F401
+from app.models.space_document import SpaceDocument  # noqa: F401
+from app.models.audit_log import AuditLog  # noqa: F401
+from app.models.document_index import DocumentIndex  # noqa: F401
+from app.models.agent_run import AgentRun, AgentStep, AgentFeedback  # noqa: F401
 from app.config.validator import get_settings
 
 # 从统一配置读取
@@ -42,10 +48,12 @@ AsyncSessionLocal = async_sessionmaker(
     expire_on_commit=False
 )
 
-# 初始化数据库，创建所有表
+
 async def init_db():
-    async with async_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    """启动时校验数据库连通性。Schema 由 Alembic 管理，不在此 create_all。"""
+    async with async_engine.connect() as conn:
+        await conn.execute(text("SELECT 1"))
+
 
 # 依赖项
 async def get_db():
@@ -57,8 +65,6 @@ async def get_db():
             raise
         finally:
             await session.close()
-
-
 
 
 async def check_mysql_connection() -> bool:

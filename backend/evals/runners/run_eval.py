@@ -1,4 +1,4 @@
-"""Agent Eval Runner — RAG-Notebook
+"""Agent Eval Runner — Notebook
 
 Usage:
     cd backend

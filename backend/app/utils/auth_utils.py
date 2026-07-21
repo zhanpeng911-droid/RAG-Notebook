@@ -24,6 +24,15 @@ JWT_BLACKLIST_REDIS_URL = _settings.jwt_blacklist_redis_url
 security = HTTPBearer()
 
 
+# JWT 契约（与 DjangoUserService 对齐）：
+# - algorithm: HS256
+# - secret: backend SECRET_KEY == Django JWT_SECRET_KEY / settings.SECRET_KEY
+# - claims: user_id, username, email?, exp, iat, jti
+# - blacklist redis key: blacklist:{jti}（Django cache 可能带 :1: 前缀）
+# - clock skew leeway: 30s
+JWT_CLOCK_SKEW_LEEWAY = 30
+
+
 def decode_django_jwt(token: str) -> Optional[Dict[str, Any]]:
     """
     解析 Django 生成的 JWT token。
@@ -31,13 +40,23 @@ def decode_django_jwt(token: str) -> Optional[Dict[str, Any]]:
     JWT payload 包含：
     - user_id: 用户 UUID
     - username: 用户名
+    - email: 可选
+    - exp / iat: 过期与签发时间
     - jti: JWT ID（用于黑名单检查）
 
     :param token: JWT token 字符串
     :return: payload 字典，解析失败返回 None
     """
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(
+            token,
+            SECRET_KEY,
+            algorithms=[ALGORITHM],
+            options={
+                "verify_exp": True,
+                "leeway": JWT_CLOCK_SKEW_LEEWAY,
+            },
+        )
         return payload
     except JWTError:
         return None

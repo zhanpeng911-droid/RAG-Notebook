@@ -178,7 +178,7 @@
           <span class="col-name">文件名</span>
           <span class="col-type">类型</span>
           <span class="col-chunks">切片数</span>
-          <span class="col-images">图片</span>
+          <span class="col-status">索引状态</span>
           <span class="col-actions">操作</span>
         </div>
         <div
@@ -196,8 +196,25 @@
           </span>
           <span class="col-type">{{ getFileType(doc.filename) }}</span>
           <span class="col-chunks">{{ doc.chunk_count || 0 }}</span>
-          <span class="col-images">{{ doc.image_count || 0 }}</span>
+          <span class="col-status">
+            <span v-if="doc.index_status" class="index-badge" :class="getIndexStatusClass(doc.index_status)">
+              {{ getIndexStatusText(doc.index_status) }}
+            </span>
+            <span v-else class="index-badge status-legacy">旧文档</span>
+            <span v-if="doc.index_error" class="index-error-hint" :title="doc.index_error">⚠</span>
+          </span>
           <span class="col-actions">
+            <button
+              v-if="doc.index_status === 'pending_index' || doc.index_status === 'index_failed'"
+              class="btn-icon-sm btn-reindex"
+              title="重新索引"
+              @click.stop="handleReindex(doc)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10"/>
+                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+              </svg>
+            </button>
             <button class="btn-icon-sm" title="查看详情" @click.stop="viewDocumentDetail(doc)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
@@ -308,6 +325,7 @@
 </template>
 
 <script setup>
+// helpers: composables/useKnowledgeBase.js (formatters + shared state factory)
 /**
  * KnowledgeBasePage — 知识库管理控制台
  * 上传区 + 文档表格 + 索引状态 + 详情抽屉 + 切片抽屉
@@ -421,13 +439,13 @@ function getFileType(filename) {
 // ===== Upload =====
 async function uploadFiles() {
   if (selectedFiles.value.length === 0) {
-    showToast('请先选择文件')
+    showToast('\u8bf7\u5148\u9009\u62e9\u6587\u4ef6')
     return
   }
 
   const token = userStore.token
   if (!token) {
-    showToast('请先登录')
+    showToast('\u8bf7\u5148\u767b\u5f55')
     router.push('/login')
     return
   }
@@ -445,10 +463,11 @@ async function uploadFiles() {
       filename: file.name,
       percentage: 0,
       status: 'processing',
-      message: '准备上传...'
+      message: '\u51c6\u5907\u4e0a\u4f20...'
     })
   })
-  let uploadUrl = '/knowledge/add/multiple/stream'
+
+  let uploadUrl = '/knowledge/add/multiple/v2'
   if (selectedSpaceId.value) {
     uploadUrl += `?space_id=${encodeURIComponent(selectedSpaceId.value)}`
   }
@@ -456,38 +475,34 @@ async function uploadFiles() {
   try {
     const response = await fetch(uploadUrl, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${token}` },
       body: formData
     })
+    const payload = await response.json().catch(() => ({}))
 
-    if (!response.ok) {
-      throw new Error('Upload failed')
+    if (!response.ok || payload.code !== 200) {
+      throw new Error(payload.message || 'Upload failed')
     }
 
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder('utf-8')
-    let buffer = ''
+    const results = payload.data?.results || []
+    for (const item of results) {
+      const progress = uploadProgressList.value.find(p => p.filename === item.filename)
+      if (!progress) continue
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-
-      buffer += decoder.decode(value, { stream: true })
-      const events = buffer.split('\n\n')
-      buffer = events.pop() || ''
-
-      for (const event of events) {
-        if (!event.trim()) continue
-        parseEvent(event)
-      }
+      const failed = item.status === 'error'
+      progress.status = failed ? 'failed' : 'completed'
+      progress.percentage = failed ? 0 : 100
+      progress.message = item.message || (failed ? '\u4e0a\u4f20\u5931\u8d25' : '\u6587\u4ef6\u5df2\u4fdd\u5b58\uff0c\u7b49\u5f85\u7d22\u5f15')
     }
+    successCount.value = results.filter(item => item.status !== 'error').length
+    failedCount.value = results.filter(item => item.status === 'error').length
   } catch (error) {
     console.error('Upload error:', error)
-    showToast('上传失败')
+    showToast(error.message || '\u4e0a\u4f20\u5931\u8d25')
     uploadProgressList.value.forEach((item) => {
       if (item.status !== 'completed') {
         item.status = 'failed'
-        item.message = '上传失败'
+        item.message = '\u4e0a\u4f20\u5931\u8d25'
       }
     })
     failedCount.value = uploadProgressList.value.filter(p => p.status === 'failed').length
@@ -499,46 +514,6 @@ async function uploadFiles() {
   }
 }
 
-function parseEvent(event) {
-  const lines = event.split('\n')
-  let data = ''
-
-  for (const line of lines) {
-    if (line.startsWith('data: ')) {
-      data = line.substring(6)
-    }
-  }
-
-  try {
-    const eventData = JSON.parse(data)
-    const { event_type, filename, message, progress, success_count, failed_count } = eventData
-
-    if (filename) {
-      const index = uploadProgressList.value.findIndex(p => p.filename === filename)
-      if (index !== -1) {
-        uploadProgressList.value[index].message = message
-
-        if (event_type === 'completed') {
-          uploadProgressList.value[index].status = 'completed'
-          uploadProgressList.value[index].percentage = 100
-          successCount.value++
-        } else if (event_type === 'processing') {
-          uploadProgressList.value[index].status = 'processing'
-          if (progress !== undefined) {
-            uploadProgressList.value[index].percentage = progress
-          }
-        }
-      }
-    } else if (event_type === 'finish') {
-      successCount.value = success_count
-      failedCount.value = failed_count
-    }
-  } catch (e) {
-    console.error('Parse event error:', e)
-  }
-}
-
-// ===== 空间加载 =====
 const currentOrgId = ref('')
 
 async function loadSpaces() {
@@ -569,7 +544,7 @@ async function loadSpaces() {
 // ===== Document CRUD =====
 async function fetchDocuments() {
   if (!userStore.token) {
-    documentError.value = '未登录，请先登录'
+    documentError.value = '\u672a\u767b\u5f55\uff0c\u8bf7\u5148\u767b\u5f55'
     return
   }
 
@@ -578,17 +553,48 @@ async function fetchDocuments() {
   try {
     const queryParams = {}
     if (selectedSpaceId.value) queryParams.space_id = selectedSpaceId.value
-    const res = await http.get('/knowledge/list', { params: queryParams, timeout: 8000 })
-    const result = res.data
-    if (result.code === 200 && result.data) {
-      documents.value = result.data.documents || []
-    } else {
-      documentError.value = result.message || '获取文档列表失败'
+
+    const [legacyResponse, indexResponse] = await Promise.allSettled([
+      http.get('/knowledge/list', { params: queryParams, timeout: 8000 }),
+      http.get('/knowledge/index-status', { params: queryParams, timeout: 8000 })
+    ])
+    const legacyResult = legacyResponse.status === 'fulfilled' ? legacyResponse.value.data : null
+    const indexResult = indexResponse.status === 'fulfilled' ? indexResponse.value.data : null
+
+    const legacyDocuments = legacyResult?.code === 200 ? (legacyResult.data?.documents || []) : []
+    const indexDocuments = indexResult?.code === 200
+      ? (indexResult.data?.documents || []).map(record => ({
+          id: record.id,
+          filename: record.filename,
+          original_filename: record.filename,
+          md5: record.md5,
+          chunk_count: record.chunk_count || 0,
+          image_count: 0,
+          preview: '',
+          created_at: record.created_at,
+          index_status: record.status,
+          index_error: record.error_message,
+          retry_count: record.retry_count || 0
+        }))
+      : []
+
+    if (legacyResponse.status === 'rejected' && indexResponse.status === 'rejected') {
+      throw legacyResponse.reason || indexResponse.reason
     }
+
+    const documentsByKey = new Map()
+    for (const doc of legacyDocuments) {
+      documentsByKey.set(doc.md5 || doc.filename, doc)
+    }
+    for (const doc of indexDocuments) {
+      const key = doc.md5 || doc.filename
+      documentsByKey.set(key, { ...documentsByKey.get(key), ...doc })
+    }
+    documents.value = Array.from(documentsByKey.values())
   } catch (error) {
     console.error('Fetch documents error:', error)
     if (error.response?.status === 401 || error.response?.status === 403) {
-      documentError.value = '登录已失效，请重新登录'
+      documentError.value = '\u767b\u5f55\u5df2\u5931\u6548\uff0c\u8bf7\u91cd\u65b0\u767b\u5f55'
     } else {
       documentError.value = classifyError(error).message
     }
@@ -659,11 +665,27 @@ async function deleteDocumentByFilename(filename) {
   return false
 }
 
+async function deleteDocumentById(documentId) {
+  if (!userStore.token || !documentId) return false
+
+  try {
+    const res = await http.delete(`/knowledge/documents/${encodeURIComponent(documentId)}`)
+    return res.data?.code === 200
+  } catch (error) {
+    console.error('Delete document by id error:', error)
+    return false
+  }
+}
+
 async function cleanAllVectors() {
   if (!userStore.token) return
 
   try {
-    await http.delete('/knowledge/clean')
+    let url = '/knowledge/clean'
+    if (selectedSpaceId.value) {
+      url += `?space_id=${encodeURIComponent(selectedSpaceId.value)}`
+    }
+    await http.delete(url)
     showToast('清除成功')
     await fetchDocuments()
   } catch (error) {
@@ -705,6 +727,13 @@ async function loadChunkImages(chunksList, md5) {
 
 // ===== UI Actions =====
 async function viewDocumentDetail(doc) {
+  if (doc.index_status && doc.index_status !== 'indexed') {
+    showToast(doc.index_status === 'index_failed'
+      ? `\u6587\u6863\u7d22\u5f15\u5931\u8d25\uff1a${doc.index_error || '\u8bf7\u7a0d\u540e\u91cd\u8bd5'}`
+      : '\u6587\u6863\u5df2\u4fdd\u5b58\uff0c\u6b63\u5728\u7b49\u5f85\u7d22\u5f15\u5b8c\u6210\u540e\u67e5\u770b\u5185\u5bb9\u548c\u5207\u7247')
+    return
+  }
+
   currentDocument.value = doc
   detailTab.value = 'content'
   detailPageImages.value = []
@@ -721,6 +750,13 @@ async function viewDocumentDetail(doc) {
 }
 
 async function viewDocumentChunks(doc) {
+  if (doc.index_status && doc.index_status !== 'indexed') {
+    showToast(doc.index_status === 'index_failed'
+      ? `\u6587\u6863\u7d22\u5f15\u5931\u8d25\uff1a${doc.index_error || '\u8bf7\u7a0d\u540e\u91cd\u8bd5'}`
+      : '\u6587\u6863\u5df2\u4fdd\u5b58\uff0c\u6b63\u5728\u7b49\u5f85\u7d22\u5f15\u5b8c\u6210\u540e\u67e5\u770b\u5185\u5bb9\u548c\u5207\u7247')
+    return
+  }
+
   currentDocument.value = doc
   detailTab.value = 'chunks'
 
@@ -736,8 +772,16 @@ function handleDeleteDocument(doc) {
     showCancelButton: true,
   }).then(async (result) => {
     if (result) {
-      const filename = doc.original_filename || doc.filename
-      const success = await deleteDocumentByFilename(filename)
+      let success = false
+      // v2 文档优先用 document_id 删除
+      if (doc.id && doc.index_status) {
+        success = await deleteDocumentById(doc.id)
+      }
+      // 旧文档回退 filename 删除
+      if (!success) {
+        const filename = doc.original_filename || doc.filename
+        success = await deleteDocumentByFilename(filename)
+      }
       if (success) {
         showToast('删除成功')
         await fetchDocuments()
@@ -773,6 +817,41 @@ function getStatusText(status) {
     case 'completed': return '完成'
     case 'failed': return '失败'
     default: return '处理中'
+  }
+}
+
+function getIndexStatusText(status) {
+  switch (status) {
+    case 'pending_index': return '待索引'
+    case 'indexing': return '索引中'
+    case 'indexed': return '已索引'
+    case 'index_failed': return '索引失败'
+    default: return status || ''
+  }
+}
+
+function getIndexStatusClass(status) {
+  switch (status) {
+    case 'indexed': return 'status-success'
+    case 'index_failed': return 'status-failed'
+    case 'indexing': return 'status-processing'
+    default: return 'status-pending'
+  }
+}
+
+async function handleReindex(doc) {
+  if (!userStore.token || !doc.id) return
+  try {
+    const res = await http.post(`/knowledge/${doc.id}/reindex`)
+    if (res.data?.code === 200) {
+      showToast('已提交重新索引任务')
+      await fetchDocuments()
+    } else {
+      showToast(res.data?.message || '重新索引失败')
+    }
+  } catch (error) {
+    console.error('Reindex error:', error)
+    showToast(error.response?.data?.detail || '重新索引失败')
   }
 }
 
@@ -1211,7 +1290,7 @@ onMounted(() => {
 
 .doc-table-header {
   display: grid;
-  grid-template-columns: 1fr 80px 80px 80px 120px;
+  grid-template-columns: 1fr 80px 80px 120px 120px;
   gap: var(--space-md);
   padding: var(--space-md) var(--space-lg);
   background: var(--color-surface);
@@ -1224,7 +1303,7 @@ onMounted(() => {
 
 .doc-table-row {
   display: grid;
-  grid-template-columns: 1fr 80px 80px 80px 120px;
+  grid-template-columns: 1fr 80px 80px 120px 120px;
   gap: var(--space-md);
   padding: var(--space-md) var(--space-lg);
   border-top: 1px solid var(--color-border-light);
@@ -1252,11 +1331,63 @@ onMounted(() => {
 }
 
 .col-type,
-.col-chunks,
-.col-images {
+.col-chunks {
   font-size: 13px;
   color: var(--color-text-light);
   text-align: center;
+}
+
+.col-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.index-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+
+.index-badge.status-success {
+  background-color: rgba(34, 160, 96, 0.12);
+  color: #1a8a50;
+}
+
+.index-badge.status-failed {
+  background-color: rgba(217, 48, 37, 0.12);
+  color: #c42a20;
+}
+
+.index-badge.status-processing {
+  background-color: rgba(230, 148, 10, 0.12);
+  color: #c07800;
+}
+
+.index-badge.status-pending {
+  background-color: rgba(100, 100, 100, 0.12);
+  color: #666;
+}
+
+.index-badge.status-legacy {
+  background-color: rgba(100, 100, 100, 0.08);
+  color: #999;
+}
+
+.index-error-hint {
+  font-size: 12px;
+  cursor: help;
+}
+
+.btn-reindex {
+  color: var(--color-primary) !important;
+}
+
+.btn-reindex:hover {
+  background: var(--color-primary-light) !important;
+  color: var(--color-primary) !important;
 }
 
 .col-actions {
@@ -1568,7 +1699,7 @@ onMounted(() => {
   }
 
   .col-type,
-  .col-images {
+  .col-status {
     display: none;
   }
 

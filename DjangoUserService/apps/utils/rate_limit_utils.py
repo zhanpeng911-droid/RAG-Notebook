@@ -1,4 +1,5 @@
 from django.core.cache import cache
+from functools import wraps
 from rest_framework.response import Response
 from rest_framework import status
 
@@ -11,6 +12,7 @@ def rate_limit(limit: int = 1, window: int = 60) -> callable:
     :return: 装饰器
     """
     def decorator(func):
+        @wraps(func)
         def wrapper(self, request, *args, **kwargs):
             # 获取客户端IP
             client_ip = request.META.get('REMOTE_ADDR')

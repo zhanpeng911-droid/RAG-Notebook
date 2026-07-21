@@ -43,3 +43,13 @@ async def mark_reviewed(
     if result["success"]:
         return success_response(message=result["message"], data=result)
     raise NoteNotFoundException(message=result["message"])
+
+@review_router.get("/due-count")
+async def get_due_count(
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """到期待回顾数量 —— 供侧栏/首页角标使用。"""
+    count = await review_service.count_due_reviews(db, user_id)
+    return success_response(data={"due_count": count})
+

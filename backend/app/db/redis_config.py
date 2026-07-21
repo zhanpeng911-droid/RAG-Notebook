@@ -22,6 +22,7 @@ settings = get_settings()
 REDIS_HOST = settings.REDIS_HOST or "localhost"
 REDIS_PORT = settings.REDIS_PORT
 REDIS_DB = settings.REDIS_DB
+REDIS_PASSWORD = settings.REDIS_PASSWORD or None
 
 # 全局 Redis 客户端 + 初始化锁（双重检查锁定）
 redis_client = None
@@ -90,6 +91,7 @@ async def connect_redis():
             host=REDIS_HOST,
             port=REDIS_PORT,
             db=REDIS_DB,
+            password=REDIS_PASSWORD or None,
             decode_responses=True,
             socket_connect_timeout=_CONNECT_TIMEOUT,
             socket_timeout=_SOCKET_TIMEOUT,

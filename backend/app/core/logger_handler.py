@@ -20,8 +20,18 @@ logs_dir = os.path.join(project_path, 'logs')
 os.makedirs(logs_dir, exist_ok=True)
 
 # 统一日志格式
+class RequestIdFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            from app.core.request_context import get_request_id
+            record.request_id = get_request_id() or "-"
+        except Exception:
+            record.request_id = "-"
+        return True
+
+
 DEFAULT_LOGGING_FORMAT = logging.Formatter(
-    '%(asctime)s [%(levelname)s] %(name)s - %(message)s',
+    '%(asctime)s [%(levelname)s] %(name)s rid=%(request_id)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
@@ -51,6 +61,7 @@ def get_logger(
     console_handler = logging.StreamHandler()
     console_handler.setLevel(console_level)
     console_handler.setFormatter(DEFAULT_LOGGING_FORMAT)
+    console_handler.addFilter(RequestIdFilter())
     logger.addHandler(console_handler)
 
     # 文件处理器
@@ -63,6 +74,7 @@ def get_logger(
     file_handler = logging.FileHandler(os.path.join(logs_dir, log_file), encoding='utf-8')
     file_handler.setLevel(file_level)
     file_handler.setFormatter(DEFAULT_LOGGING_FORMAT)
+    file_handler.addFilter(RequestIdFilter())
     logger.addHandler(file_handler)
 
     return logger

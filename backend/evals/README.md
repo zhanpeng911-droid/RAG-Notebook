@@ -1,4 +1,4 @@
-# Agent Eval Framework — RAG-Notebook
+# Agent Eval Framework — Notebook
 
 ## 目录结构
 

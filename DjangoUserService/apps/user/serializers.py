@@ -90,6 +90,7 @@ class ResetPasswordSerializer(serializers.Serializer):
 
 class RegisterSerializer(serializers.ModelSerializer):
     """用户注册序列化器"""
+    telephone = serializers.CharField(max_length=11, required=False, allow_blank=True, allow_null=True)
     password = serializers.CharField(max_length=20, min_length=6, required=True, help_text="密码", write_only=True)
     confirm_password = serializers.CharField(max_length=20, min_length=6, required=True, help_text="确认密码", write_only=True)
     
@@ -101,6 +102,9 @@ class RegisterSerializer(serializers.ModelSerializer):
         """验证注册信息"""
         email = attrs.get('email')
         telephone = attrs.get('telephone')
+        telephone = telephone.strip() if isinstance(telephone, str) else telephone
+        telephone = telephone or None
+        attrs['telephone'] = telephone
         password = attrs.get('password')
         confirm_password = attrs.get('confirm_password')
         

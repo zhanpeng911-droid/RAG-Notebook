@@ -178,9 +178,14 @@ class AgentFactory:
         :param return_intermediate_steps: 是否返回中间步骤（工具调用记录）
         :return: AgentExecutor 实例
         """
-        # 1. 创建模型：优先使用前端传入的 llm_config
+        # 1. 创建模型：优先使用前端传入的 llm_config（生产会剥离客户端 api_key）
         if llm_config is not None:
-            from app.utils.factory import create_chat_model_from_config, llm_config_is_usable
+            from app.utils.factory import (
+                create_chat_model_from_config,
+                llm_config_is_usable,
+                sanitize_client_llm_config,
+            )
+            llm_config = sanitize_client_llm_config(llm_config)
             if not llm_config_is_usable(llm_config):
                 raise ValueError("请先在设置页面配置 AI 模型（云模型需要 API Key，Ollama 仅需本地服务可用）")
             chat_model = create_chat_model_from_config(llm_config)

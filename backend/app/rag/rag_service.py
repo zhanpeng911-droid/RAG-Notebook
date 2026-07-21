@@ -14,7 +14,7 @@ from langchain_core.prompts import PromptTemplate
 
 from app.rag.vector_store import VectorStoreService
 from app.rag.reorder_service import reorder_service
-from app.utils.factory import chat_model
+from app.utils.factory import get_default_chat_model
 from app.utils.prompt_loader import load_prompt
 from app.core.logger_handler import logger
 from app.services.note_service import note_service
@@ -50,11 +50,16 @@ class RagService:
         self.prompt_template = PromptTemplate.from_template(self.prompt_text)
 
         # 创建聊天模型：优先使用前端配置，否则用 .env 默认配置
-        from app.utils.factory import create_chat_model_from_config, llm_config_is_usable
+        from app.utils.factory import (
+            create_chat_model_from_config,
+            llm_config_is_usable,
+            sanitize_client_llm_config,
+        )
+        llm_config = sanitize_client_llm_config(llm_config)
         if llm_config_is_usable(llm_config):
             self.chat_model = create_chat_model_from_config(llm_config)
         else:
-            self.chat_model = chat_model
+            self.chat_model = get_default_chat_model()
 
         # 构建 LangChain 链：提示词 → 模型 → 输出解析
         self.chain = self._init_chain()

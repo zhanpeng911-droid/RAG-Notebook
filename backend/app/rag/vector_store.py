@@ -31,12 +31,17 @@ def _clear_chroma_cache():
         pass
 
 
-def _reset_chroma_db(persist_dir: str):
-    """删除 Chroma 数据库目录（文件系统），同时清除内存中的缓存，达到完全重置的效果"""
+def reset_chroma_db_explicit(persist_dir: str | None = None):
+    """
+    显式重置 Chroma 数据目录（运维/管理操作，禁止在普通初始化路径调用）。
+
+    会删除磁盘上的 persist 目录并清理内存缓存。调用方必须确认已备份。
+    """
+    target = persist_dir or get_abstract_path(chroma_config['persist_directory'])
     _clear_chroma_cache()
-    if os.path.exists(persist_dir):
-        shutil.rmtree(persist_dir)
-        logger.info(f"已删除 Chroma 数据库目录并重置缓存: {persist_dir}")
+    if os.path.exists(target):
+        shutil.rmtree(target)
+        logger.warning(f"已显式删除 Chroma 数据库目录: {target}")
 
 
 class VectorStoreService:
@@ -47,9 +52,9 @@ class VectorStoreService:
     - 为什么用单例：ChromaDB 客户端维护内部连接池和缓存，多实例会冲突
     - 为什么双重检查：避免每次请求都加锁，提升性能
 
-    自动恢复机制：
-    - 初始化失败时（如数据库文件损坏），自动删除并重建
-    - 保证服务可用性，避免因数据损坏导致服务完全不可用
+    失败策略：
+    - 初始化失败时保留磁盘数据，标记 degraded，不自动删除
+    - 删除/重建仅允许通过 reset_chroma_db_explicit 显式执行
 
     核心功能：
     - 文档向量化存储
@@ -60,6 +65,8 @@ class VectorStoreService:
     _instance = None
     _initialized = False
     _init_lock = threading.Lock()
+    _degraded = False
+    _degraded_reason = ""
 
     def __new__(cls):
         # 第一重检查（无锁，性能优先）
@@ -79,7 +86,7 @@ class VectorStoreService:
         2. 加锁后再次检查（第二重检查，确保线程安全）
         3. 清除 ChromaDB 缓存（避免残留 client 导致 KeyError）
         4. 创建 Chroma 实例和子服务
-        5. 如果初始化失败，自动删除并重建数据库
+        5. 初始化失败：保留数据目录，标记 degraded，抛出错误（不自动删库）
         """
         if VectorStoreService._initialized:
             return
@@ -93,13 +100,29 @@ class VectorStoreService:
 
             try:
                 self._init_chroma(persist_dir)
+                VectorStoreService._degraded = False
+                VectorStoreService._degraded_reason = ""
             except Exception as e:
-                # 自动恢复：删除损坏的数据库并重建
-                logger.error(f"Chroma 初始化失败，即将重置数据库: {e}")
-                _reset_chroma_db(persist_dir)
-                self._init_chroma(persist_dir)
+                # 禁止自动删除：损坏时保留现场，便于运维备份与排查
+                VectorStoreService._degraded = True
+                VectorStoreService._degraded_reason = str(e)
+                logger.error(
+                    f"Chroma 初始化失败，已保留数据目录（不会自动删除）: {persist_dir}; error={e}"
+                )
+                VectorStoreService._initialized = True
+                raise RuntimeError(
+                    f"Chroma 初始化失败（数据目录已保留，请排查后必要时调用 reset_chroma_db_explicit）: {e}"
+                ) from e
 
             VectorStoreService._initialized = True
+
+    @classmethod
+    def is_degraded(cls) -> bool:
+        return cls._degraded
+
+    @classmethod
+    def degraded_reason(cls) -> str:
+        return cls._degraded_reason
 
     def _init_chroma(self, persist_dir: str):
         """

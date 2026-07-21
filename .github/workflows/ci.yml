@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv
+      - name: Sync deps (dev)
+        run: |
+          uv sync --extra dev || pip install -e ".[dev]" aiosqlite pytest pytest-asyncio alembic
+      - name: Pytest
+        env:
+          SECRET_KEY: ci-test-secret
+          MYSQL_HOST: localhost
+          REDIS_HOST: localhost
+          LLM_TYPE: OLLAMA
+          RATE_LIMIT_ENABLED: "false"
+          FEATURE_ORG: "false"
+        run: |
+          if command -v uv >/dev/null 2>&1; then
+            uv run pytest tests -q --tb=line
+          else
+            python -m pytest tests -q --tb=line
+          fi
+
+  django:
+    name: Django user/file tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: DjangoUserService
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv
+      - name: Sync deps
+        run: |
+          uv sync || pip install -e .
+      - name: Tests
+        env:
+          JWT_SECRET_KEY: ci-test-secret
+          DEBUG: "true"
+          DJANGO_SETTINGS_MODULE: DjangoUserService.test_settings
+        run: |
+          if command -v uv >/dev/null 2>&1; then
+            uv run python manage.py test apps.user apps.file --settings=DjangoUserService.test_settings -v1
+          else
+            python manage.py test apps.user apps.file --settings=DjangoUserService.test_settings -v1
+          fi
+
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: front
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: front/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  compose:
+    name: Docker compose config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate compose file
+        run: docker compose -f docker-compose.yml config --quiet

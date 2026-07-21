@@ -46,15 +46,28 @@ class DocumentProcessor:
         self.vectors_store = vectors_store
         self.md5_store = md5_store
         self.spliter = AsyncTextSplitter(
-            chunk_size=chroma_config['chunk_size'],
-            chunk_overlap=chroma_config['chunk_overlap'],
-            separators=chroma_config['separators'],
+            chunk_size=chroma_config.get('chunk_size', 500),
+            chunk_overlap=chroma_config.get('chunk_overlap', 60),
+            separators=chroma_config.get('separators'),
             embedding_model=embed_model
         )
 
     def _get_ext(self, read_path: str) -> str:
         """获取文件小写扩展名"""
         return os.path.splitext(read_path)[1].lower()
+
+
+    @staticmethod
+    def resolve_chunk_params(filename: str | None = None) -> tuple[int, int]:
+        """按扩展名覆盖 chunk 参数，缺省回退 chroma.yaml 全局默认。"""
+        base_size = int(chroma_config.get("chunk_size", 500))
+        base_overlap = int(chroma_config.get("chunk_overlap", 60))
+        by_ext = chroma_config.get("chunk_by_extension") or {}
+        if not filename:
+            return base_size, base_overlap
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        conf = by_ext.get(ext) or {}
+        return int(conf.get("chunk_size", base_size)), int(conf.get("chunk_overlap", base_overlap))
 
     async def get_file_document(self, read_path: str, md5: str = None, user_id: str = None) -> list[Document]:
         """
@@ -67,7 +80,10 @@ class DocumentProcessor:
         # PDF 多模态加载（有条件分支，单独处理）
         if ext == '.pdf':
             if md5 and user_id:
-                return await pdf_multimodal_loader(read_path, md5, user_id)
+                try:
+                    return await pdf_multimodal_loader(read_path, md5, user_id)
+                except RuntimeError as exc:
+                    logger.warning(f"?PDF?????????????????????: {exc}")
             return await pdf_loader(read_path)
 
         # 其他格式通过字典映射
@@ -84,7 +100,10 @@ class DocumentProcessor:
 
         if ext == '.pdf':
             if md5 and user_id:
-                return pdf_multimodal_loader_sync(read_path, md5, user_id)
+                try:
+                    return pdf_multimodal_loader_sync(read_path, md5, user_id)
+                except RuntimeError as exc:
+                    logger.warning(f"?PDF????????????????????????: {exc}")
             return pdf_loader_sync(read_path)
 
         loaders = _LOADER_MAP.get(ext)

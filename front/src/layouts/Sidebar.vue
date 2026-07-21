@@ -8,7 +8,7 @@
           <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
         </svg>
       </div>
-      <span v-if="!collapsed" class="brand-text">RAG Notebook</span>
+      <span v-if="!collapsed" class="brand-text">Notebook</span>
     </div>
 
     <!-- 主导航 -->
@@ -23,6 +23,7 @@
       >
         <span class="nav-icon" v-html="item.icon"></span>
         <span v-if="!collapsed" class="nav-label">{{ item.label }}</span>
+        <span v-if="!collapsed && item.path === '/review' && reviewDueCount > 0" class="nav-badge">{{ reviewDueCount > 99 ? '99+' : reviewDueCount }}</span>
       </router-link>
     </nav>
 
@@ -120,6 +121,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '../store/user'
+import { reviewApi } from '../services/reviewApi'
 
 const props = defineProps({
   collapsed: Boolean
@@ -133,13 +135,23 @@ const userStore = useUserStore()
 
 // 响应式 isMobile
 const isMobile = ref(window.innerWidth < 768)
+const reviewDueCount = ref(0)
 
 function handleResize() {
   isMobile.value = window.innerWidth < 768
 }
 
-onMounted(() => {
+onMounted(async () => {
   window.addEventListener('resize', handleResize)
+  if (!localStorage.getItem('jwt_token')) {
+    return
+  }
+  try {
+    const res = await reviewApi.dueCount()
+    reviewDueCount.value = res?.data?.due_count ?? res?.due_count ?? 0
+  } catch (_) {
+    /* optional badge: keep the page usable when unavailable */
+  }
 })
 
 onUnmounted(() => {
@@ -340,6 +352,19 @@ async function handleLogout() {
 .nav-label {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.nav-badge {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--color-primary);
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
 }
 
 /* 折叠态居中 */

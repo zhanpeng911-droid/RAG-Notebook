@@ -36,21 +36,28 @@ class NoteVectorIndex:
     """
 
     def __init__(self):
-        persist_dir = get_abstract_path(chroma_config['persist_directory'])
-        self._store = Chroma(
-            collection_name=NOTES_COLLECTION_NAME,
-            embedding_function=embed_model,
-            persist_directory=persist_dir,
-        )
+        # ChromaDB ??? Rust DLL???????????????????
+        # ?? C ?????? VC++ Runtime ????/??????????
+        self._store = None
+
+    def _ensure_store(self) -> Chroma:
+        if self._store is None:
+            persist_dir = get_abstract_path(chroma_config['persist_directory'])
+            self._store = Chroma(
+                collection_name=NOTES_COLLECTION_NAME,
+                embedding_function=embed_model,
+                persist_directory=persist_dir,
+            )
+        return self._store
 
     @property
     def store(self) -> Chroma:
-        """暴露底层 Chroma 实例，用于兼容 RagService 或测试"""
-        return self._store
+        """???? Chroma ??????? RagService ???"""
+        return self._ensure_store()
 
-    def add_note(self, note_id: str, user_id: str, title: str, content: str) -> None:
-        """向向量库写入笔记"""
-        doc = Document(
+    @staticmethod
+    def _note_document(note_id: str, user_id: str, title: str, content: str) -> Document:
+        return Document(
             page_content=content,
             metadata={
                 "user_id": user_id,
@@ -59,29 +66,32 @@ class NoteVectorIndex:
                 "title": title,
             },
         )
-        self._store.add_documents([doc], ids=[note_id])
 
-    def update_note(self, note_id: str, user_id: str, title: str, content: str) -> None:
-        """更新笔记向量（先删旧向量，再写入新向量）"""
-        self._store.delete(where={"$and": [
+    def add_note(self, note_id: str, user_id: str, title: str, content: str) -> None:
+        """Add one note to Chroma."""
+        self._ensure_store().add_documents(
+            [self._note_document(note_id, user_id, title, content)], ids=[note_id]
+        )
+
+    def upsert_note(self, note_id: str, user_id: str, title: str, content: str) -> None:
+        """Idempotently synchronize one note; safe for repeated queue tasks."""
+        store = self._ensure_store()
+        store.delete(where={"$and": [
             {"note_id": note_id},
             {"user_id": user_id},
             {"doc_type": "note"},
         ]})
-        doc = Document(
-            page_content=content,
-            metadata={
-                "user_id": user_id,
-                "note_id": note_id,
-                "doc_type": "note",
-                "title": title,
-            },
+        store.add_documents(
+            [self._note_document(note_id, user_id, title, content)], ids=[note_id]
         )
-        self._store.add_documents([doc], ids=[note_id])
+
+    def update_note(self, note_id: str, user_id: str, title: str, content: str) -> None:
+        """Compatibility wrapper for existing callers."""
+        self.upsert_note(note_id, user_id, title, content)
 
     def delete_note(self, note_id: str, user_id: str) -> None:
-        """删除笔记向量（带 user_id 过滤，防止误删其他用户向量）"""
-        self._store.delete(where={"$and": [
+        """Delete one user's note vector."""
+        self._ensure_store().delete(where={"$and": [
             {"note_id": note_id},
             {"user_id": user_id},
             {"doc_type": "note"},

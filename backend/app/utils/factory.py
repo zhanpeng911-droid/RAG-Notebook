@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Optional, List
+from typing import Optional, List, Callable
 import ipaddress
 from urllib.parse import urlparse
 
@@ -14,6 +14,35 @@ except ImportError:
 
 from app.core.logger_handler import logger
 from app.config.validator import get_settings
+
+
+class LazyModelProxy:
+    """
+    懒加载模型代理。
+
+    目标：
+    - 避免模块导入时立即实例化默认模型
+    - 把依赖缺失或配置错误延后到首次真实使用时暴露
+    - 保持现有 `chat_model` / `embed_model` / `vision_model` 导出名不变
+    """
+
+    def __init__(self, name: str, resolver: Callable[[], object]):
+        self._name = name
+        self._resolver = resolver
+        self._resolved = None
+
+    def resolve(self):
+        """解析并缓存真实模型实例。"""
+        if self._resolved is None:
+            self._resolved = self._resolver()
+        return self._resolved
+
+    def __getattr__(self, item):
+        return getattr(self.resolve(), item)
+
+    def __repr__(self) -> str:
+        state = "resolved" if self._resolved is not None else "pending"
+        return f"<LazyModelProxy name={self._name!r} state={state}>"
 
 
 class DashScopeEmbeddingsWrapper(Embeddings):
@@ -132,6 +161,8 @@ class EmbedModelFactory(BaseModelFactory):
         embed_type = settings.EMBED_MODEL_TYPE.upper()
 
         if embed_type == "OLLAMA":
+            if OllamaEmbeddings is None:
+                raise ImportError("需要安装 langchain-ollama: pip install langchain-ollama")
             model_name = settings.TEXT_EMBEDDING_MODEL_NAME
             base_url = settings.OLLAMA_BASE_URL
 
@@ -179,6 +210,8 @@ class VisionModelFactory(BaseModelFactory):
         vision_type = settings.VISION_MODEL_TYPE.upper() or settings.LLM_TYPE.upper()
 
         if vision_type == "OLLAMA":
+            if ChatOllama is None:
+                raise ImportError("需要安装 langchain-ollama: pip install langchain-ollama")
             model_name = settings.VISION_OLLAMA_MODEL_NAME or settings.OLLAMA_MODEL_NAME or "qwen-vl:7b"
             base_url = settings.OLLAMA_BASE_URL
 
@@ -244,6 +277,8 @@ def create_chat_model_from_settings(custom_model: Optional[str] = None) -> BaseC
     llm_type = settings.LLM_TYPE.upper()
 
     if llm_type == "OLLAMA":
+        if ChatOllama is None:
+            raise ImportError("需要安装 langchain-ollama: pip install langchain-ollama")
         model_name = custom_model or settings.OLLAMA_MODEL_NAME or settings.OLLAMA_CHAT_MODEL_NAME or "qwen3:7b"
         base_url = settings.OLLAMA_BASE_URL
 
@@ -290,10 +325,25 @@ def create_chat_model_from_settings(custom_model: Optional[str] = None) -> BaseC
         raise ValueError(f"不支持的LLM_TYPE: {llm_type}，可选值: ALIYUN, OLLAMA, OPENAI")
 
 
-# 模块级全局单例 —— 应用启动时初始化一次，后续所有模块复用
-chat_model = ChatModelFactory().generator()
-embed_model = EmbedModelFactory().generator()
-vision_model = VisionModelFactory().generator()
+def get_default_chat_model() -> BaseChatModel:
+    """获取默认聊天模型实例（懒加载）。"""
+    return chat_model.resolve()
+
+
+def get_default_embed_model() -> Embeddings:
+    """获取默认嵌入模型实例（懒加载）。"""
+    return embed_model.resolve()
+
+
+def get_default_vision_model() -> BaseChatModel:
+    """获取默认视觉模型实例（懒加载）。"""
+    return vision_model.resolve()
+
+
+# 模块级默认模型代理 —— 首次使用时才真正初始化模型
+chat_model = LazyModelProxy("chat_model", lambda: ChatModelFactory().generator())
+embed_model = LazyModelProxy("embed_model", lambda: EmbedModelFactory().generator())
+vision_model = LazyModelProxy("vision_model", lambda: VisionModelFactory().generator())
 
 
 # ==================== base_url 安全校验 ====================
@@ -359,15 +409,57 @@ def _validate_llm_base_url(provider: str, base_url: str) -> str:
     raise ValueError("LLM base_url 不在 ALLOWED_LLM_BASE_URLS 白名单中")
 
 
+
+def allow_client_llm_key() -> bool:
+    """是否允许使用前端传入的 api_key。"""
+    return get_settings().allow_client_llm_key
+
+
+def sanitize_client_llm_config(config: dict | None) -> dict | None:
+    """
+    规范化前端 llm_config。
+    生产（或 ALLOW_CLIENT_LLM_KEY=false）时剥离明文 api_key，强制走服务端密钥。
+    """
+    if not config:
+        return None
+    cleaned = dict(config)
+    if not allow_client_llm_key():
+        cleaned["api_key"] = None
+    return cleaned
+
+
+def _server_api_key_for_provider(provider: str) -> str:
+    """按 provider 回退到服务端配置的密钥。"""
+    settings = get_settings()
+    provider = (provider or "").lower()
+    if provider in {"deepseek", "openai", "custom"}:
+        return (settings.OPENAI_API_KEY or settings.CHAT_API_KEY or "").strip()
+    if provider in {"aliyun", "dashscope", "tongyi"}:
+        return (settings.DASHSCOPE_API_KEY or settings.ALIYUN_ACCESS_KEY_SECRET or "").strip()
+    if provider == "anthropic":
+        return (settings.OPENAI_API_KEY or settings.CHAT_API_KEY or "").strip()
+    return ""
+
+
 def llm_config_is_usable(config: dict | None) -> bool:
     """Return whether a front-end supplied LLM config should override backend defaults."""
     if not config:
         return False
     provider = (config.get("provider") or "deepseek").lower()
     api_key = (config.get("api_key") or "").strip()
+
+    # 生产：不依赖客户端 key；ollama 始终可用，其它 provider 需服务端有 key 或仅做模型选择回退
+    if not allow_client_llm_key():
+        if provider == "ollama":
+            return True
+        # 允许只传 provider/model，create 时回退服务端 key
+        return True
+
     if provider == "ollama":
         return True
     return bool(api_key)
+
+
 
 
 def create_chat_model_from_config(config: dict) -> BaseChatModel:
@@ -384,6 +476,9 @@ def create_chat_model_from_config(config: dict) -> BaseChatModel:
     - openai: OpenAI 兼容协议（大多数 LLM 服务）
     - anthropic: Anthropic 协议（Claude）
 
+    安全：
+    - 生产环境（ALLOW_CLIENT_LLM_KEY=false）会剥离客户端 api_key，回退服务端密钥
+
     :param config: 配置字典
         - provider: LLM 提供商
         - model: 模型名称
@@ -392,10 +487,11 @@ def create_chat_model_from_config(config: dict) -> BaseChatModel:
         - protocol: 协议类型
     :return: LangChain 兼容的聊天模型实例
     """
+    config = sanitize_client_llm_config(config) or {}
     provider = (config.get("provider") or "deepseek").lower()
     protocol = (config.get("protocol") or "openai").lower()
     model_name = config.get("model")
-    api_key = config.get("api_key")
+    api_key = (config.get("api_key") or "").strip() or _server_api_key_for_provider(provider)
     base_url = config.get("base_url")
 
     # provider → 默认 base_url 映射

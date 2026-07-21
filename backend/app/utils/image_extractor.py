@@ -1,8 +1,6 @@
 import os
 import shutil
 
-import fitz
-
 from app.utils.path_tool import get_abstract_path, get_data_path
 from app.core.logger_handler import logger
 
@@ -64,9 +62,11 @@ def extract_images_from_pdf(pdf_path: str, user_id: str, md5: str) -> dict[int, 
     result = {}
 
     try:
+        # ?????? PDF ????? PyMuPDF???? DLL ???????????
+        import fitz
         doc = fitz.open(abs_pdf_path)
     except Exception as e:
-        logger.error(f"【图片提取】打开PDF失败: {e}")
+        logger.error(f"????????PDF??: {e}")
         return {}
 
     for page_num in range(len(doc)):

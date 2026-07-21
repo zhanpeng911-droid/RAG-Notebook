@@ -2,6 +2,41 @@ import { defineStore } from 'pinia';
 import http from '../services/http';
 import { apiConfig } from '../config/api';
 
+const REGISTER_FIELD_LABELS = {
+  username: '用户名',
+  email: '邮箱',
+  telephone: '手机号',
+  password: '密码',
+  confirm_password: '确认密码',
+  non_field_errors: ''
+};
+
+function flattenApiErrors(value, path = []) {
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => flattenApiErrors(item, path));
+  }
+  if (value && typeof value === 'object') {
+    return Object.entries(value).flatMap(([key, child]) => flattenApiErrors(child, [...path, key]));
+  }
+  if (value === null || value === undefined) {
+    return [];
+  }
+
+  const field = path[path.length - 1];
+  const label = REGISTER_FIELD_LABELS[field] ?? field;
+  return [label ? `${label}：${String(value)}` : String(value)];
+}
+
+function formatApiError(data, fallback) {
+  const detail = data?.detail ?? data?.message ?? data;
+  if (typeof detail === 'string') {
+    return detail;
+  }
+
+  const messages = flattenApiErrors(detail);
+  return messages.length ? messages.join('；') : fallback;
+}
+
 export const useUserStore = defineStore('user', {
   state: () => ({
     userInfo: null,
@@ -155,13 +190,15 @@ export const useUserStore = defineStore('user', {
     // 用户注册
     async register(userData) {
       try {
-        const response = await http.post('/user/register/', {
+        const telephone = userData.telephone?.trim();
+        const payload = {
           username: userData.username,
           email: userData.email,
-          telephone: userData.telephone || '',
           password: userData.password,
-          confirm_password: userData.confirm_password
-        });
+          confirm_password: userData.confirm_password,
+          ...(telephone ? { telephone } : {})
+        };
+        const response = await http.post('/user/register/', payload);
 
         if (response.data.status === 201 && response.data.token) {
           const token = response.data.token;
@@ -178,13 +215,10 @@ export const useUserStore = defineStore('user', {
         }
       } catch (error) {
         console.error('注册请求异常:', error);
-        let errorMessage = '注册失败，请稍后重试';
-        if (error.response?.data?.message) {
-          errorMessage = error.response.data.message;
-        } else if (error.response?.data?.detail) {
-          errorMessage = error.response.data.detail;
-        }
-        return { success: false, message: errorMessage };
+        return {
+          success: false,
+          message: formatApiError(error.response?.data, '注册失败，请稍后重试')
+        };
       }
     }
   },

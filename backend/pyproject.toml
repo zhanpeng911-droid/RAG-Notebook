@@ -9,7 +9,8 @@ authors = [
 dependencies = [
     "python-dotenv~=1.2.2",
     "SQLAlchemy~=2.0.48",
-    "langchain-core~=1.2.17",
+    "alembic>=1.13.0",
+    "langchain-core>=1.4.7,<2.0.0",
     "aiofiles~=25.1.0",
     "langchain-text-splitters~=1.1.1",
     "fastapi~=0.123.0",
@@ -22,25 +23,19 @@ dependencies = [
     "requests~=2.32.5",
     "uvicorn==0.21.1",
     "aiomysql>=0.3.2",
-    "redis>=7.3.0",
+    "redis>=4.5.2,<6.5",
     "langchain-ollama>=1.0.1",
     "langchain>=1.2.13",
     "langchain-chroma>=1.1.0",
     "python-multipart>=0.0.22",
     "dashscope>=1.25.14",
     "pypdf>=6.9.2",
+    "python-docx>=1.2.0",
     "python-magic>=0.4.27",
-    "python-magic-bin>=0.4.14",
-    "sentence-transformers>=5.3.0",
-    "modelscope>=1.35.3",
-    "accelerate>=1.13.0",
-    "torch>=2.11.0",
-    "torchvision>=0.26.0",
-    "torchaudio>=2.11.0",
+    "python-magic-bin>=0.4.14; sys_platform == 'win32'",
     "langchain-dashscope>=0.1.8",
-    "unstructured[all-docs]>=0.22.20",
+    "langchain-openai>=0.1.0",
     "langsmith>=0.7.22",
-    "langgraph-cli[inmem]>=0.1.54",
     "rank-bm25>=0.2.2",
     "pymupdf>=1.25.0",
     "pillow>=10.0.0",
@@ -48,20 +43,40 @@ dependencies = [
     "celery[redis]>=5.4.0",
 ]
 
-# 开发依赖
 [project.optional-dependencies]
+# 本地 embedding / 重型文档解析（Docker full 镜像或本地可选安装）
+local-embed = [
+    "sentence-transformers>=5.3.0",
+    "modelscope>=1.35.3",
+    "accelerate>=1.13.0",
+    "torch>=2.11.0",
+    "torchvision>=0.26.0",
+    "torchaudio>=2.11.0",
+]
+docs-heavy = [
+    "unstructured[all-docs]>=0.22.20",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
+    "aiosqlite>=0.20.0",
     "black>=24.0.0",
     "isort>=5.12.0",
     "ruff>=0.3.0",
+]
+full = [
+    "backend[local-embed,docs-heavy]",
 ]
 
 [[tool.uv.index]]
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"
 default = true
 
-[tool.uv]
-venv.path = ".venv"
-index-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]

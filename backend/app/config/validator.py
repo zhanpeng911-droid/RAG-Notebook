@@ -19,6 +19,7 @@ from functools import lru_cache
 from typing import List
 
 from pydantic_settings import BaseSettings
+from pydantic_settings import SettingsConfigDict
 from pydantic import field_validator
 
 
@@ -49,6 +50,7 @@ class AppSettings(BaseSettings):
     REDIS_HOST: str = ""
     REDIS_PORT: int = 6379
     REDIS_DB: int = 3
+    REDIS_PASSWORD: str = ""
     REDIS_CACHE_URL: str = ""
 
     # ==================== Django 用户服务 ====================
@@ -59,6 +61,14 @@ class AppSettings(BaseSettings):
 
     # ==================== 限流 ====================
     RATE_LIMIT_ENABLED: bool = True
+    # 是否允许前端传入 llm_config.api_key；生产默认 false
+    ALLOW_CLIENT_LLM_KEY: bool | None = None
+    # 企业 Org/Space/审计 API 开关（默认关闭）
+    FEATURE_ORG: bool = True
+
+    # Note background processing. These are not prerequisites for a successful save.
+    NOTE_VECTOR_INDEX_ENABLED: bool = True
+    NOTE_AUTO_TAG_ENABLED: bool = True
 
     # ==================== LLM 配置 ====================
     LLM_TYPE: str = ""
@@ -105,9 +115,10 @@ class AppSettings(BaseSettings):
     # ==================== 重排序 ====================
     RERANKER_MODEL_PATH: str = ""
 
-    class Config:
-        env_file = ".env"
-        extra = "allow"
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="allow",
+    )
 
     @field_validator("LLM_TYPE")
     @classmethod
@@ -129,6 +140,19 @@ class AppSettings(BaseSettings):
     def jwt_blacklist_redis_url(self) -> str:
         """JWT 黑名单 Redis URL，优先使用专用配置，回退到通用 Redis URL"""
         return self.JWT_BLACKLIST_REDIS_URL or self.REDIS_CACHE_URL
+
+
+
+    @property
+    def allow_client_llm_key(self) -> bool:
+        """生产环境默认禁止客户端明文 API Key；可用 ALLOW_CLIENT_LLM_KEY 显式覆盖。"""
+        if self.ALLOW_CLIENT_LLM_KEY is not None:
+            return bool(self.ALLOW_CLIENT_LLM_KEY)
+        return self.ENV.lower() not in {"prod", "production"}
+
+    @property
+    def is_production(self) -> bool:
+        return self.ENV.lower() in {"prod", "production"}
 
 
 @lru_cache(maxsize=1)

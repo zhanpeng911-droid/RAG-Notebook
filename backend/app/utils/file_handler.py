@@ -178,48 +178,58 @@ async def txt_loader(file_path: str) -> list[Document]:
     # 所有编码都失败，返回空列表
     return []
 
+
+def _load_docx(file_path: str) -> list[Document]:
+    """使用 python-docx 提取 DOCX 段落和表格文本。"""
+    from docx import Document as DocxDocument
+
+    docx = DocxDocument(file_path)
+    blocks: list[str] = []
+
+    for paragraph in docx.paragraphs:
+        text = paragraph.text.strip()
+        if text:
+            blocks.append(text)
+
+    for table in docx.tables:
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells]
+            if any(cells):
+                blocks.append("\t".join(cells))
+
+    content = "\n\n".join(blocks).strip()
+    if not content:
+        return []
+    return [Document(page_content=content, metadata={"source": file_path})]
+
+
 async def word_loader(file_path: str) -> list[Document]:
-    """
-    异步加载 WORD 文件内容，返回 LangChain Document 对象列表。
-
-    注意：当前实现使用 TextLoader 以 utf-8 编码加载，适用于纯文本格式的 Word 文件。
-    对于包含复杂格式（图片、表格、公式等）的 .docx 文件，
-    建议后续升级为 UnstructuredWordDocumentLoader 以获得更好的解析效果。
-
-    Args:
-        file_path: WORD 文件路径（.doc 或 .docx），支持绝对路径和相对路径。
-
-    Returns:
-        LangChain Document 列表。加载失败时返回空列表。
-    """
+    """异步加载 DOCX 文件内容，返回 LangChain Document 对象列表。"""
     abs_file_path = get_abstract_path(file_path) if not os.path.isabs(file_path) else file_path
     try:
-        loader = TextLoader(abs_file_path, encoding='utf-8')
-        return await asyncio.to_thread(loader.load)
+        return await asyncio.to_thread(_load_docx, abs_file_path)
     except Exception as e:
-        logger.error(f"【WORD文件加载】加载文件 {abs_file_path} 时出错: {e}")
+        logger.error(f"【WORD文件加载】加载文件 {abs_file_path} 时出错: {e}", exc_info=True)
         return []
+def _load_markdown_as_text(abs_file_path: str) -> list[Document]:
+    """Load Markdown through TextLoader when optional parsers are unavailable."""
+    for encoding in ("utf-8", "utf-8-sig", "gb18030"):
+        try:
+            return TextLoader(abs_file_path, encoding=encoding).load()
+        except Exception:
+            continue
+    return []
+
 
 async def markdown_loader(file_path: str) -> list[Document]:
-    """
-    异步加载 Markdown 文件内容，返回 LangChain Document 对象列表。
-
-    使用 UnstructuredMarkdownLoader 以 "single" 模式加载，
-    将整个 Markdown 文件作为一个 Document 返回（不分割为多个片段）。
-
-    Args:
-        file_path: Markdown 文件路径（.md），支持绝对路径和相对路径。
-
-    Returns:
-        LangChain Document 列表（通常只有一个元素）。加载失败时返回空列表。
-    """
+    """Load Markdown asynchronously, falling back to TextLoader if necessary."""
     abs_file_path = get_abstract_path(file_path) if not os.path.isabs(file_path) else file_path
     try:
         loader = UnstructuredMarkdownLoader(abs_file_path, mode="single")
         return await asyncio.to_thread(loader.load)
     except Exception as e:
-        logger.error(f"【Markdown文件加载】加载文件 {abs_file_path} 时出错: {e}")
-        return []
+        logger.warning(f"[Markdown loader] Unstructured failed; using TextLoader fallback: {e}")
+        return await asyncio.to_thread(_load_markdown_as_text, abs_file_path)
 
 
 async def ppt_loader(file_path: str) -> list[Document]:
@@ -341,45 +351,23 @@ def txt_loader_sync(file_path: str) -> list[Document]:
 
 
 def word_loader_sync(file_path: str) -> list[Document]:
-    """
-    同步加载 WORD 文件内容，用于多线程环境。
-
-    使用 TextLoader 以 utf-8 编码加载，适用于纯文本格式的 Word 文件。
-
-    Args:
-        file_path: WORD 文件路径（.doc 或 .docx），支持绝对路径和相对路径。
-
-    Returns:
-        LangChain Document 列表。加载失败时返回空列表。
-    """
+    """同步加载 DOCX 文件内容，用于多线程切片流程。"""
     abs_file_path = get_abstract_path(file_path) if not os.path.isabs(file_path) else file_path
     try:
-        loader = TextLoader(abs_file_path, encoding='utf-8')
-        return loader.load()
+        return _load_docx(abs_file_path)
     except Exception as e:
-        logger.error(f"【WORD文件加载】加载文件 {abs_file_path} 时出错: {e}")
+        logger.error(f"【WORD文件加载】加载文件 {abs_file_path} 时出错: {e}", exc_info=True)
         return []
 
-
 def markdown_loader_sync(file_path: str) -> list[Document]:
-    """
-    同步加载 Markdown 文件内容，用于多线程环境。
-
-    使用 UnstructuredMarkdownLoader 以 "single" 模式加载。
-
-    Args:
-        file_path: Markdown 文件路径（.md），支持绝对路径和相对路径。
-
-    Returns:
-        LangChain Document 列表。加载失败时返回空列表。
-    """
+    """Load Markdown synchronously, falling back to TextLoader if necessary."""
     abs_file_path = get_abstract_path(file_path) if not os.path.isabs(file_path) else file_path
     try:
         loader = UnstructuredMarkdownLoader(abs_file_path, mode="single")
         return loader.load()
     except Exception as e:
-        logger.error(f"【Markdown文件加载】加载文件 {abs_file_path} 时出错: {e}")
-        return []
+        logger.warning(f"[Markdown loader] Unstructured failed; using TextLoader fallback: {e}")
+        return _load_markdown_as_text(abs_file_path)
 
 
 def ppt_loader_sync(file_path: str) -> list[Document]:

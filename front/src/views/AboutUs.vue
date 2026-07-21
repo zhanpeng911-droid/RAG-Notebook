@@ -1,7 +1,7 @@
 <template>
   <div class="aboutus-container">
     <div class="aboutus-content">
-      <h2 class="project-title">RAG-Notebook</h2>
+      <h2 class="project-title">Notebook</h2>
       <p class="project-intro">
         基于 LangChain + FastAPI + Django 的 RAG 智能笔记与知识库管理平台，为 LLM 应用提供开箱即用的检索增强能力，适配智能问答、企业知识库等场景。
       </p>

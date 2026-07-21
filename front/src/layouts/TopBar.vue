@@ -118,7 +118,7 @@ const pageTitleMap = {
 }
 
 const pageTitle = computed(() => {
-  return pageTitleMap[route.path] || route.meta?.title || 'RAG Notebook'
+  return pageTitleMap[route.path] || route.meta?.title || 'Notebook'
 })
 
 // 搜索

@@ -15,10 +15,17 @@ REDIS_DB = os.getenv("REDIS_DB", "0")
 
 # 创建 Celery 实例
 celery_app = Celery(
-    "rag_notebook",
+    "notebook",
     broker=f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}",
     backend=f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}",
 )
+
+# 显式注册任务模块 —— 确保 worker 启动时必定发现 index_task 中的任务。
+# 这是比仅依赖 __init__.py 导入更可靠的方式，因为 Celery worker 启动时
+# 会直接从 include 列表中导入模块，不依赖 Web 进程的 import 链。
+celery_app.conf.include = [
+    "app.tasks.index_task",
+]
 
 # Celery 配置
 celery_app.conf.update(
@@ -31,6 +38,15 @@ celery_app.conf.update(
     task_acks_late=True,             # 任务完成后才确认（防止 worker 崩溃丢失任务）
     worker_prefetch_multiplier=1,    # 每次只预取 1 个任务（避免长任务饿死）
 )
+
+# Celery Beat 定时任务调度 —— 定期扫描 pending_index 文档进行补偿
+celery_app.conf.beat_schedule = {
+    "batch-index-pending-every-5-minutes": {
+        "task": "app.tasks.index_task.batch_index_pending_task",
+        "schedule": 300.0,  # 每 5 分钟执行一次
+        "args": (10,),       # 每次最多处理 10 个
+    },
+}
 
 
 @celery_app.task(bind=True, max_retries=2, default_retry_delay=30)
@@ -63,3 +79,46 @@ def generate_tags_task(self, note_id: str, user_id: str, content: str, llm_confi
     except Exception as e:
         logger.error(f"【Celery】标签生成失败 note_id={note_id}: {e}")
         raise self.retry(exc=e)
+
+
+@celery_app.task(bind=True, max_retries=2, default_retry_delay=30, ignore_result=True)
+def sync_note_vector_task(self, note_id: str, user_id: str):
+    """Fetch the newest MySQL note and synchronize Chroma outside the HTTP path."""
+    import asyncio
+    from app.db.db_config import AsyncSessionLocal
+    from app.services.note_service import note_service
+
+    async def _sync() -> None:
+        async with AsyncSessionLocal() as session:
+            note = await note_service.note_repo.get_by_id(session, note_id, user_id)
+        if note is None:
+            await asyncio.to_thread(note_service.note_index.delete_note, note_id, user_id)
+            return
+        await asyncio.to_thread(
+            note_service.note_index.upsert_note,
+            note.id,
+            note.user_id,
+            note.title,
+            note.content,
+        )
+
+    try:
+        asyncio.run(_sync())
+        logger.info(f"Vector sync completed note_id={note_id}")
+    except Exception as exc:
+        logger.error(f"Vector sync failed note_id={note_id}: {exc}")
+        raise self.retry(exc=exc)
+
+
+@celery_app.task(bind=True, max_retries=2, default_retry_delay=30, ignore_result=True)
+def delete_note_vector_task(self, note_id: str, user_id: str):
+    """Remove a note vector outside the HTTP path."""
+    import asyncio
+    from app.services.note_service import note_service
+
+    try:
+        asyncio.run(asyncio.to_thread(note_service.note_index.delete_note, note_id, user_id))
+        logger.info(f"Vector delete completed note_id={note_id}")
+    except Exception as exc:
+        logger.error(f"Vector delete failed note_id={note_id}: {exc}")
+        raise self.retry(exc=exc)

@@ -87,9 +87,22 @@ async def get_health_redis():
 
 @health_router.get("/vector-store", tags=["健康检查"], summary="向量库检查")
 async def get_health_vector_store():
-    """健康检查-向量库：ChromaDB 是否可访问"""
+    """健康检查-向量库：ChromaDB 是否可访问；失败时返回 degraded 而非误删数据。"""
     try:
         from app.rag.vector_store import VectorStoreService
+        if VectorStoreService.is_degraded():
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "success": False,
+                    "message": "Vector store degraded",
+                    "data": {
+                        "status": "degraded",
+                        "component": "chroma",
+                        "reason": VectorStoreService.degraded_reason(),
+                    },
+                },
+            )
         store = VectorStoreService()
         collection = store.vectors_store._collection
         count = collection.count()
@@ -98,7 +111,18 @@ async def get_health_vector_store():
             data={"status": "ok", "component": "chroma", "document_count": count}
         )
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Vector store check failed: {str(e)}")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "success": False,
+                "message": "Vector store check failed",
+                "data": {
+                    "status": "degraded",
+                    "component": "chroma",
+                    "reason": str(e),
+                },
+            },
+        )
 
 
 @health_router.get("/model", tags=["健康检查"], summary="模型检查")
@@ -116,28 +140,3 @@ async def get_health_model():
             raise HTTPException(status_code=503, detail="Embedding model returned empty result")
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Model check failed: {str(e)}")
-
-
-@health_router.get("/chat-model", tags=["健康检查"], summary="Chat模型检查")
-async def get_health_chat_model():
-    """健康检查-Chat模型：LLM 服务是否可调用"""
-    try:
-        from app.utils.factory import chat_model
-        from langchain_core.messages import HumanMessage
-        # 用简单文本测试 chat 模型是否可用
-        result = chat_model.invoke([HumanMessage(content="hi")])
-        if result and result.content:
-            return success_response(
-                message="Chat model OK",
-                data={
-                    "status": "ok",
-                    "component": "chat_model",
-                    "llm_type": os.getenv("LLM_TYPE", "UNKNOWN"),
-                    "model": os.getenv("CHAT_MODEL_NAME", "UNKNOWN"),
-                }
-            )
-        else:
-            raise HTTPException(status_code=503, detail="Chat model returned empty result")
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Chat model check failed: {str(e)}")
-

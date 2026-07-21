@@ -12,7 +12,7 @@ from app.utils.path_tool import get_abstract_path
 def load_config(config_path: str, encoding: str = 'utf-8') -> dict:
     """加载 YAML 配置文件"""
     with open(config_path, 'r', encoding=encoding) as file:
-        config = yaml.load(file, Loader=yaml.FullLoader)
+        config = yaml.safe_load(file)
     return config
 
 

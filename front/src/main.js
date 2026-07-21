@@ -27,6 +27,7 @@ import {
   ActionSheet,
   Loading,
   Progress,
+  Pagination,
   Search,
   Dialog,
   DropdownMenu,
@@ -72,6 +73,7 @@ app.use(Popup)
 app.use(ActionSheet)
 app.use(Loading)
 app.use(Progress)
+app.use(Pagination)
 app.use(Search)
 app.use(Dialog)
 app.use(DropdownMenu)

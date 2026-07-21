@@ -4,11 +4,8 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
-import fitz
 from langchain_core.documents import Document
 
-from app.utils.image_extractor import extract_images_from_pdf
-from app.utils.vision_service import VisionService
 from app.utils.path_tool import get_abstract_path
 from app.core.logger_handler import logger
 
@@ -22,6 +19,26 @@ _BATCH_SIZE = int(os.getenv("VISION_BATCH_SIZE", "5"))
 _DEDUP_ENABLED = os.getenv("VISION_DEDUP_ENABLED", "true").lower() == "true"
 _DEDUP_THRESHOLD = int(os.getenv("VISION_DEDUP_THRESHOLD", "10"))
 _LOW_RES_BATCH = os.getenv("VISION_BATCH_LOW_RES", "true").lower() == "true"
+
+
+def _load_multimodal_pdf_dependencies():
+    """???????? PDF ???????????
+
+    C ??????? Visual C++ Runtime?PyMuPDF ???????????
+    ????????????? PDF ???????????? FastAPI ?????
+    """
+    try:
+        import fitz
+        from app.utils.image_extractor import extract_images_from_pdf
+        from app.utils.vision_service import VisionService
+    except Exception as exc:
+        raise RuntimeError(
+            "PDF ??????????????????? PyMuPDF/???????"
+            "?????????? PDF ?????????????????"
+            "??? Microsoft Visual C++ Redistributable ?????????"
+        ) from exc
+
+    return fitz, extract_images_from_pdf, VisionService
 
 
 @dataclass
@@ -124,6 +141,7 @@ async def pdf_multimodal_loader(file_path: str, md5: str, user_id: str) -> list[
         logger.error(f"【多模态PDF加载】文件不存在: {abs_file_path}")
         return []
 
+    fitz, extract_images_from_pdf, VisionService = _load_multimodal_pdf_dependencies()
     vision = VisionService()
     # 第1步：提取PDF中所有嵌入的原始图片，保存到磁盘
     images_map = extract_images_from_pdf(abs_file_path, user_id, md5)
@@ -327,6 +345,7 @@ def pdf_multimodal_loader_sync(file_path: str, md5: str, user_id: str) -> list[D
         logger.error(f"【多模态PDF加载·同步】文件不存在: {abs_file_path}")
         return []
 
+    fitz, extract_images_from_pdf, VisionService = _load_multimodal_pdf_dependencies()
     vision = VisionService()
     images_map = extract_images_from_pdf(abs_file_path, user_id, md5)
 

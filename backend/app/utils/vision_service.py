@@ -5,7 +5,7 @@ import re
 
 from langchain_core.messages import HumanMessage
 
-from app.utils.factory import vision_model as default_vision_model
+from app.utils.factory import get_default_vision_model
 from app.core.logger_handler import logger
 
 
@@ -43,7 +43,7 @@ class VisionService:
                    如果不传则使用默认配置的 vision_model（来自 app.utils.factory）。
                    支持 ChatOllama（本地部署）和 DashScope（阿里云百炼）两种后端。
         """
-        self.model = model or default_vision_model
+        self.model = model or get_default_vision_model()
 
     def _is_ollama(self) -> bool:
         """

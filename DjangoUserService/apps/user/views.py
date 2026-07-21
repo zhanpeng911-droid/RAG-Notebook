@@ -9,7 +9,6 @@
     - UserDetailView(get): 类视图，返回序列化后的当前用户信息
 
 """
-from drf_spectacular.utils import inline_serializer
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.views import APIView
 
@@ -32,6 +31,25 @@ authentication = JWTAuthentication()
 jwttoken = JWTTokenGenerator()
 
 
+class LoginResponseSerializer(serializers.Serializer):
+    message = serializers.CharField()
+    user = UserSerializer()
+    token = serializers.CharField()
+
+
+class RegisterResponseSerializer(serializers.Serializer):
+    status = serializers.IntegerField()
+    message = serializers.CharField()
+    user = UserSerializer()
+    token = serializers.CharField()
+
+
+class UserUpdateResponseSerializer(serializers.Serializer):
+    message = serializers.CharField()
+    user = UserSerializer()
+    token = serializers.CharField()
+
+
 class LoginView(APIView):
     """类视图，处理用户登录"""
     @swagger_auto_schema(
@@ -39,14 +57,7 @@ class LoginView(APIView):
         responses={
             200: openapi.Response(
                 description="登录成功",
-                schema=inline_serializer(
-                    "LoginResponse",
-                    {
-                        "message": serializers.CharField(),
-                        "user": UserSerializer(),
-                        "token": serializers.CharField()
-                    }
-                )
+                schema=LoginResponseSerializer
             ),
             400: openapi.Response(description="登录失败")
         }
@@ -83,15 +94,7 @@ class RegisterView(APIView):
         responses={
             201: openapi.Response(
                 description="注册成功",
-                schema=inline_serializer(
-                    "RegisterResponse",
-                    {
-                        "status": serializers.IntegerField(),
-                        "message": serializers.CharField(),
-                        "user": UserSerializer(),
-                        "token": serializers.CharField()
-                    }
-                )
+                schema=RegisterResponseSerializer
             ),
             400: openapi.Response(description="注册失败")
         }
@@ -294,14 +297,7 @@ class UserUpdateView(AuthenticatedView):
         responses={
             200: openapi.Response(
                 description="用户信息更新成功",
-                schema=inline_serializer(
-                    "UserUpdateResponse",
-                    {
-                        "message": serializers.CharField(),
-                        "user": UserSerializer(),
-                        "token": serializers.CharField()
-                    }
-                )
+                schema=UserUpdateResponseSerializer
             ),
             400: openapi.Response(description="用户信息更新失败")
         }

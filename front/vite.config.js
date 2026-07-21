@@ -2,16 +2,23 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
 // https://vite.dev/config/
-const BACKEND_TARGET = process.env.VITE_BACKEND_TARGET || 'http://127.0.0.1:8000';
-const USER_TARGET = process.env.VITE_USER_TARGET || 'http://127.0.0.1:8001';
+// 本地默认 8002，避免与已占用的 8000 冲突；可用环境变量覆盖
+const BACKEND_TARGET = process.env.VITE_BACKEND_TARGET || 'http://127.0.0.1:8002'
+const USER_TARGET = process.env.VITE_USER_TARGET || 'http://127.0.0.1:8001'
 
 export default defineConfig({
   plugins: [vue()],
+  resolve: {
+    // Keep the strict CSP: use the i18n build that does not compile messages in the browser.
+    alias: {
+      'vue-i18n': 'vue-i18n/dist/vue-i18n.runtime.esm-bundler.js'
+    }
+  },
   server: {
     port: 3000,
     host: true, // 允许局域网访问
     proxy: {
-      // AI相关接口代理到8000端口
+      // AI相关接口代理到 backend
       '/api/agent': {
         target: BACKEND_TARGET,
         changeOrigin: true,
@@ -68,7 +75,7 @@ export default defineConfig({
         target: BACKEND_TARGET,
         changeOrigin: true
       },
-      // 用户相关接口代理到8001端口
+      // 用户相关接口代理到 Django
       '/user': {
         target: USER_TARGET,
         changeOrigin: true

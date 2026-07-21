@@ -5,7 +5,7 @@ def load_config(
         encoding: str = 'utf-8'
 ) -> dict:
     with open(config_path, 'r', encoding=encoding) as file:
-        config = yaml.load(file, Loader=yaml.FullLoader)
+        config = yaml.safe_load(file)
     return config
 
 

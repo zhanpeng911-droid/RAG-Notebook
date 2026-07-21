@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# RAG-Notebook Docker快速启动脚本
+# Notebook Docker快速启动脚本
 
 set -e
 
 echo "=========================================="
-echo "  RAG-Notebook Docker部署"
+echo "  Notebook Docker部署"
 echo "=========================================="
 echo ""
 
@@ -45,6 +45,13 @@ echo "首次构建可能需要几分钟时间..."
 echo ""
 
 # 构建并启动
+
+# 拒绝弱口令 / 占位密钥
+if grep -Eiq 'change-me|replace-me|replace-with' .env; then
+  echo "错误: .env 仍包含 change-me / replace-me 占位值，请先替换 MYSQL/REDIS/JWT 密钥"
+  exit 1
+fi
+
 docker compose up -d --build
 
 echo ""

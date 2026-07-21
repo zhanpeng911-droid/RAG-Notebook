@@ -1,5 +1,5 @@
 """
-RAG-Notebook 后端应用入口。
+Notebook 后端应用入口。
 
 启动流程（lifespan）：
 1. 校验关键配置（数据库、Redis、LLM 等）
@@ -11,6 +11,7 @@ RAG-Notebook 后端应用入口。
 7. lifespan shutdown：关闭 Redis 连接
 """
 import time
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -27,12 +28,14 @@ from app.router.review_router import review_router
 from app.router.org_router import org_router
 from app.router.space_router import space_router
 from app.router.audit_router import audit_router
+from app.router.agent_router import agent_router
 
 from app.services.database_session_manager import init_database_session_manager
 
 from app.core.failed_response_register import register_exception_handlers
 from app.core.logger_handler import logger
 from app.config.validator import validate_startup_config
+from app.core.request_context import set_request_id
 
 # 启动时验证配置（pydantic-settings 自动从 .env 加载）
 app_settings = validate_startup_config()
@@ -82,13 +85,20 @@ app = FastAPI(lifespan=lifespan)
 
 
 @app.middleware("http")
-async def add_process_time_header(request: Request, call_next):
-    """请求耗时中间件 —— 在响应头中添加 X-Process-Time"""
+async def add_request_context_headers(request: Request, call_next):
+    """请求上下文：X-Request-Id + X-Process-Time，并写入 request.state。"""
+    request_id = request.headers.get("X-Request-Id") or str(uuid.uuid4())
+    request.state.request_id = request_id
+    set_request_id(request_id)
     start_time = time.time()
-    response = await call_next(request)
-    process_time = time.time() - start_time
-    response.headers["X-Process-Time"] = str(round(process_time, 4))
-    return response
+    try:
+        response = await call_next(request)
+        process_time = time.time() - start_time
+        response.headers["X-Request-Id"] = request_id
+        response.headers["X-Process-Time"] = str(round(process_time, 4))
+        return response
+    finally:
+        set_request_id(None)
 
 
 # 集成API路由
@@ -101,6 +111,7 @@ app.include_router(review_router)
 app.include_router(org_router)
 app.include_router(space_router)
 app.include_router(audit_router)
+app.include_router(agent_router)
 
 app.add_middleware(
     CORSMiddleware,

@@ -94,6 +94,22 @@ class ReviewService:
 
         return reviews
 
+
+    async def count_due_reviews(self, db: AsyncSession, user_id: str) -> int:
+        """今日（到期）待回顾数量。"""
+        from sqlalchemy import func
+        now = datetime.now()
+        stmt = (
+            select(func.count())
+            .select_from(ReviewRecord)
+            .where(
+                ReviewRecord.user_id == user_id,
+                ReviewRecord.next_review_at <= now,
+            )
+        )
+        result = await db.execute(stmt)
+        return int(result.scalar_one() or 0)
+
     async def mark_reviewed(self, db: AsyncSession, note_id: str, user_id: str) -> dict:
         """
         标记笔记已回顾 —— 更新回顾状态。
@@ -165,7 +181,8 @@ class ReviewService:
             from langchain_core.messages import HumanMessage
             from app.cache.llm_cache import get_cached_llm_response, set_cached_llm_response
 
-            from app.utils.factory import create_chat_model_from_config, llm_config_is_usable
+            from app.utils.factory import create_chat_model_from_config, llm_config_is_usable, sanitize_client_llm_config
+            llm_config = sanitize_client_llm_config(llm_config)
             if llm_config_is_usable(llm_config):
                 model = create_chat_model_from_config(llm_config)
                 model_name = llm_config.get("model", "custom")
