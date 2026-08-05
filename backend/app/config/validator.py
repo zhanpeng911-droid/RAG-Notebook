@@ -61,42 +61,70 @@ class AppSettings(BaseSettings):
 
     # ==================== 限流 ====================
     RATE_LIMIT_ENABLED: bool = True
+    """限流总开关（bool）。个人开发环境可设 false 关闭。默认 true。"""
+
     # 是否允许前端传入 llm_config.api_key；生产默认 false
     ALLOW_CLIENT_LLM_KEY: bool | None = None
+    """是否允许前端传明文 API Key。None 时按 ENV 自动判断（prod 禁止，dev 允许）。"""
+
     # 企业 Org/Space/审计 API 开关（默认关闭）
     FEATURE_ORG: bool = True
+    """企业功能（组织/空间/审计）开关。true 时启用 /org、/space、/audit 路由。"""
 
     # Note background processing. These are not prerequisites for a successful save.
     NOTE_VECTOR_INDEX_ENABLED: bool = True
+    """笔记向量索引开关。关闭时笔记保存不触发向量索引（节省 embedding 调用）。"""
+
     NOTE_AUTO_TAG_ENABLED: bool = True
+    """笔记自动标签开关。关闭时笔记保存不触发 LLM 自动打标签。"""
 
     # ==================== LLM 配置 ====================
     LLM_TYPE: str = ""
+    """LLM 提供商类型，可选值：OLLAMA / ALIYUN / OPENAI。必填。"""
+
     CHAT_API_KEY: str = ""
+    """通用 Chat API Key，优先级低于各 provider 专用 key。"""
+
     CHAT_MODEL_NAME: str = "deepseek-chat"
+    """默认对话模型名称。OPENAI 类型下用此字段指定模型（如 deepseek-v4-flash）。"""
 
     # OpenAI 兼容
     OPENAI_API_KEY: str = ""
+    """OpenAI 兼容 API Key（DeepSeek 等）。LLM_TYPE=OPENAI 时必填。"""
+
     OPENAI_API_BASE: str = ""
+    """OpenAI 兼容 API 地址（如 https://api.deepseek.com）。LLM_TYPE=OPENAI 时必填。"""
 
     # 阿里云
     ALIYUN_ACCESS_KEY_SECRET: str = ""
     ALIYUN_BASE_URL: str = ""
     ALIYUN_MODEL_NAME: str = ""
     DASHSCOPE_API_KEY: str = ""
+    """阿里云 DashScope API Key。用于嵌入模型（text-embedding）和百炼对话模型。"""
 
     # Ollama
     OLLAMA_BASE_URL: str = "http://localhost:11434"
+    """Ollama 服务地址。LLM_TYPE=OLLAMA 时使用。"""
+
     OLLAMA_MODEL_NAME: str = "qwen3:7b"
+    """Ollama 默认模型名称。LLM_TYPE=OLLAMA 时使用。"""
+
     OLLAMA_CHAT_MODEL_NAME: str = ""
+    """Ollama 对话模型名称（可与 OLLAMA_MODEL_NAME 不同）。为空时回退到 OLLAMA_MODEL_NAME。"""
 
     # URL 白名单
     ALLOWED_LLM_BASE_URLS: str = ""
+    """LLM Base URL 白名单（逗号分隔）。为空时不校验；非空时只允许列出的地址。"""
 
     # ==================== Embedding 配置 ====================
     EMBED_MODEL_TYPE: str = ""
+    """嵌入模型类型，可选值：OLLAMA / ALIYUN。控制向量嵌入使用哪个 provider。"""
+
     TEXT_EMBEDDING_MODEL_NAME: str = "qwen3-embedding:0.6b"
+    """Ollama 嵌入模型名称。EMBED_MODEL_TYPE=OLLAMA 时使用。"""
+
     ALIYUN_EMBED_MODEL_NAME: str = "qwen3-embedding"
+    """阿里云嵌入模型名称。EMBED_MODEL_TYPE=ALIYUN 时使用（如 qwen3.7-text-embedding）。"""
 
     # ==================== Vision 配置 ====================
     VISION_MODEL_TYPE: str = ""

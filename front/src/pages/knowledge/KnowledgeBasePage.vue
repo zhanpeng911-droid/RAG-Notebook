@@ -20,7 +20,7 @@
     <!-- 空间选择（上传归属） -->
     <div class="space-selector-bar">
       <span class="space-selector-label">归属空间</span>
-      <select v-model="selectedSpaceId" class="space-select" @change="fetchDocuments">
+      <select v-model="uploadSpaceId" class="space-select">
         <option value="">未分配空间</option>
         <option v-for="s in spaces" :key="s.id" :value="s.id">{{ s.name }}</option>
       </select>
@@ -130,7 +130,7 @@
       <div class="section-header">
         <h3 class="section-title">文档列表</h3>
         <div class="section-actions">
-          <select v-model="selectedSpaceId" class="space-filter-select" @change="fetchDocuments">
+          <select v-model="filterSpaceId" class="space-filter-select" @change="fetchDocuments">
             <option value="">全部空间</option>
             <option v-for="s in spaces" :key="s.id" :value="s.id">{{ s.name }}</option>
           </select>
@@ -204,6 +204,16 @@
             <span v-if="doc.index_error" class="index-error-hint" :title="doc.index_error">⚠</span>
           </span>
           <span class="col-actions">
+            <button
+              v-if="doc.index_status === 'indexed'"
+              class="btn-icon-sm btn-ask-ai"
+              title="向 AI 提问"
+              @click.stop="askAIAboutDoc(doc)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+              </svg>
+            </button>
             <button
               v-if="doc.index_status === 'pending_index' || doc.index_status === 'index_failed'"
               class="btn-icon-sm btn-reindex"
@@ -363,9 +373,10 @@ const loadingDocuments = ref(false)
 const documentError = ref('')
 const searchQuery = ref('')
 
-// 空间筛选
+// 空间筛选（上传归属与列表筛选分离，互不影响）
 const spaces = ref([])
-const selectedSpaceId = ref('')
+const uploadSpaceId = ref('')
+const filterSpaceId = ref('')
 
 const showDetail = ref(false)
 const currentDocument = ref(null)
@@ -467,9 +478,9 @@ async function uploadFiles() {
     })
   })
 
-  let uploadUrl = '/knowledge/add/multiple/v2'
-  if (selectedSpaceId.value) {
-    uploadUrl += `?space_id=${encodeURIComponent(selectedSpaceId.value)}`
+  let uploadUrl = '/api/v1/knowledge/add/multiple/v2'
+  if (uploadSpaceId.value) {
+    uploadUrl += `?space_id=${encodeURIComponent(uploadSpaceId.value)}`
   }
 
   try {
@@ -552,11 +563,11 @@ async function fetchDocuments() {
   documentError.value = ''
   try {
     const queryParams = {}
-    if (selectedSpaceId.value) queryParams.space_id = selectedSpaceId.value
+    if (filterSpaceId.value) queryParams.space_id = filterSpaceId.value
 
     const [legacyResponse, indexResponse] = await Promise.allSettled([
-      http.get('/knowledge/list', { params: queryParams, timeout: 8000 }),
-      http.get('/knowledge/index-status', { params: queryParams, timeout: 8000 })
+      http.get('/api/v1/knowledge/list', { params: queryParams, timeout: 8000 }),
+      http.get('/api/v1/knowledge/index-status', { params: queryParams, timeout: 8000 })
     ])
     const legacyResult = legacyResponse.status === 'fulfilled' ? legacyResponse.value.data : null
     const indexResult = indexResponse.status === 'fulfilled' ? indexResponse.value.data : null
@@ -608,7 +619,7 @@ async function fetchDocumentDetail(filename) {
 
   loadingDetail.value = true
   try {
-    const res = await http.get(`/knowledge/detail?filename=${encodeURIComponent(filename)}`, { timeout: 10000 })
+    const res = await http.get(`/api/v1/knowledge/detail?filename=${encodeURIComponent(filename)}`, { timeout: 10000 })
     const result = res.data
     if (result.code === 200 && result.data) {
       return result.data
@@ -633,7 +644,7 @@ async function fetchDocumentChunks(filename) {
   loadingChunks.value = true
   chunks.value = []
   try {
-    const res = await http.get(`/knowledge/chunks?filename=${encodeURIComponent(filename)}`, { timeout: 10000 })
+    const res = await http.get(`/api/v1/knowledge/chunks?filename=${encodeURIComponent(filename)}`, { timeout: 10000 })
     const result = res.data
     if (result.code === 200 && result.data) {
       chunks.value = result.data.chunks || []
@@ -657,7 +668,7 @@ async function deleteDocumentByFilename(filename) {
 
   try {
     const qs = new URLSearchParams({ filename, delete_documents: 'true' })
-    const res = await http.delete(`/knowledge/delete/filename?${qs.toString()}`)
+    const res = await http.delete(`/api/v1/knowledge/delete/filename?${qs.toString()}`)
     return res.data?.code === 200
   } catch (error) {
     console.error('Delete document error:', error)
@@ -669,7 +680,7 @@ async function deleteDocumentById(documentId) {
   if (!userStore.token || !documentId) return false
 
   try {
-    const res = await http.delete(`/knowledge/documents/${encodeURIComponent(documentId)}`)
+    const res = await http.delete(`/api/v1/knowledge/documents/${encodeURIComponent(documentId)}`)
     return res.data?.code === 200
   } catch (error) {
     console.error('Delete document by id error:', error)
@@ -681,9 +692,9 @@ async function cleanAllVectors() {
   if (!userStore.token) return
 
   try {
-    let url = '/knowledge/clean'
-    if (selectedSpaceId.value) {
-      url += `?space_id=${encodeURIComponent(selectedSpaceId.value)}`
+    let url = '/api/v1/knowledge/clean'
+    if (filterSpaceId.value) {
+      url += `?space_id=${encodeURIComponent(filterSpaceId.value)}`
     }
     await http.delete(url)
     showToast('清除成功')
@@ -837,6 +848,12 @@ function getIndexStatusClass(status) {
     case 'indexing': return 'status-processing'
     default: return 'status-pending'
   }
+}
+
+/** 向 AI 提问：跳转到对话页并预填查询 */
+function askAIAboutDoc(doc) {
+  const filename = doc.original_filename || doc.filename || ''
+  router.push({ path: '/chat', query: { doc: filename } })
 }
 
 async function handleReindex(doc) {
@@ -1176,24 +1193,24 @@ onMounted(() => {
 }
 
 .status-processing {
-  background-color: rgba(230, 148, 10, 0.12);
-  color: #c07800;
+  background-color: var(--status-warning-bg);
+  color: var(--status-warning-text);
 }
 
 .status-success {
-  background-color: rgba(34, 160, 96, 0.12);
-  color: #1a8a50;
+  background-color: var(--status-success-bg);
+  color: var(--status-success-text);
 }
 
 .status-failed {
-  background-color: rgba(217, 48, 37, 0.12);
-  color: #c42a20;
+  background-color: var(--status-error-bg);
+  color: var(--status-error-text);
 }
 
 .progress-bar-wrapper {
   height: 4px;
   background: var(--color-border-light);
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   margin-bottom: var(--space-xs);
 }
@@ -1201,7 +1218,7 @@ onMounted(() => {
 .progress-bar {
   height: 100%;
   background: var(--color-primary);
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   transition: width 0.3s ease;
 }
 
@@ -1352,28 +1369,28 @@ onMounted(() => {
 }
 
 .index-badge.status-success {
-  background-color: rgba(34, 160, 96, 0.12);
-  color: #1a8a50;
+  background-color: var(--status-success-bg);
+  color: var(--status-success-text);
 }
 
 .index-badge.status-failed {
-  background-color: rgba(217, 48, 37, 0.12);
-  color: #c42a20;
+  background-color: var(--status-error-bg);
+  color: var(--status-error-text);
 }
 
 .index-badge.status-processing {
-  background-color: rgba(230, 148, 10, 0.12);
-  color: #c07800;
+  background-color: var(--status-warning-bg);
+  color: var(--status-warning-text);
 }
 
 .index-badge.status-pending {
-  background-color: rgba(100, 100, 100, 0.12);
-  color: #666;
+  background-color: var(--status-neutral-bg);
+  color: var(--status-neutral-text);
 }
 
 .index-badge.status-legacy {
-  background-color: rgba(100, 100, 100, 0.08);
-  color: #999;
+  background-color: var(--status-neutral-bg);
+  color: var(--status-neutral-text);
 }
 
 .index-error-hint {

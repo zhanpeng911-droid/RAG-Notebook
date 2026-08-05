@@ -1,11 +1,14 @@
 """
-笔记数据访问层 —— 封装所有 Note 的 MySQL/SQLAlchemy 查询。
+笔记数据访问层 -- 封装所有 Note 的 MySQL/SQLAlchemy 查询。
 
 职责：
 - Note 的 CRUD 数据库操作
 - Note 列表分页查询
 - Note 分类统计
 - Note fallback LIKE 搜索
+
+SQL 注入防护：所有查询均通过 SQLAlchemy ORM 参数化执行，禁止拼接原始 SQL。
+LIKE 搜索使用 ilike() 参数化，不拼接用户输入。
 - 根据 note_ids 回填 Note 列表
 
 设计原则：

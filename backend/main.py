@@ -101,17 +101,18 @@ async def add_request_context_headers(request: Request, call_next):
         set_request_id(None)
 
 
-# 集成API路由
-app.include_router(chat_router)
-app.include_router(knowledge_router)
-app.include_router(health_router)
-app.include_router(user_router)
-app.include_router(note_router)
-app.include_router(review_router)
-app.include_router(org_router)
-app.include_router(space_router)
-app.include_router(audit_router)
-app.include_router(agent_router)
+# 集成API路由（统一 /api/v1 前缀，支持后续版本迭代）
+API_V1_PREFIX = "/api/v1"
+app.include_router(chat_router, prefix=API_V1_PREFIX)
+app.include_router(knowledge_router, prefix=API_V1_PREFIX)
+app.include_router(health_router, prefix=API_V1_PREFIX)
+app.include_router(user_router, prefix=API_V1_PREFIX)
+app.include_router(note_router, prefix=API_V1_PREFIX)
+app.include_router(review_router, prefix=API_V1_PREFIX)
+app.include_router(org_router, prefix=API_V1_PREFIX)
+app.include_router(space_router, prefix=API_V1_PREFIX)
+app.include_router(audit_router, prefix=API_V1_PREFIX)
+app.include_router(agent_router, prefix=API_V1_PREFIX)
 
 app.add_middleware(
     CORSMiddleware,

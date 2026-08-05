@@ -44,6 +44,7 @@
           :category="item.category"
           :review-count="item.review_count"
           :done="doneMap[item.note_id]"
+          @click="goToNote(item.note_id)"
           @done="handleDone(item.note_id)"
           @skip="handleSkip(item.note_id)"
         />
@@ -58,9 +59,12 @@
  * 用户滑动浏览卡片，标记已回顾或跳过。
  */
 import { ref, reactive, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { showToast } from 'vant'
 import { reviewApi } from '../services/reviewApi'
 import ReviewCard from '../components/ReviewCard.vue'
+
+const router = useRouter()
 
 const loading = ref(false)
 const error = ref('')
@@ -124,6 +128,11 @@ async function handleSkip(noteId) {
 onMounted(() => {
   loadReviews()
 })
+
+/** 跳转到笔记编辑页 */
+function goToNote(noteId) {
+  router.push('/notes/' + noteId)
+}
 </script>
 
 <style scoped>

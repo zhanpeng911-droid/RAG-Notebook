@@ -1,5 +1,5 @@
 """
-Agent 模块 —— 基于 LangChain 的 AI 智能代理。
+Agent 模块 -- 基于 LangChain 的 AI 智能代理。
 
 核心组件：
 - AgentFactory: 工厂类，负责创建 AgentExecutor 实例
@@ -12,7 +12,6 @@ Agent 模块 —— 基于 LangChain 的 AI 智能代理。
 - OpenAI 兼容接口（DeepSeek 等）
 
 Agent 可调用的工具：
-- rag_summary_tools: RAG 检索 + 摘要生成
 - search_notes_tool: 语义搜索笔记
 - get_note_stats_tool: 笔记统计
 - get_today_reviews_tool: 获取今日回顾列表
@@ -33,7 +32,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import BaseTool
 
 from app.agent.agent_middleware import get_middleware
-from app.agent.agent_tools import rag_summary_tools, what_time_is_now, get_user_info_tools, \
+from app.agent.agent_tools import what_time_is_now, get_user_info_tools, \
     search_notes_tool, get_note_stats_tool, get_today_reviews_tool, mark_reviewed_tool, \
     create_note_tool, get_related_notes_tool, set_current_user_id, reset_current_user_id, \
     set_thinking_callback, set_llm_config, reset_llm_config
@@ -79,10 +78,9 @@ class AgentFactory:
     @staticmethod
     def _get_default_tools() -> List[BaseTool]:
         """
-        获取默认工具列表 —— Agent 可调用的所有工具。
+        获取默认工具列表 -- Agent 可调用的所有工具。
 
         工具说明：
-        - rag_summary_tools: RAG 检索 + 摘要生成（核心工具）
         - search_notes_tool: 语义搜索笔记
         - get_note_stats_tool: 笔记统计
         - get_today_reviews_tool: 获取今日回顾列表
@@ -93,7 +91,6 @@ class AgentFactory:
         - get_user_info_tools: 获取用户信息
         """
         return [
-            rag_summary_tools,
             what_time_is_now,
             get_user_info_tools,
             search_notes_tool,

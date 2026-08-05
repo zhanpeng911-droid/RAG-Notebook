@@ -303,7 +303,7 @@ const confirmNewSession = async () => {
 }
 
 .sessions-list :deep(.van-cell) {
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   margin-bottom: 6px;
   background: var(--color-card);
   box-shadow: 0 1px 2px var(--color-shadow);
@@ -320,7 +320,7 @@ const confirmNewSession = async () => {
   padding: 4px;
   cursor: pointer;
   color: var(--color-text-lighter);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   transition: color 0.2s, background 0.2s;
 }
 
@@ -334,7 +334,7 @@ const confirmNewSession = async () => {
 
 .new-session-dialog {
   background-color: var(--color-card);
-  border-radius: 16px 16px 0 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   padding: 20px;
 }
 

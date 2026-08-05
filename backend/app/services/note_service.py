@@ -69,7 +69,7 @@ class NoteService:
 
     @property
     def notes_store(self):
-        """兼容现有 RagService 和测试代码，返回底层 Chroma 实例"""
+        """返回底层 Chroma 实例，供检索服务使用"""
         return self.note_index.store
 
     def _doc_to_response(self, note: Note) -> NoteResponse:
@@ -129,6 +129,10 @@ class NoteService:
             note.title = payload.title
         if payload.content is not None:
             note.content = payload.content
+        if payload.tags is not None:
+            note.tags = payload.tags
+        if payload.category is not None:
+            note.category = payload.category
 
         await db.commit()
         await db.refresh(note)
@@ -399,9 +403,14 @@ class NoteService:
             # 写入 MySQL
             async with AsyncSessionLocal() as session:
                 await self.note_repo.update_tags_and_category(session, note_id, user_id, tags, category)
+                await session.commit()
 
-                # 复习队列：create_note 已入队；此处幂等补齐
-                await self.ensure_review_record(session, note_id, user_id, initial_interval_days=1)
+                # 复习队列：create_note 已入队；此处幂等补齐（失败不影响标签写入）
+                try:
+                    await self.ensure_review_record(session, note_id, user_id, initial_interval_days=1)
+                    await session.commit()
+                except Exception as review_err:
+                    logger.warning(f"回顾记录创建失败 note_id={note_id}: {review_err}")
 
         except json.JSONDecodeError as e:
             logger.error(f"解析 LLM 标签输出失败 note_id={note_id}, raw={raw_output[:200]}, extracted={json_str[:200]}: {e}")

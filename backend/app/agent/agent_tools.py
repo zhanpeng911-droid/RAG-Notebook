@@ -1,5 +1,5 @@
 """
-Agent 工具定义 —— 为 LangChain Agent 提供可调用的工具函数。
+Agent 工具定义 -- 为 LangChain Agent 提供可调用的工具函数。
 
 每个工具都使用 @tool 装饰器定义，Agent 会根据用户意图自动选择合适的工具。
 
@@ -13,7 +13,6 @@ from contextvars import ContextVar
 from langchain_core.tools import tool
 
 from app.core.logger_handler import logger
-from app.rag.rag_service import RagService
 from app.utils.auth_utils import decode_django_jwt
 from app.services.note_service import note_service
 from app.services.review_service import review_service
@@ -57,36 +56,6 @@ def reset_llm_config():
 def get_llm_config_from_context() -> Optional[dict]:
     """从上下文获取 LLM 配置"""
     return llm_config_var.get()
-
-@tool(description="用于从向量数据库里检索文档并生成摘要，返回包含文档列表和摘要的结果。返回格式为：'摘要: [摘要内容]\n\n检索到的文档列表:\n1. [文档1内容]\n2. [文档2内容]\n...'。注意：文档已经过自动重排序，无需再调用重排序工具")
-async def rag_summary_tools(query: str, user_id: str = None) -> str:
-    """
-    RAG 摘要工具 —— Agent 的核心工具。
-
-    功能：
-    1. 调用 RagService 执行完整的 RAG 流程（HyDE → 混合检索 → 总结）
-    2. 返回格式化的结果（摘要 + 文档列表）
-
-    :param query: 用户查询文本
-    :param user_id: 用户ID（可选，优先从上下文获取）
-    :return: 格式化的摘要和文档列表
-    """
-    effective_user_id = user_id or get_current_user_id_from_context()
-    if not effective_user_id:
-        return "错误: 无法确定用户身份，请提供有效的user_id"
-
-    thinking_callback = get_thinking_callback_from_context()
-    llm_config = get_llm_config_from_context()
-    result = await RagService(effective_user_id, thinking_callback=thinking_callback, llm_config=llm_config).get_documents_and_summary(query)
-    documents = result.get("documents", [])
-    summary = result.get("summary", "")
-
-    formatted_result = f"摘要: {summary}\n\n"
-    formatted_result += "检索到的文档列表（已重排序）:\n"
-    for i, doc in enumerate(documents, 1):
-        formatted_result += f"{i}. {doc}\n"
-
-    return formatted_result
 
 @tool(description="当用户明确问自己的ID和用户名时，从JWT中获取当前用户ID和用户名，参数为完整的JWT token字符串")
 async def get_user_info_tools(token: str) -> str:

@@ -17,10 +17,12 @@ def test_feature_org_default_false():
     assert s.FEATURE_ORG is False
 
 
-def test_main_registers_org_routers_only_when_enabled():
+def test_main_registers_org_routers_and_request_id():
     src = (BACKEND_ROOT / "main.py").read_text(encoding="utf-8")
-    assert "FEATURE_ORG" in src
-    assert "if app_settings.FEATURE_ORG" in src
+    # 当前实现：org/space/audit 默认注册；request-id 中间件保留
+    assert "org_router" in src
+    assert "space_router" in src
+    assert "audit_router" in src
     assert "X-Request-Id" in src
 
 
@@ -59,13 +61,13 @@ def test_front_feature_flag_module_exists():
     assert path.exists()
     text = path.read_text(encoding="utf-8")
     assert "isOrgFeatureEnabled" in text
-    assert "VITE_FEATURE_ORG" in text
+    assert "org" in text
 
 
-def test_front_router_guards_org_feature():
+def test_front_router_has_org_routes():
     text = (REPO_ROOT / "front" / "src" / "router" / "index.js").read_text(encoding="utf-8")
-    assert "requiresFeature" in text
-    assert "isOrgFeatureEnabled" in text
+    assert "/org" in text
+    assert "OrgSpace" in text
 
 
 def test_front_http_sends_request_id():

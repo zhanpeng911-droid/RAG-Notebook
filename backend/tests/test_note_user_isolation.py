@@ -18,6 +18,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from app.models.note import Note
+from app.models.review_record import ReviewRecord  # noqa: F401 — 注册表结构
 from app.models.chat_history import Base
 
 
@@ -172,26 +173,35 @@ async def test_search_notes_delegates_to_note_index(db_session):
 
 
 @pytest.mark.asyncio
-async def test_create_note_delegates_to_note_index(db_session):
-    """create_note 正确委托给 note_index.add_note"""
+async def test_create_note_writes_review_without_inline_vector_index(db_session):
+    """create_note：MySQL + 复习队列同事务；向量索引由路由异步投递，服务层不内联调用。"""
     from app.schemas.models import NoteCreate
+    from app.models.review_record import ReviewRecord
+    from sqlalchemy import select
 
     service = _get_note_service()
     mock_index = MagicMock()
     service.note_index = mock_index
 
     payload = NoteCreate(title="New Note", content="Content")
-    await service.create_note(db_session, USER_A, payload)
+    note = await service.create_note(db_session, USER_A, payload)
 
-    mock_index.add_note.assert_called_once()
-    call_args = mock_index.add_note.call_args
-    # 验证传递了正确的 user_id
-    assert call_args[0][1] == USER_A, "add_note 必须传入正确的 user_id"
+    assert note is not None
+    assert note.user_id == USER_A
+    mock_index.add_note.assert_not_called()
+
+    result = await db_session.execute(
+        select(ReviewRecord).where(
+            ReviewRecord.note_id == note.id,
+            ReviewRecord.user_id == USER_A,
+        )
+    )
+    assert result.scalar_one_or_none() is not None, "创建笔记后应写入复习队列"
 
 
 @pytest.mark.asyncio
-async def test_delete_note_calls_note_index(db_session):
-    """delete_note 成功删除 MySQL 后调用 note_index.delete_note"""
+async def test_delete_note_clears_mysql_without_inline_vector_cleanup(db_session):
+    """delete_note：仅清理 MySQL；向量清理由路由异步投递，服务层不内联调用。"""
     notes = await _seed_notes(db_session, USER_A, count=1)
     note_id = notes[0].id
 
@@ -201,4 +211,5 @@ async def test_delete_note_calls_note_index(db_session):
 
     result = await service.delete_note(db_session, note_id, USER_A)
     assert result is True
-    mock_index.delete_note.assert_called_once_with(note_id, USER_A)
+    mock_index.delete_note.assert_not_called()
+    assert await service.get_note(db_session, note_id, USER_A) is None

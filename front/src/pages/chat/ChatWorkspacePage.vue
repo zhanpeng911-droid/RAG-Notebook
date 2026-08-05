@@ -926,7 +926,7 @@ const {
 /* ===== 思考过程（消息内） ===== */
 .thinking-section {
   margin-bottom: var(--space-sm);
-  border-left: 3px solid rgba(63, 140, 255, 0.25);
+  border-left: 3px solid var(--color-border);
   background-color: var(--color-surface);
   border-radius: var(--radius-md);
   padding: var(--space-sm) var(--space-md);
@@ -968,7 +968,7 @@ const {
 .thinking-stage-label {
   display: inline-block;
   font-size: 10px;
-  color: #fff;
+  color: var(--color-card);
   padding: 2px 7px;
   border-radius: 3px;
   margin-right: 5px;

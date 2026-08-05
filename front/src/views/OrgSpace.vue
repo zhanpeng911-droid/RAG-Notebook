@@ -512,7 +512,7 @@ onMounted(() => { loadData() })
 }
 .org-card {
   background: var(--color-card);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 20px;
   margin-bottom: 20px;
   border: 1px solid var(--color-border-light);
@@ -528,7 +528,7 @@ onMounted(() => { loadData() })
   max-width: 360px;
   padding: 8px 12px;
   border: 1px solid var(--color-border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 14px;
   color: var(--color-text);
   background: var(--color-card);
@@ -564,7 +564,7 @@ onMounted(() => { loadData() })
   align-items: center;
   padding: 12px 16px;
   background: var(--color-card);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--color-border-light);
 }
 .space-name { font-size: 14px; font-weight: 500; color: var(--color-text); }
@@ -578,7 +578,7 @@ onMounted(() => { loadData() })
   align-items: center;
   padding: 12px 16px;
   background: var(--color-card);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--color-border-light);
 }
 .member-info { display: flex; align-items: center; gap: 12px; }
@@ -599,17 +599,17 @@ onMounted(() => { loadData() })
   display: inline-block;
   font-size: 11px;
   padding: 1px 8px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   margin-left: 8px;
 }
-.role-owner { background: rgba(239,68,68,0.1); color: #ef4444; }
-.role-admin { background: rgba(59,130,246,0.1); color: #3b82f6; }
+.role-owner { background: var(--status-error-bg); color: var(--status-error-text); }
+.role-admin { background: var(--status-info-bg); color: var(--status-info-text); }
 .role-member { background: var(--color-surface); color: var(--color-text-lighter); }
 .member-actions { display: flex; align-items: center; gap: 8px; }
 .role-select {
   padding: 4px 8px;
   border: 1px solid var(--color-border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   font-size: 12px;
   color: var(--color-text);
   background: var(--color-card);
@@ -623,7 +623,7 @@ onMounted(() => { loadData() })
 }
 .doc-panel {
   border: 1px solid var(--color-border-light);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--color-card);
   min-height: 320px;
   overflow: hidden;
@@ -655,7 +655,7 @@ onMounted(() => { loadData() })
 .doc-item {
   padding: 10px;
   border: 1px solid var(--color-border-light);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--color-surface);
 }
 .doc-title-row {
@@ -668,9 +668,9 @@ onMounted(() => { loadData() })
   flex-shrink: 0;
   font-size: 11px;
   color: var(--color-primary);
-  background: rgba(59,130,246,0.1);
+  background: var(--status-info-bg);
   padding: 1px 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
 }
 .doc-title {
   min-width: 0;

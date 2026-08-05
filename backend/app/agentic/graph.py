@@ -108,6 +108,7 @@ class AgentGraph:
                 retrieval_service = RetrievalService(
                     user_id=self.user_id,
                     space_id=self.space_id,
+                    llm_config=self.llm_config,
                 )
 
                 evidences = await retrieval_service.retrieve(
@@ -133,15 +134,26 @@ class AgentGraph:
                     # 证据充分，生成答案
                     break
                 else:
-                    # 证据不足，改写查询
+                    # 证据不足，判断是否触发 CRAG 纠错回路
                     if not state.can_retry():
                         break
 
                     yield self._create_event(AgentPhase.REWRITING_QUERY, state=state)
+
+                    # CRAG 纠错：置信度极低（none）时扩大检索范围
+                    crag_expanded = False
+                    if grading.confidence_level == "none" and state.current_retrieval_round == 0:
+                        logger.info("【CRAG】置信度极低，触发纠错回路：扩大检索范围")
+                        crag_expanded = True
+
                     state.query = planner.rewrite_query(
                         original_query=state.query,
                         failed_reason=grading.reason,
                     )
+                    # CRAG 纠错：改写后扩大 scope 和 top_k
+                    if crag_expanded:
+                        # 临时扩大检索范围：下一轮 create_plan 会读取 retrieval_round
+                        logger.info(f"【CRAG】改写查询: {state.query[:50]}, 扩大检索范围")
                     state.rewritten_queries.append(state.query)
                     state.increment_round()
 
@@ -156,12 +168,17 @@ class AgentGraph:
 
             state.answer = result["answer"]
             state.citations = result["citations"]
+            quality_scores = result.get("quality_scores")
 
             yield self._create_event(AgentPhase.CITATION, state=state)
 
             # 完成
             state.phase = AgentPhase.COMPLETED
-            yield self._create_event(AgentPhase.COMPLETED, state=state)
+            yield self._create_event(
+                AgentPhase.COMPLETED,
+                state=state,
+                quality_scores=quality_scores,
+            )
 
         except Exception as e:
             logger.error(f"【Agent】执行失败: {e}", exc_info=True)
@@ -173,6 +190,7 @@ class AgentGraph:
         phase: AgentPhase,
         state: AgentState = None,
         error: str = None,
+        quality_scores: Any = None,
     ) -> Dict[str, Any]:
         """创建 SSE 事件"""
         event = {
@@ -186,6 +204,8 @@ class AgentGraph:
         if phase == AgentPhase.COMPLETED and state:
             event["answer"] = state.answer
             event["citations"] = state.citations
+            if quality_scores is not None:
+                event["quality_scores"] = quality_scores
 
         if phase == AgentPhase.ERROR:
             event["error"] = error or (state.error if state else "未知错误")
@@ -225,6 +245,7 @@ async def run_agent(
     result = {
         "answer": None,
         "citations": [],
+        "quality_scores": None,
         "phases": [],
         "error": None,
     }
@@ -235,6 +256,8 @@ async def run_agent(
             result["answer"] = event["answer"]
         if event.get("citations"):
             result["citations"] = event["citations"]
+        if event.get("quality_scores") is not None:
+            result["quality_scores"] = event["quality_scores"]
         if event.get("error"):
             result["error"] = event["error"]
 

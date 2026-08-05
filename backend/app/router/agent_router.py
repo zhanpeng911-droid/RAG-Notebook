@@ -67,11 +67,23 @@ async def agent_query_stream(
     from app.agentic.graph import run_agent_stream
     from app.repositories.agent_run_repository import AgentRunRepository
 
+    logger.info(f"【Agent流式】user_id={user_id}, query={request.query[:50]}, llm_config={request.llm_config}")
+
+    # 如果没有 session_id，自动创建会话
+    session_id = request.session_id
+    if not session_id:
+        import uuid as _uuid
+        from app.models.chat_history import ChatSession
+        session_id = str(_uuid.uuid4())
+        new_session = ChatSession(id=session_id, user_id=user_id, title=request.query[:30])
+        db.add(new_session)
+        await db.commit()
+
     repo = AgentRunRepository(db)
     run = await repo.create_run(
         user_id=user_id,
         query=request.query,
-        session_id=request.session_id,
+        session_id=session_id,
         space_id=request.space_id,
         model_config=request.llm_config,
     )
@@ -85,7 +97,7 @@ async def agent_query_stream(
             query=request.query,
             user_id=user_id,
             space_id=request.space_id,
-            session_id=request.session_id,
+            session_id=session_id,
             llm_config=request.llm_config,
         ):
             # 更新运行记录
@@ -99,6 +111,12 @@ async def agent_query_stream(
                     total_time_ms=total_ms,
                     citation_count=len(event.get("citations", [])),
                 )
+                # 把问答写入会话历史
+                try:
+                    from app.services import session_manager as sm
+                    await sm.session_manager.add_message(session_id, user_id, request.query, event.get("answer", ""))
+                except Exception as msg_err:
+                    logger.warning(f"写入会话历史失败: {msg_err}")
                 await db.commit()
             elif event_type == "error":
                 total_ms = int((time.time() - start_time) * 1000)
@@ -110,8 +128,9 @@ async def agent_query_stream(
                 )
                 await db.commit()
 
-            # 添加 run_id 到事件
+            # 添加 run_id 和 session_id 到事件
             event["run_id"] = run.id
+            event["session_id"] = session_id
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(

@@ -115,3 +115,20 @@ docker-compose.override.yml
 backend/data/
 **/chromadb/
 front/pnpm-lock.yaml
+
+# Celery runtime
+celerybeat-schedule
+celerybeat-schedule.*
+dump.rdb
+
+# ZCode session
+.zcode/
+
+# Test media uploads
+DjangoUserService/test_media/
+
+# Windows nul file
+nul
+
+# Test reports
+TEST_REPORT.md

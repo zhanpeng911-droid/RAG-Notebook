@@ -52,7 +52,7 @@ class NoteVectorIndex:
 
     @property
     def store(self) -> Chroma:
-        """???? Chroma ??????? RagService ???"""
+        """返回底层 Chroma 实例，供检索服务使用"""
         return self._ensure_store()
 
     @staticmethod

@@ -42,7 +42,7 @@ const categoryMap = { work: '工作', study: '学习', life: '生活', project: 
   padding: 20px;
   margin-bottom: 16px;
   background: var(--color-card);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   transition: opacity 0.3s;
 }
 .review-card--done {
@@ -56,13 +56,13 @@ const categoryMap = { work: '工作', study: '学习', life: '生活', project: 
 }
 .review-round {
   font-size: 12px;
-  color: var(--van-primary-color, #3f8cff);
+  color: var(--color-primary);
   font-weight: 600;
 }
 .review-category {
   font-size: 12px;
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--color-surface);
   color: var(--color-text-lighter);
 }
@@ -79,7 +79,7 @@ const categoryMap = { work: '工作', study: '学习', life: '生活', project: 
   line-height: 1.6;
   padding: 10px 14px;
   background: var(--color-surface);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border-left: 3px solid var(--color-primary);
 }
 .review-tags {

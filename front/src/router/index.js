@@ -108,12 +108,7 @@ const routes = [
   },
   {
     path: '/sessions',
-    name: 'Sessions',
-    component: () => import('../views/Sessions.vue'),
-    meta: {
-      title: '会话管理',
-      keepAlive: true
-    }
+    redirect: '/chat'
   },
   {
     path: '/settings',

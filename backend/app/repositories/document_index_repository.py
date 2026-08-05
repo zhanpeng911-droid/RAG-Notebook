@@ -1,5 +1,7 @@
 """
-文档索引记录仓库 —— 封装 document_index 表的 CRUD 操作。
+文档索引记录仓库 -- 封装 document_index 表的 CRUD 操作。
+
+SQL 注入防护：所有查询均通过 SQLAlchemy ORM 参数化执行，禁止拼接原始 SQL。
 """
 import uuid
 from datetime import datetime
@@ -58,10 +60,22 @@ class DocumentIndexRepository:
         return result.scalar_one_or_none()
 
     async def get_by_md5(self, md5: str, user_id: str) -> Optional[DocumentIndex]:
-        """根据MD5获取文档索引记录（用于去重）"""
+        """根据MD5获取文档索引记录（用于内容去重）"""
         result = await self.session.execute(
             select(DocumentIndex).where(
                 and_(DocumentIndex.md5 == md5, DocumentIndex.user_id == user_id)
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_by_original_filename(self, original_filename: str, user_id: str) -> Optional[DocumentIndex]:
+        """根据原始文件名获取文档索引记录（用于文件名唯一性校验）。
+
+        文件名唯一性按用户隔离：同一用户不能上传同名文件。
+        """
+        result = await self.session.execute(
+            select(DocumentIndex).where(
+                and_(DocumentIndex.original_filename == original_filename, DocumentIndex.user_id == user_id)
             )
         )
         return result.scalar_one_or_none()

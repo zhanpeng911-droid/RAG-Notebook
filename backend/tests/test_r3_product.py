@@ -117,11 +117,12 @@ def test_prompt_loader_returns_version(tmp_path, monkeypatch):
 def test_note_service_has_ensure_review_record():
     from app.services import note_service as ns_mod
 
+    assert hasattr(ns_mod.NoteService, "ensure_review_record")
     src = inspect.getsource(ns_mod.NoteService)
     assert "ensure_review_record" in src
-    assert "创建后立即入复习队列" in src or "ensure_review_record" in inspect.getsource(
-        ns_mod.NoteService.create_note
-    )
+    # create_note 同事务内联写入 ReviewRecord（性能优化后不再二次 SELECT）
+    create_src = inspect.getsource(ns_mod.NoteService.create_note)
+    assert "ReviewRecord" in create_src
 
 
 def test_review_service_has_due_count():

@@ -54,24 +54,24 @@ class TestToolCallGrader:
         case = {
             "id": "test-003",
             "expected_tools": ["search_notes_tool"],
-            "forbidden_tools": ["rag_summary_tools"],
+            "forbidden_tools": ["get_note_stats_tool"],
         }
         result = {
             "tool_calls": [
                 {"name": "search_notes_tool", "arguments": {"query": "Docker"}},
-                {"name": "rag_summary_tools", "arguments": {"query": "Docker"}},
+                {"name": "get_note_stats_tool", "arguments": {}},
             ]
         }
         grade_result = grade(case, result)
         assert grade_result["passed"] is False
-        assert "rag_summary_tools" in grade_result["details"]["forbidden_tools_found"]
+        assert "get_note_stats_tool" in grade_result["details"]["forbidden_tools_found"]
 
     def test_forbidden_tools_not_found(self):
         """forbidden_tools 未出现 => pass"""
         case = {
             "id": "test-004",
             "expected_tools": ["search_notes_tool"],
-            "forbidden_tools": ["rag_summary_tools"],
+            "forbidden_tools": ["get_note_stats_tool"],
         }
         result = {
             "tool_calls": [
@@ -87,7 +87,7 @@ class TestToolCallGrader:
         case = {
             "id": "test-005",
             "expected_tools": [],
-            "forbidden_tools": ["rag_summary_tools"],
+            "forbidden_tools": ["get_note_stats_tool"],
         }
         result = {"tool_calls": []}
         grade_result = grade(case, result)

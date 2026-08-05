@@ -8,7 +8,7 @@ uploaded → parsed → pending_index → indexing → indexed
 from datetime import datetime
 from enum import Enum as PyEnum
 
-from sqlalchemy import Column, String, DateTime, Text, Integer, Enum, func
+from sqlalchemy import Column, String, DateTime, Text, Integer, Enum, func, UniqueConstraint
 from app.models.chat_history import Base
 
 
@@ -23,8 +23,11 @@ class DocumentIndexStatus(str, PyEnum):
 
 
 class DocumentIndex(Base):
-    """文档索引状态表 —— 跟踪每个上传文档的索引生命周期"""
+    """文档索引状态表 -- 跟踪每个上传文档的索引生命周期"""
     __tablename__ = "document_index"
+    __table_args__ = (
+        UniqueConstraint("user_id", "original_filename", name="uq_user_original_filename"),
+    )
 
     id = Column(String(36), primary_key=True, comment="文档索引ID（UUID）")
     user_id = Column(String(36), nullable=False, index=True, comment="所属用户ID")

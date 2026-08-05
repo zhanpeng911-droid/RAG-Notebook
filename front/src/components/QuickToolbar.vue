@@ -99,8 +99,8 @@ onMounted(() => {
   align-items: center;
   gap: 2px;
   padding: 4px 16px;
-  background: #fafafa;
-  border-bottom: 1px solid #ebedf0;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
   flex-shrink: 0;
   overflow-x: auto;
 }
@@ -112,23 +112,23 @@ onMounted(() => {
   height: 28px;
   padding: 0 8px;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: transparent;
   font-size: 13px;
   font-weight: 600;
-  color: #555;
+  color: var(--color-text-light);
   cursor: pointer;
   white-space: nowrap;
   user-select: none;
-  font-family: 'Noto Sans SC', 'SF Mono', monospace;
+  font-family: var(--font-mono);
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 .qbtn:hover {
-  background: #e8e8e8;
-  color: #333;
-  border-color: #d0d0d0;
+  background: var(--color-border-light);
+  color: var(--color-text);
+  border-color: var(--color-border);
 }
 .qbtn:active {
-  background: #d0d0d0;
+  background: var(--color-border);
 }
 </style>

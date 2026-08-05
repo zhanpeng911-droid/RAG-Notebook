@@ -5,29 +5,29 @@ const PROVIDERS = {
   deepseek: {
     name: 'DeepSeek',
     baseUrl: 'https://api.deepseek.com',
-    models: ['deepseek-chat', 'deepseek-reasoner'],
-    defaultModel: 'deepseek-chat',
+    models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
+    defaultModel: 'deepseek-v4-flash',
     protocol: 'openai',  // 兼容 OpenAI 协议
   },
   openai: {
     name: 'OpenAI',
     baseUrl: 'https://api.openai.com/v1',
-    models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+    models: ['gpt-4o', 'gpt-4o-mini', 'o3-mini', 'o1-mini'],
     defaultModel: 'gpt-4o-mini',
     protocol: 'openai',
   },
   anthropic: {
     name: 'Anthropic',
     baseUrl: 'https://api.anthropic.com',
-    models: ['claude-sonnet-4-20250514', 'claude-haiku-4-20250514', 'claude-opus-4-20250514'],
+    models: ['claude-sonnet-4-20250514', 'claude-haiku-4-20250514'],
     defaultModel: 'claude-sonnet-4-20250514',
     protocol: 'anthropic',
   },
   ollama: {
     name: 'Ollama (本地)',
     baseUrl: 'http://localhost:11434/v1',
-    models: ['qwen2.5', 'llama3.1', 'mistral', 'codellama', 'deepseek-r1'],
-    defaultModel: 'qwen2.5',
+    models: ['qwen3:7b', 'qwen3:4b', 'llama3.2', 'deepseek-r1'],
+    defaultModel: 'qwen3:7b',
     protocol: 'openai',  // Ollama 兼容 OpenAI 协议
   },
   custom: {
@@ -45,7 +45,7 @@ export const useModelStore = defineStore('model', {
     try { saved = JSON.parse(localStorage.getItem('model-config') || '{}') } catch { saved = {} }
     return {
       provider: saved.provider || 'deepseek',
-      modelName: saved.modelName || 'deepseek-chat',
+      modelName: saved.modelName || 'deepseek-v4-flash',
       apiKey: saved.apiKey || '',
       baseUrl: saved.baseUrl || '',
       isConfigured: saved.isConfigured || false,
@@ -147,7 +147,7 @@ export const useModelStore = defineStore('model', {
     // 重置配置
     reset() {
       this.provider = 'deepseek'
-      this.modelName = 'deepseek-chat'
+      this.modelName = 'deepseek-v4-flash'
       this.apiKey = ''
       this.baseUrl = ''
       this.isConfigured = false

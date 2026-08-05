@@ -237,7 +237,7 @@ const changeTheme = (themeId) => {
 
 .model-card {
   background: var(--color-card);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 16px;
   border: 1px solid var(--color-border-light);
 }
@@ -260,16 +260,16 @@ const changeTheme = (themeId) => {
   align-items: center;
   gap: 6px;
   padding: 4px 10px;
-  background: rgba(217, 48, 37, 0.1);
-  color: var(--color-error);
+  background: var(--status-error-bg);
+  color: var(--status-error-text);
   border-radius: var(--radius-full);
   font-size: 12px;
   font-weight: 500;
 }
 
 .model-status-badge.configured {
-  background: rgba(82, 184, 122, 0.1);
-  color: var(--color-success);
+  background: var(--status-success-bg);
+  color: var(--status-success-text);
 }
 
 .status-dot {
@@ -415,7 +415,7 @@ const changeTheme = (themeId) => {
   align-items: center;
   cursor: pointer;
   padding: 12px 8px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   transition: background 0.2s;
 }
 
@@ -431,7 +431,7 @@ const changeTheme = (themeId) => {
 .theme-preview {
   width: 72px;
   height: 48px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   margin-bottom: 8px;
   padding: 8px;
   display: flex;

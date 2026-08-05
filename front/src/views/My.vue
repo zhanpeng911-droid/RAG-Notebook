@@ -136,12 +136,12 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   padding: 20px 16px;
-  background: linear-gradient(135deg, var(--color-card) 0%, var(--color-primary-softer) 100%);
+  background: var(--color-card);
   color: var(--color-text);
-  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
   margin: 16px;
   position: relative;
-  box-shadow: 0 1px 4px var(--color-shadow);
 }
 
 .arrow-icon {
@@ -160,14 +160,13 @@ onMounted(async () => {
   height: 72px;
   border-radius: 50%;
   background: var(--color-primary);
-  color: white;
+  color: var(--color-card);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 28px;
   font-family: var(--font-heading);
   font-weight: 600;
-  box-shadow: 0 2px 8px rgba(63, 140, 255, 0.30);
 }
 
 .info {
@@ -192,7 +191,7 @@ onMounted(async () => {
 }
 
 .menu-list :deep(.van-cell) {
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   margin-bottom: 6px;
   background: var(--color-card);
   box-shadow: 0 1px 2px var(--color-shadow);

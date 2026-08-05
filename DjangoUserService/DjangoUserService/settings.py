@@ -192,6 +192,7 @@ CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:3000",
+    "http://localhost:3076",
 ]
 
 # 覆盖默认的用户模型

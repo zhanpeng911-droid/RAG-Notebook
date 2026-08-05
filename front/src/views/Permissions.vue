@@ -161,7 +161,7 @@ onMounted(async () => {
   flex: 1;
   padding: 8px 12px;
   border: 1px solid var(--color-border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 14px;
   color: var(--color-text);
   background: var(--color-card);
@@ -170,7 +170,7 @@ onMounted(async () => {
 .empty-hint { text-align: center; padding: 20px; color: var(--color-text-lighter); font-size: 13px; }
 .role-info-card {
   background: var(--color-card);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 16px;
   margin-bottom: 20px;
   border: 1px solid var(--color-border-light);
@@ -182,16 +182,16 @@ onMounted(async () => {
   display: inline-block;
   font-size: 11px;
   padding: 2px 8px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   font-weight: 500;
   white-space: nowrap;
 }
-.role-owner { background: rgba(239,68,68,0.1); color: #ef4444; }
-.role-admin { background: rgba(59,130,246,0.1); color: #3b82f6; }
+.role-owner { background: var(--status-error-bg); color: var(--status-error-text); }
+.role-admin { background: var(--status-info-bg); color: var(--status-info-text); }
 .role-member { background: var(--color-surface); color: var(--color-text-lighter); }
 .permission-table {
   background: var(--color-card);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--color-border-light);
   overflow: hidden;
 }
@@ -231,7 +231,7 @@ onMounted(async () => {
 .role-select {
   padding: 4px 8px;
   border: 1px solid var(--color-border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   font-size: 12px;
   color: var(--color-text);
   background: var(--color-card);

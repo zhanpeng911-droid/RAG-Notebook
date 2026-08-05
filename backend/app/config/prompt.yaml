@@ -1,7 +1,6 @@
 # Prompt 路径与版本（改 prompt 必须同步 bump version，并跑相关 evals）
 versions:
   main_prompt: "1.0.0"
-  rag_summary_prompt: "1.0.0"
   report_prompt: "1.0.0"
   reorder_prompt: "1.0.0"
   auto_tag_prompt: "1.0.0"
@@ -11,7 +10,6 @@ versions:
 
 paths:
   main_prompt: app/prompt/main_prompt.txt
-  rag_summary_prompt: app/prompt/rag_summarize.txt
   report_prompt: app/prompt/report_prompt.txt
   reorder_prompt: app/prompt/reorder_prompt.txt
   auto_tag_prompt: app/prompt/auto_tag_prompt.txt

@@ -5,6 +5,23 @@
  * @param {object} handlers - { onThinking, onResponse, onDone, onError, onStep }
  * @returns {function} abort
  */
+
+// Agentic RAG 阶段事件的中文标签
+const AGENTIC_STAGE_LABELS = {
+  started: '开始处理',
+  planning: '正在规划检索策略',
+  retrieving: '正在检索知识库',
+  retrieval_completed: '检索完成',
+  grading_evidence: '正在评估证据质量',
+  rewriting_query: '正在改写查询',
+  generating_answer: '正在生成答案',
+  citation: '整理引用来源',
+}
+
+function _agenticStageLabel(type) {
+  return AGENTIC_STAGE_LABELS[type] || type
+}
+
 export function createSSEStream(url, body, handlers) {
   const controller = new AbortController()
   const isFormData = body instanceof FormData
@@ -55,12 +72,34 @@ export function createSSEStream(url, body, handlers) {
               case 'thinking':   handlers.onThinking?.(json); break
               case 'response':   handlers.onResponse?.(json); break
               case 'done':       handlers.onDone?.(json);     break
-              case 'error':      handlers.onError?.(new Error(json.content || 'Stream error')); break
+              case 'error':      handlers.onError?.(new Error(json.content || json.error || 'Stream error')); break
               case 'step':       handlers.onStep?.(json);     break
               // knowledge upload stream events
               case 'processing': handlers.onProcessing?.(json); break
-              case 'completed':  handlers.onCompleted?.(json);  break
               case 'finish':     handlers.onFinish?.(json);     break
+
+              // Agentic RAG SSE 事件
+              case 'started':
+              case 'planning':
+              case 'retrieving':
+              case 'retrieval_completed':
+              case 'grading_evidence':
+              case 'rewriting_query':
+              case 'generating_answer':
+              case 'citation':
+                // 将 Agentic 阶段事件转为 thinking 步骤展示
+                handlers.onThinking?.({
+                  stage: json.type,
+                  content: _agenticStageLabel(json.type),
+                  details: json.state || null,
+                })
+                break
+              case 'completed':
+                // Agentic 完成事件，提取 answer 和 citations
+                handlers.onResponse?.({ content: json.answer || '' })
+                handlers.onCompleted?.(json)
+                handlers.onDone?.({ session_id: json.session_id })
+                break
             }
           } catch (e) {
             if (e.message === 'Stream error') throw e

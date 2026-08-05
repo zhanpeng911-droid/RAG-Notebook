@@ -48,27 +48,29 @@ Notebook 已从传统的“检索后直接回答”升级为**受控 Agentic RAG
 
 | 维度 | 传统 RAG 流程 | Notebook 的增强 |
 |---|---|---|
-| 检索决策 | 固定地检索后回答 | Planner 根据问题制定检索范围和参数 |
+| 检索决策 | 固定地检索后回答 | Adaptive-RAG 查询路由：按查询复杂度分 6 类（SIMPLE/FACTUAL/EXPLANATORY/COMPARATIVE/PROCEDURAL/EXPLORATORY），简单查询走轻量路径（跳过 HyDE/rerank） |
 | 检索范围 | 单一知识库为主 | 统一检索知识库、笔记、混合范围与空间范围 |
-| 证据不足 | 容易直接生成或回答不完整 | Evidence Grader 评估证据，必要时改写查询并补检索 |
+| 证据不足 | 容易直接生成或回答不完整 | Evidence Grader 加权置信度评分（0.7×相关性+0.3×覆盖率），置信度分级（high/medium/low/none） |
+| 检索失败 | 直接拒答 | CRAG 纠错回路：置信度极低时改写查询 + 扩大检索范围（scope 扩到 all，top_k+3） |
 | 循环控制 | 通常没有显式限制 | 有最大补检索轮数，避免无界循环和成本失控 |
-| 答案可信度 | 检索结果与答案关联较弱 | 基于 evidence 生成，并由 Citation Manager 管理引用 |
+| 答案可信度 | 检索结果与答案关联较弱 | 基于 evidence 一次性生成（带 [n] 引用），并由 Citation Manager 管理引用 |
+| 质量评估 | 无 | LLM-as-judge 四维度评分（faithfulness/completeness/relevance/overall），失败不影响主流程 |
 | 过程体验 | 用户只看到最终答案 | SSE 实时返回 planning、retrieving、grading、citation 等阶段 |
-| 文档上传 | 上传、解析、向量写入强耦合 | 文件持久化与异步索引解耦，索引状态可见、可重试 |
+| 文档上传 | 上传、解析、向量写入强耦合 | 文件持久化与异步索引解耦，索引状态可见、可重试；文件名唯一性校验（按用户隔离） |
 | 失败恢复 | 依赖人工排查 | `pending_index` 状态、手动 reindex 与 Celery Beat 定时补偿 |
-| 可观测性 | 日志为主 | 记录 Agent run、step、耗时、引用数和用户 feedback |
-| 安全边界 | 基础登录鉴权 | 用户/空间隔离、输入防护、只读工具和检索轮次限制 |
+| 可观测性 | 日志为主 | 记录 Agent run、step、耗时、引用数、质量评分和用户 feedback |
+| 安全边界 | 基础登录鉴权 | 用户/空间隔离、7 类 Prompt Injection 防护、SQLAlchemy ORM 参数化查询、检索轮次限制 |
 
 ### Agentic RAG 工作流
 
 ```text
 用户问题
-  -> Guardrails（输入校验 / 基础注入防护）
-  -> Planner（问题分类、检索范围、top_k）
-  -> RetrievalService（知识库 / 笔记 / 空间统一检索）
-  -> Evidence Grader（评估证据相关性与充分性）
-  -> Query Rewrite（证据不足时，有限次数补检索）
-  -> Answer Generator（基于证据作答）
+  -> Guardrails（输入校验 / 7 类 Prompt Injection 防护 / 超时控制）
+  -> Planner（Adaptive-RAG 查询路由：6 类分类，动态分配 top_k/HyDE/rerank）
+  -> RetrievalService（向量+BM25 混合检索 + HyDE，用前端传入的 llm_config）
+  -> Evidence Grader（加权置信度评分 + 置信度分级 high/medium/low/none）
+  -> CRAG 纠错回路（置信度 none 时：改写查询 + 扩大检索范围 + 第二轮放宽评分）
+  -> Answer Generator（基于证据一次性生成，带 [n] 引用 + LLM-as-judge 四维度评分）
   -> Citation Manager（归一化引用）
   -> SSE 输出 + Agent Run/Step/Feedback 记录
 ```
@@ -94,13 +96,16 @@ Notebook 已从传统的“检索后直接回答”升级为**受控 Agentic RAG
 
 ### Agentic RAG 对话
 
+- Adaptive-RAG 查询路由：6 类分类（SIMPLE/FACTUAL/EXPLANATORY/COMPARATIVE/PROCEDURAL/EXPLORATORY），简单查询走轻量路径；
 - `knowledge`、`notes`、`all` 和 `space:{space_id}` 统一检索范围；
+- 向量+BM25 混合检索 + HyDE（优先使用前端传入的 LLM 配置）；
 - 证据去重与相邻片段合并，降低上下文冗余；
-- 可控的查询改写与补检索；
-- 基于证据的回答和引用；
+- Evidence Grader 加权置信度评分 + 置信度分级（high/medium/low/none）；
+- CRAG 纠错回路：置信度极低时改写查询并扩大检索范围；
+- 基于证据一次性生成回答（带 [n] 引用）+ LLM-as-judge 四维度质量评分；
 - SSE 流式返回阶段进度、答案和引用；
 - Agent 运行、步骤、反馈的持久化记录；
-- 用户和空间级检索隔离、基础 Prompt Injection 清洗、只读工具与限流。
+- 7 类 Prompt Injection 防护、用户/空间级检索隔离、检索轮次限制。
 
 ### 模型与部署
 
@@ -121,17 +126,18 @@ front/ (Vue 3 + Vite + Vant)
   |                                             |-- 注册 / 登录 / JWT / 用户资料
   |                                             \-- 文件相关接口
   |
-  \----- /chat, /knowledge, /note, /review ---> backend/ (FastAPI)
+  \----- /api/v1/* --------------------------> backend/ (FastAPI)
                                                 |-- Agent Router / SSE
-                                                |-- AgentGraph
-                                                |   |-- Planner
-                                                |   |-- RetrievalService
-                                                |   |-- Evidence Grader
-                                                |   |-- Answer Generator
+                                                |-- AgentGraph (自研状态图)
+                                                |   |-- Planner (Adaptive-RAG 查询路由)
+                                                |   |-- RetrievalService (向量+BM25+HyDE)
+                                                |   |-- Evidence Grader (置信度分级)
+                                                |   |-- CRAG 纠错回路
+                                                |   |-- Answer Generator (一次性生成+LLM-as-judge)
                                                 |   \-- Citation / Guardrails
-                                                |-- DocumentIndexService
-                                                |-- MySQL: 文档索引、Agent Run/Step/Feedback
-                                                |-- Redis + Celery: 异步索引与补偿任务
+                                                |-- DocumentIndexService (文件名唯一性校验)
+                                                |-- MySQL: 文档索引、会话、Agent Run/Step/Feedback
+                                                |-- Redis + Celery: 异步索引、自动标签与补偿任务
                                                 \-- ChromaDB: 向量检索
 ```
 
@@ -140,12 +146,12 @@ front/ (Vue 3 + Vite + Vant)
 | 层级 | 技术 |
 |---|---|
 | 前端 | Vue 3、Vite、Vant 4、Vue Router、Pinia、Vue I18n、ByteMD、Axios、Playwright |
-| API 与编排 | FastAPI、Pydantic、LangChain、SSE |
-| Agentic RAG | Planner、统一检索、Evidence Grader、Query Rewrite、Citation Manager、Guardrails |
-| 数据与检索 | MySQL、SQLAlchemy、aiomysql、Redis、ChromaDB、sentence-transformers（可选本地 embedding） |
-| 异步任务 | Celery、Redis、Celery Beat |
+| API 与编排 | FastAPI、Pydantic、LangChain、SSE、统一 `/api/v1` 版本管理 |
+| Agentic RAG | Adaptive-RAG 查询路由、统一检索（向量+BM25+HyDE）、Evidence Grader（置信度分级）、CRAG 纠错回路、Answer Generator（一次性生成+LLM-as-judge）、Citation Manager、Guardrails |
+| 数据与检索 | MySQL、SQLAlchemy（ORM 参数化查询）、aiomysql、Redis、ChromaDB |
+| 异步任务 | Celery、Redis、Celery Beat（文档索引补偿 + 笔记自动标签） |
 | 用户服务 | Django、Django REST Framework、drf-yasg、JWT |
-| 模型接入 | Ollama、DashScope、OpenAI-compatible API |
+| 模型接入 | OpenAI-compatible（DeepSeek 等）、DashScope、Ollama、Anthropic |
 
 ## 快速开始
 
@@ -254,8 +260,8 @@ npm run dev
 
 默认访问地址：
 
-- 前端：`http://127.0.0.1:3000`
-- FastAPI 文档：`http://127.0.0.1:8002/docs`
+- 前端：`http://127.0.0.1:3076`
+- FastAPI 文档：`http://127.0.0.1:8002/api/v1/docs`
 - Django Swagger：`http://127.0.0.1:8001/docs/`
 
 ## Docker 部署
@@ -291,8 +297,8 @@ docker compose up -d --build
 
 Compose 会启动 MySQL、Redis、FastAPI、Celery worker、Celery Beat、Django 和前端服务。默认端口：
 
-- 前端：`http://127.0.0.1:3000`
-- FastAPI：`http://127.0.0.1:8000`
+- 前端：`http://127.0.0.1:3076`
+- FastAPI：`http://127.0.0.1:8002`
 - Django：`http://127.0.0.1:8001`
 
 ## 配置说明
@@ -317,30 +323,33 @@ backend/app/config/chroma.yaml
 
 - 支持格式：`txt`、`pdf`、`md`、`pptx`、`docx`；
 - 默认检索 `k=5`；
-- 默认 `chunk_size=200`；
-- 默认 `chunk_overlap=20`。
+- 默认 `chunk_size=500`；
+- 默认 `chunk_overlap=60`。
 
 ### 数据隔离与安全
 
 - Django 用户服务负责用户认证，FastAPI 用 JWT 识别用户；
 - 知识库、笔记、会话、Agent run 等数据按用户维度隔离；
+- 文件名唯一性校验（按用户隔离，同名文件拒绝上传并返回 409）；
 - Agent 检索还会按 `space_id` 约束范围；
-- Agent 工具为只读，且有基础输入防护、限流和检索轮次上限；
+- 7 类 Prompt Injection 防护（角色注入/越狱指令/特殊 Token）；
+- 所有数据库查询通过 SQLAlchemy ORM 参数化执行，防止 SQL 注入；
+- Agent 工具为只读，且有输入防护和检索轮次上限；
 - `.env`、数据目录、日志、虚拟环境和构建产物已通过 `.gitignore` 排除。
 
 ## 关键 API
 
-完整接口请以 FastAPI Swagger 为准：`/docs`。
+完整接口请以 FastAPI Swagger 为准：`/api/v1/docs`。详见 [docs/API.md](docs/API.md)。
 
 ### Agentic RAG
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `POST` | `/chat/agent/query/stream` | SSE 流式 Agent 查询 |
-| `POST` | `/chat/agent/query` | 非流式 Agent 查询 |
-| `GET` | `/chat/agent/runs/{run_id}` | 查询一次 Agent 运行记录 |
-| `GET` | `/chat/agent/runs` | 查询 Agent 运行列表 |
-| `POST` | `/chat/agent/feedback` | 提交答案评分与反馈 |
+| `POST` | `/api/v1/chat/agent/query/stream` | SSE 流式 Agent 查询 |
+| `POST` | `/api/v1/chat/agent/query` | 非流式 Agent 查询 |
+| `GET` | `/api/v1/chat/agent/runs/{run_id}` | 查询一次 Agent 运行记录 |
+| `GET` | `/api/v1/chat/agent/runs` | 查询 Agent 运行列表 |
+| `POST` | `/api/v1/chat/agent/feedback` | 提交答案评分与反馈 |
 
 SSE 事件包括：`started`、`planning`、`retrieving`、`retrieval_completed`、`grading_evidence`、`rewriting_query`、`generating_answer`、`citation`、`completed`、`error`。
 
@@ -348,11 +357,11 @@ SSE 事件包括：`started`、`planning`、`retrieving`、`retrieval_completed`
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `POST` | `/knowledge/add/single/v2` | 上传单个文档并创建异步索引任务 |
-| `POST` | `/knowledge/add/multiple/v2` | 批量上传并创建索引任务 |
-| `GET` | `/knowledge/index-status` | 查询文档索引状态、切片数与失败信息 |
-| `POST` | `/knowledge/{document_id}/reindex` | 重新提交索引 |
-| `DELETE` | `/knowledge/documents/{document_id}` | 删除 v2 文档、索引元数据和向量数据 |
+| `POST` | `/api/v1/knowledge/add/single/v2` | 上传单个文档并创建异步索引任务 |
+| `POST` | `/api/v1/knowledge/add/multiple/v2` | 批量上传并创建索引任务 |
+| `GET` | `/api/v1/knowledge/index-status` | 查询文档索引状态、切片数与失败信息 |
+| `POST` | `/api/v1/knowledge/{document_id}/reindex` | 重新提交索引 |
+| `DELETE` | `/api/v1/knowledge/documents/{document_id}` | 删除 v2 文档、索引元数据和向量数据 |
 
 ## 测试与质量验证
 
@@ -397,8 +406,8 @@ npm run test:e2e:full -- --project=chromium
 Notebook/
 ├── backend/
 │   ├── app/
-│   │   ├── agentic/           # AgentGraph、规划、证据评估、引用和安全边界
-│   │   ├── rag/               # 统一检索、向量库与传统 RAG 能力
+│   │   ├── agentic/           # AgentGraph、Adaptive-RAG 规划、证据评估、CRAG 纠错、引用和安全边界
+│   │   ├── rag/               # 统一检索、向量库、文本切分与文档处理
 │   │   ├── services/          # 文档索引、笔记、回顾等服务
 │   │   ├── tasks/             # Celery worker / Beat 任务
 │   │   ├── models/            # document_index、agent_run 等数据模型
@@ -419,7 +428,8 @@ Notebook/
 │   ├── apps/                  # 用户、文件与工具模块
 │   └── DjangoUserService/     # Django 配置
 ├── docs/
-│   └── AGENTIC_RAG_PLAN.md    # Agentic RAG 设计与阶段说明
+│   ├── API.md                # 后端 API 文档
+│   └── JWT_CONTRACT.md       # JWT 跨服务契约
 ├── docker-compose.yml
 └── README.md
 ```

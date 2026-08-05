@@ -112,8 +112,7 @@ const goToRegister = () => {
 <style scoped>
 .login-page {
   min-height: 100vh;
-  background:
-    linear-gradient(180deg, var(--color-surface) 0%, var(--color-bg) 38%, var(--color-bg) 100%);
+  background: var(--color-bg);
 }
 
 .login-container {
@@ -135,13 +134,12 @@ const goToRegister = () => {
   width: 58px;
   height: 58px;
   flex: 0 0 58px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--color-primary);
   display: flex;
   align-items: center;
   justify-content: center;
   color: #fff;
-  box-shadow: 0 10px 24px rgba(52, 120, 223, 0.26);
 }
 
 .logo-mark :deep(.van-icon) {
@@ -165,9 +163,8 @@ const goToRegister = () => {
 
 .login-form {
   background: var(--color-card);
-  border: 1px solid var(--color-border-light);
-  border-radius: 8px;
-  box-shadow: 0 14px 34px var(--color-shadow);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
   padding: 6px 0 18px;
   overflow: hidden;
 }
@@ -199,10 +196,6 @@ const goToRegister = () => {
 
 .submit-btn {
   margin: 18px 18px 0;
-}
-
-.submit-btn :deep(.van-button) {
-  box-shadow: 0 8px 18px rgba(52, 120, 223, 0.22);
 }
 
 .register-link {

@@ -1,8 +1,9 @@
 """
-受控检索工具 —— Agent 可调用的工具集合。
+受控检索工具 -- Agent 可调用的工具集合。
 
 所有工具都强制用户和空间隔离，确保数据安全。
 """
+import asyncio
 from typing import List, Optional, Dict, Any
 
 from app.core.logger_handler import logger
@@ -180,6 +181,3 @@ AGENT_TOOLS = {
     "get_document_chunk": get_document_chunk,
     "list_user_documents": list_user_documents,
 }
-
-
-import asyncio

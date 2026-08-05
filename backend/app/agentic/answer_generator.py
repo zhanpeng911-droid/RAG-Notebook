@@ -1,13 +1,16 @@
 """
-带引用的答案生成器 —— 基于证据生成答案并标注引用。
+带引用的答案生成器 -- 基于证据生成答案并标注引用。
 
 职责：
 - 根据证据生成答案
 - 在答案中标注引用来源
 - 确保答案仅基于提供的证据
+- 生成后用 LLM-as-judge 对答案质量评分（faithfulness/completeness/relevance）
 """
 from typing import List, Dict, Any, Optional
 import asyncio
+import json
+import re
 
 from app.core.logger_handler import logger
 from app.rag.retrieval_service import Evidence
@@ -83,9 +86,13 @@ class AnswerGenerator:
 
             answer = response.content
 
+            # LLM-as-judge 质量评分（失败不影响主流程）
+            quality_scores = await self._judge_answer(query, context, answer)
+
             return {
                 "answer": answer,
                 "citations": citation_manager.format_citations_for_display(citations),
+                "quality_scores": quality_scores,
             }
 
         except asyncio.TimeoutError:
@@ -93,13 +100,98 @@ class AnswerGenerator:
             return {
                 "answer": "抱歉，生成答案超时，请稍后再试。",
                 "citations": citation_manager.format_citations_for_display(citations),
+                "quality_scores": None,
             }
         except Exception as e:
             logger.error(f"【答案生成】失败: {e}")
             return {
                 "answer": "抱歉，生成答案时出现错误。",
                 "citations": [],
+                "quality_scores": None,
             }
+
+    async def _judge_answer(
+        self,
+        query: str,
+        context: str,
+        answer: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        用 LLM-as-judge 对生成的答案进行质量评分。
+
+        评估四维度：faithfulness（忠实度）、completeness（完整度）、
+        relevance（相关性）、overall（综合）。
+
+        :param query: 用户原始查询
+        :param context: 喂给生成器的证据上下文
+        :param answer: 生成的答案
+        :return: {"faithfulness_score": float, "completeness_score": float,
+                  "relevance_score": float, "overall_score": float,
+                  "issues": list, "suggestions": list}，失败返回 None
+        """
+        try:
+            chat_model = self._get_chat_model()
+            prompt = self._build_judge_prompt(query, context, answer)
+
+            from langchain_core.messages import HumanMessage
+            response = await asyncio.wait_for(
+                chat_model.ainvoke([HumanMessage(content=prompt)]),
+                timeout=15.0,
+            )
+
+            raw = response.content.strip()
+            # 剥离可能的 markdown 代码块包裹
+            raw = re.sub(r"^```(?:json)?\s*", "", raw)
+            raw = re.sub(r"\s*```$", "", raw)
+
+            scores = json.loads(raw)
+            logger.info(
+                f"【LLM-as-judge】评分: faithfulness={scores.get('faithfulness_score')}, "
+                f"completeness={scores.get('completeness_score')}, "
+                f"overall={scores.get('overall_score')}"
+            )
+            return scores
+        except asyncio.TimeoutError:
+            logger.warning("【LLM-as-judge】评分超时，跳过")
+            return None
+        except json.JSONDecodeError as e:
+            logger.warning(f"【LLM-as-judge】JSON 解析失败: {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"【LLM-as-judge】评分失败: {e}")
+            return None
+
+    def _build_judge_prompt(self, query: str, context: str, answer: str) -> str:
+        """构建 LLM-as-judge 评估提示词。"""
+        return f"""你是一个回答质量评估专家。请根据以下标准评估回答质量。
+
+## 用户问题
+{query}
+
+## 参考上下文
+{context if context else "（无上下文）"}
+
+## 模型回答
+{answer}
+
+## 评估标准
+回答应准确、完整、基于上下文
+
+## 请评估
+1. 回答是否基于上下文（faithfulness）
+2. 回答是否完整覆盖问题（completeness）
+3. 回答是否包含无关信息（relevance）
+4. 回答语言是否自然流畅
+
+请输出 JSON 格式：
+{{
+  "faithfulness_score": 0-1,
+  "completeness_score": 0-1,
+  "relevance_score": 0-1,
+  "overall_score": 0-1,
+  "issues": ["问题1", "问题2"],
+  "suggestions": ["建议1", "建议2"]
+}}"""
 
     def _build_context(self, evidences: List[Evidence]) -> str:
         """构建上下文"""

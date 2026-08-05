@@ -15,63 +15,17 @@ export default defineConfig({
     }
   },
   server: {
-    port: 3000,
+    port: 3076,
     host: true, // 允许局域网访问
     proxy: {
-      // AI相关接口代理到 backend
-      '/api/agent': {
+      // /api/v1 统一代理到 backend（API 版本管理后所有后端端点统一前缀）
+      '/api/v1': {
         target: BACKEND_TARGET,
         changeOrigin: true,
         ws: true
       },
-      '/api/rag': {
-        target: BACKEND_TARGET,
-        changeOrigin: true
-      },
-      '/api/session': {
-        target: BACKEND_TARGET,
-        changeOrigin: true
-      },
-      '/knowledge/': {
-        target: BACKEND_TARGET,
-        changeOrigin: true
-      },
-      // chat API 子路径代理（避免匹配前端的 /chat 页面路由）
-      '/chat/agent/': {
-        target: BACKEND_TARGET,
-        changeOrigin: true,
-        ws: true
-      },
-      '/chat/rag/': {
-        target: BACKEND_TARGET,
-        changeOrigin: true
-      },
-      '/chat/session/': {
-        target: BACKEND_TARGET,
-        changeOrigin: true
-      },
-      '/chat/sessions': {
-        target: BACKEND_TARGET,
-        changeOrigin: true
-      },
-      '/chat/reorder': {
-        target: BACKEND_TARGET,
-        changeOrigin: true
-      },
+      // 健康检查（不走 /api/v1 前缀）
       '/health': {
-        target: BACKEND_TARGET,
-        changeOrigin: true
-      },
-      // 企业功能接口代理
-      '/org/': {
-        target: BACKEND_TARGET,
-        changeOrigin: true
-      },
-      '/space/': {
-        target: BACKEND_TARGET,
-        changeOrigin: true
-      },
-      '/audit/': {
         target: BACKEND_TARGET,
         changeOrigin: true
       },
@@ -82,16 +36,6 @@ export default defineConfig({
       },
       '/file': {
         target: USER_TARGET,
-        changeOrigin: true
-      },
-      // 笔记相关接口代理（加尾部斜杠避免匹配 /notes 页面路由）
-      '/note/': {
-        target: BACKEND_TARGET,
-        changeOrigin: true
-      },
-      // 回顾相关接口代理
-      '/review/': {
-        target: BACKEND_TARGET,
         changeOrigin: true
       }
     }

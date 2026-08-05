@@ -1,5 +1,7 @@
 """
-Agent 运行记录仓库 —— 封装 agent_runs、agent_steps、agent_feedback 表的 CRUD 操作。
+Agent 运行记录仓库 -- 封装 agent_runs、agent_steps、agent_feedback 表的 CRUD 操作。
+
+SQL 注入防护：所有查询均通过 SQLAlchemy ORM 参数化执行，禁止拼接原始 SQL。
 """
 import uuid
 from datetime import datetime

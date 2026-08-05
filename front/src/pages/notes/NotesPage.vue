@@ -433,7 +433,7 @@ watch(() => route.query.q, (newQ) => {
   gap: var(--space-xs);
   padding: var(--space-sm) var(--space-lg);
   background: var(--color-primary);
-  color: white;
+  color: var(--color-card);
   border: none;
   border-radius: var(--radius-md);
   font-size: 14px;
@@ -473,7 +473,7 @@ watch(() => route.query.q, (newQ) => {
 
 .category-tab.active {
   background: var(--color-primary);
-  color: white;
+  color: var(--color-card);
   border-color: var(--color-primary);
 }
 
@@ -688,7 +688,7 @@ watch(() => route.query.q, (newQ) => {
 
 .btn-icon-sm:hover {
   background: var(--color-error);
-  color: white;
+  color: var(--color-card);
 }
 
 /* ===== Load More ===== */

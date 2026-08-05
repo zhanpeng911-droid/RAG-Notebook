@@ -553,8 +553,10 @@ async def add_vector_single_v2(
     from app.services.document_index_service import save_uploaded_file
     await _ensure_space_member(space_id, user_id, db)
     result = await save_uploaded_file(file, user_id, space_id=space_id or "")
+    if result.get("duplicate_filename"):
+        raise HTTPException(status_code=409, detail=result["message"])
     if result.get("duplicate"):
-        return success_response(message=f"文件 {result['filename']} 已存在")
+        return success_response(message=f"文件 {result['filename']} 内容已存在")
     return success_response(
         data=result,
         message=result.get("message", "文件上传成功")

@@ -20,16 +20,8 @@ _magic_imported = False
 
 
 def _get_magic():
-    """惰性加载 python-magic，失败时返回 None"""
-    global _magic_module, _magic_imported
-    if not _magic_imported:
-        _magic_imported = True
-        try:
-            import magic
-            _magic_module = magic
-        except Exception:
-            _magic_module = None
-    return _magic_module
+    """python-magic 在 Windows 上会 segfault，直接返回 None 禁用。"""
+    return None
 
 # ==================== 文件类型常量 ====================
 

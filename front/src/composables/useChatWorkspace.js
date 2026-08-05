@@ -149,8 +149,11 @@ export function useChatWorkspace() {
   }
 
   async function loadSessions() {
-    const userId = userStore.getUserInfo?.id || userStore.getUserInfo?.uuid
-    if (!userId) return
+    const userId = userStore.getUserInfo?.uuid || userStore.getUserInfo?.id || userStore.getUserInfo?.user_id
+    if (!userId) {
+      console.warn('loadSessions: userId 为空，跳过')
+      return
+    }
     isSessionsLoading.value = true
     try {
       const result = await sessionApi.getUserSessions(userId)
@@ -166,6 +169,8 @@ export function useChatWorkspace() {
           const dateB = new Date(b.updated_at || b.created_at)
           return dateB - dateA
         })
+        // 同步到 sessionStore，让 Sessions.vue 也能显示
+        sessionStore.sessions = sessions.value
       }
     } catch (error) {
       console.error('加载会话列表失败:', error)
@@ -409,6 +414,11 @@ export function useChatWorkspace() {
       } catch (error) {
         console.error('加载会话历史失败:', error)
       }
+    }
+    // 知识库"向 AI 提问"跳转：预填查询
+    const docName = route.query.doc
+    if (docName) {
+      userInput.value = `请基于文档《${docName}》回答：`
     }
     scrollToBottom()
   })

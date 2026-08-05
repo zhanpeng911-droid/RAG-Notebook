@@ -180,17 +180,12 @@ const mainNavItems = [
     label: '每日回顾',
     icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>'
   },
-  {
-    path: '/sessions',
-    label: '会话管理',
-    icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="9" y1="10" x2="15" y2="10"/></svg>'
-  },
 ]
 
 // 次要导航项
 const secondaryNavItems = [
   {
-    path: '/my',
+    path: '/profile',
     label: '我的',
     icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>'
   },
@@ -211,6 +206,9 @@ function isActive(path) {
   }
   if (path === '/knowledge') {
     return route.path.startsWith('/knowledge') || route.path.startsWith('/knowledgebase')
+  }
+  if (path === '/profile') {
+    return route.path === '/profile' || route.path === '/my'
   }
   return route.path === path
 }

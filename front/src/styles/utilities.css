@@ -1,5 +1,6 @@
 /* ============================================
-   工具类 — 文本溢出、卡片阴影、点击反馈等
+   工具类 - 文本溢出、卡片边框、点击反馈等
+   纸感编辑风：边框替代阴影 · 纯色替代渐变
    ============================================ */
 
 /* ---- 文本溢出 ---- */
@@ -17,20 +18,19 @@
   overflow: hidden;
 }
 
-/* ---- 骨架屏 ---- */
+/* ---- 骨架屏（纯色脉动，无渐变） ---- */
 .skeleton {
-  background: linear-gradient(90deg, var(--color-border-light) 25%, var(--color-divider) 37%, var(--color-border-light) 63%);
-  background-size: 400% 100%;
+  background: var(--color-surface);
   animation: skeleton-loading 1.4s ease infinite;
-  border-radius: var(--radius-sm);
 }
 
-/* ---- 卡片微阴影 ---- */
+/* ---- 卡片：柔和阴影 + 细边框 ---- */
 .card-shadow {
-  box-shadow: 0 1px 3px var(--color-shadow);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 2px 12px var(--color-shadow);
 }
 
-/* ---- 点击反馈 ---- */
+/* ---- 点击反馈（纯色 overlay，无 radial-gradient） ---- */
 .click-effect {
   position: relative;
   overflow: hidden;
@@ -44,17 +44,13 @@
   height: 100%;
   top: 0; left: 0;
   pointer-events: none;
-  background-image: radial-gradient(circle, var(--color-text) 10%, transparent 10.01%);
-  background-repeat: no-repeat;
-  background-position: 50%;
-  transform: scale(10, 10);
+  background: var(--color-text);
   opacity: 0;
-  transition: transform 0.5s, opacity 1s;
+  transition: opacity 0.3s;
 }
 
 .click-effect:active::after {
-  transform: scale(0, 0);
-  opacity: 0.1;
+  opacity: 0.06;
   transition: 0s;
 }
 
@@ -81,6 +77,13 @@
 .mb-sm { margin-bottom: var(--space-sm); }
 .mb-md { margin-bottom: var(--space-md); }
 .mb-lg { margin-bottom: var(--space-lg); }
+
+/* ---- 等宽元信息（日期/编号/数据，编辑风核心信号） ---- */
+.mono {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
 
 /* ---- 隐藏/显示 ---- */
 @media (max-width: 767px) {

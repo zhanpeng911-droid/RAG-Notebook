@@ -171,7 +171,7 @@ onMounted(async () => {
 .filter-select {
   padding: 8px 12px;
   border: 1px solid var(--color-border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 14px;
   color: var(--color-text);
   background: var(--color-card);
@@ -181,7 +181,7 @@ onMounted(async () => {
   min-width: 120px;
   padding: 8px 12px;
   border: 1px solid var(--color-border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 14px;
   color: var(--color-text);
   background: var(--color-card);
@@ -192,7 +192,7 @@ onMounted(async () => {
 .log-list { display: flex; flex-direction: column; gap: 8px; }
 .log-item {
   background: var(--color-card);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   padding: 14px 16px;
   border: 1px solid var(--color-border-light);
 }
@@ -205,14 +205,14 @@ onMounted(async () => {
 .log-action-tag {
   font-size: 11px;
   padding: 2px 10px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   font-weight: 500;
 }
-.action-create { background: rgba(34,160,96,0.1); color: #22a060; }
-.action-delete { background: rgba(239,68,68,0.1); color: #ef4444; }
-.action-update { background: rgba(59,130,246,0.1); color: #3b82f6; }
-.action-login { background: rgba(232,163,61,0.1); color: #e8a33d; }
-.action-upload { background: rgba(105,183,255,0.1); color: #3f8cff; }
+.action-create { background: var(--status-success-bg); color: var(--status-success-text); }
+.action-delete { background: var(--status-error-bg); color: var(--status-error-text); }
+.action-update { background: var(--status-info-bg); color: var(--status-info-text); }
+.action-login { background: var(--status-warning-bg); color: var(--status-warning-text); }
+.action-upload { background: var(--status-info-bg); color: var(--status-info-text); }
 .action-default { background: var(--color-surface); color: var(--color-text-lighter); }
 .log-time { font-size: 12px; color: var(--color-text-lightest); }
 .log-body { font-size: 14px; color: var(--color-text); line-height: 1.5; }
@@ -224,7 +224,7 @@ onMounted(async () => {
   color: var(--color-text-lighter);
   background: var(--color-surface);
   padding: 4px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .pagination { margin-top: 16px; display: flex; justify-content: center; }
 </style>

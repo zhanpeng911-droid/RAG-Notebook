@@ -13,6 +13,7 @@
           <line x1="21" y1="21" x2="16.65" y2="16.65"/>
         </svg>
         <input
+          ref="searchInputRef"
           type="text"
           class="search-input"
           placeholder="搜索笔记..."
@@ -103,6 +104,7 @@ const modelStore = useModelStore()
 const searchQuery = ref('')
 const showUserMenu = ref(false)
 const userMenuRef = ref(null)
+const searchInputRef = ref(null)
 
 // 页面标题映射
 const pageTitleMap = {
@@ -136,7 +138,7 @@ function toggleUserMenu() {
 
 function goToMyPage() {
   showUserMenu.value = false
-  router.push('/my')
+  router.push('/profile')
 }
 
 function goToSettings() {
@@ -157,12 +159,22 @@ function handleClickOutside(event) {
   }
 }
 
+// ⌘K / Ctrl+K 聚焦搜索框
+function handleShortcut(event) {
+  if ((event.metaKey || event.ctrlKey) && event.key === 'k') {
+    event.preventDefault()
+    searchInputRef.value?.focus()
+  }
+}
+
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
+  document.addEventListener('keydown', handleShortcut)
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
+  document.removeEventListener('keydown', handleShortcut)
 })
 </script>
 

@@ -18,6 +18,7 @@ class GradingResult:
     """评估结果"""
     is_sufficient: bool
     confidence: float  # 0-1
+    confidence_level: str  # "high" / "medium" / "low" / "none"
     reason: str
     relevant_evidences: List[Evidence]
 
@@ -35,6 +36,22 @@ class EvidenceGrader:
     MIN_EVIDENCE_COUNT = 1
     # 最低置信度阈值
     MIN_CONFIDENCE = 0.4
+
+    # CRAG 纠错回路的置信度分级阈值
+    CONFIDENCE_HIGH = 0.7    # >= 0.7: 证据充足，直接生成
+    CONFIDENCE_MEDIUM = 0.4  # >= 0.4: 证据可用，正常生成
+    CONFIDENCE_LOW = 0.1     # >= 0.1: 证据勉强，CRAG 触发扩大检索
+
+    def _confidence_level(self, confidence: float) -> str:
+        """将置信度映射为分级，供 CRAG 纠错回路决策。"""
+        if confidence >= self.CONFIDENCE_HIGH:
+            return "high"
+        elif confidence >= self.CONFIDENCE_MEDIUM:
+            return "medium"
+        elif confidence >= self.CONFIDENCE_LOW:
+            return "low"
+        else:
+            return "none"
 
     def grade(
         self,
@@ -54,6 +71,7 @@ class EvidenceGrader:
             return GradingResult(
                 is_sufficient=False,
                 confidence=0.0,
+                confidence_level="none",
                 reason="未检索到任何证据",
                 relevant_evidences=[],
             )
@@ -68,6 +86,7 @@ class EvidenceGrader:
             return GradingResult(
                 is_sufficient=False,
                 confidence=0.1,
+                confidence_level="none",
                 reason="所有证据的相关性分数过低",
                 relevant_evidences=[],
             )
@@ -88,15 +107,17 @@ class EvidenceGrader:
             is_sufficient = True
 
         reason = self._generate_reason(is_sufficient, len(relevant), avg_score, retrieval_round)
+        conf_level = self._confidence_level(confidence)
 
         logger.info(
-            f"【证据评估】sufficient={is_sufficient}, confidence={confidence:.2f}, "
+            f"【证据评估】sufficient={is_sufficient}, confidence={confidence:.2f} ({conf_level}), "
             f"relevant={len(relevant)}/{len(evidences)}, round={retrieval_round}"
         )
 
         return GradingResult(
             is_sufficient=is_sufficient,
             confidence=confidence,
+            confidence_level=conf_level,
             reason=reason,
             relevant_evidences=relevant,
         )

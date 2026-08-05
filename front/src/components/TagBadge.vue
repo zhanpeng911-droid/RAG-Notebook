@@ -17,29 +17,29 @@ defineProps({
   display: inline-flex;
   align-items: center;
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-weight: 500;
   line-height: 1.5;
   white-space: nowrap;
 }
 .tag-badge--default {
-  background: var(--van-primary-color, #3f8cff);
-  color: #fff;
+  background: var(--status-info-bg);
+  color: var(--status-info-text);
 }
 .tag-badge--work {
-  background: #E8F0FE;
-  color: #1967D2;
+  background: var(--status-info-bg);
+  color: var(--status-info-text);
 }
 .tag-badge--study {
-  background: #FCE8E6;
-  color: #C5221F;
+  background: var(--status-error-bg);
+  color: var(--status-error-text);
 }
 .tag-badge--life {
-  background: #E6F4EA;
-  color: #137333;
+  background: var(--status-success-bg);
+  color: var(--status-success-text);
 }
 .tag-badge--project {
-  background: #FEF7E0;
-  color: #B06000;
+  background: var(--status-warning-bg);
+  color: var(--status-warning-text);
 }
 </style>

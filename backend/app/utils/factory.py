@@ -496,15 +496,22 @@ def create_chat_model_from_config(config: dict) -> BaseChatModel:
 
     # provider → 默认 base_url 映射
     PROVIDER_DEFAULTS = {
-        "deepseek": {"base_url": "https://api.deepseek.com", "model": "deepseek-chat"},
-        "openai":   {"base_url": "https://api.openai.com/v1", "model": "gpt-4o"},
+        "deepseek": {"base_url": "https://api.deepseek.com", "model": "deepseek-v4-flash"},
+        "openai":   {"base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
         "ollama":   {"base_url": "http://localhost:11434/v1", "model": "qwen3:7b"},
         "anthropic": {"base_url": "https://api.anthropic.com", "model": "claude-sonnet-4-20250514"},
     }
 
     defaults = PROVIDER_DEFAULTS.get(provider, {})
     base_url = base_url or defaults.get("base_url", "")
-    model_name = model_name or defaults.get("model", "deepseek-chat")
+    # custom provider 必须前端提供 model 和 base_url，否则报错
+    if provider == "custom":
+        if not model_name:
+            raise ValueError("自定义 provider 必须指定 model 名称")
+        if not base_url:
+            raise ValueError("自定义 provider 必须指定 base_url")
+    else:
+        model_name = model_name or defaults.get("model", "deepseek-v4-flash")
     base_url = _validate_llm_base_url(provider, base_url)
 
     logger.info(f"📦 动态创建 ChatModel: provider={provider}, model={model_name}, base_url={base_url}")

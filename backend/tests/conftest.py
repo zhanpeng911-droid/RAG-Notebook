@@ -70,10 +70,6 @@ sys.modules.setdefault("app.utils.prompt_loader", _mock_prompt)
 _mock_cache = MagicMock()
 sys.modules.setdefault("app.cache.llm_cache", _mock_cache)
 
-# Mock app.rag.rag_service
-_mock_rag = MagicMock()
-sys.modules.setdefault("app.rag.rag_service", _mock_rag)
-
 # Mock app.rag.vector_store
 _mock_vs = MagicMock()
 sys.modules.setdefault("app.rag.vector_store", _mock_vs)
@@ -94,10 +90,4 @@ sys.modules.setdefault("app.rag.task_queue", _mock_tq)
 _mock_ie = MagicMock()
 sys.modules.setdefault("app.utils.image_extractor", _mock_ie)
 
-# Mock app.services.knowledge_file_validator
-_mock_kfv = MagicMock()
-_mock_kfv.MAX_FILE_SIZE = 20 * 1024 * 1024
-_mock_kfv.safe_filename = lambda f: f.filename if hasattr(f, 'filename') else str(f)
-_mock_kfv.validate_file_type = MagicMock(return_value=None)
-_mock_kfv.validate_total_size = MagicMock(return_value=None)
-sys.modules.setdefault("app.services.knowledge_file_validator", _mock_kfv)
+# knowledge_file_validator 保持真实模块：其无 LLM/Chroma 依赖，且有独立单测

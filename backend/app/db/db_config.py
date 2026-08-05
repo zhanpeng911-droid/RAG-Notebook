@@ -1,11 +1,16 @@
 """
-数据库配置 —— MySQL 异步连接配置。
+数据库配置 -- MySQL 异步连接配置。
 
 连接池配置：
 - pool_size: 10（基础连接数）
 - max_overflow: 20（最大溢出连接）
 - pool_recycle: 3600（连接回收时间，防止 MySQL 断开空闲连接）
 - pool_pre_ping: True（使用前检测连接有效性）
+
+SQL 注入防护说明：
+本项目所有数据库查询均通过 SQLAlchemy ORM 参数化执行（select/where/and_ 等），
+不拼接原始 SQL。唯一的 text() 调用为健康检查 "SELECT 1"（无用户输入），安全。
+Repository 层禁止使用 text() 拼接用户可控参数。
 
 表结构变更请使用 Alembic：
     alembic upgrade head

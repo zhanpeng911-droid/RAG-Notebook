@@ -168,12 +168,14 @@ import { showToast, showConfirmDialog } from 'vant'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { noteApi } from '../../services/noteApi'
+import { useModelStore } from '../../store/model'
 import MarkdownEditor from '../../components/MarkdownEditor.vue'
 import QuickToolbar from '../../components/QuickToolbar.vue'
 import InlineCompletion from '../../components/InlineCompletion.vue'
 
 const route = useRoute()
 const router = useRouter()
+const modelStore = useModelStore()
 
 // ===== Refs =====
 const markdownEditorRef = ref(null)
@@ -311,6 +313,9 @@ async function handleSave() {
   saving.value = true
   try {
     const data = { title: title.value, content: content.value, tags: tags.value, category: category.value }
+    if (modelStore.isConfigured) {
+      data.llm_config = modelStore.config
+    }
 
     if (isNew.value) {
       const result = await noteApi.create(data)
@@ -838,8 +843,8 @@ onUnmounted(() => {
 }
 
 .src-kb {
-  background: rgba(230, 148, 10, 0.12);
-  color: #b07800;
+  background: var(--status-warning-bg);
+  color: var(--status-warning-text);
 }
 
 .related-similarity {

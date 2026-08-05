@@ -65,18 +65,20 @@ class RetrievalService:
         - "space:{space_id}": 检索指定空间的文档
     """
 
-    def __init__(self, user_id: str, space_id: str = None):
+    def __init__(self, user_id: str, space_id: str = None, llm_config: dict = None):
         """
         初始化检索服务。
 
         :param user_id: 用户 ID（必须，用于数据隔离）
         :param space_id: 空间 ID（可选，用于空间级隔离）
+        :param llm_config: 前端传入的 LLM 配置（可选，用于 HyDE 生成）
         """
         if not user_id:
             raise ValueError("user_id 不能为空")
 
         self.user_id = user_id
         self.space_id = space_id
+        self.llm_config = llm_config
 
     async def retrieve(
         self,
@@ -355,11 +357,21 @@ class RetrievalService:
     async def _generate_hyde(self, query: str) -> str:
         """生成假设性文档（HyDE）"""
         try:
-            from app.utils.factory import get_default_chat_model
+            from app.utils.factory import (
+                get_default_chat_model,
+                create_chat_model_from_config,
+                sanitize_client_llm_config,
+                llm_config_is_usable,
+            )
             from langchain_core.prompts import PromptTemplate
             from langchain_core.output_parsers import StrOutputParser
 
-            chat_model = get_default_chat_model()
+            # 优先用前端传入的 llm_config，回退服务端默认模型
+            config = sanitize_client_llm_config(self.llm_config)
+            if llm_config_is_usable(config):
+                chat_model = create_chat_model_from_config(config)
+            else:
+                chat_model = get_default_chat_model()
             hyde_prompt = PromptTemplate.from_template(
                 "基于以下问题，生成一个详细的假设性回答，用于向量检索：\n\n问题：{query}\n\n假设性回答："
             )

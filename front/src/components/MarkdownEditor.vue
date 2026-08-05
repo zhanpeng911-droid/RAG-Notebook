@@ -116,49 +116,48 @@ defineExpose({ getEditorCm, getCursorContext })
   min-height: 100%;
   height: auto !important;
   border: none !important;
-  font-family: 'Noto Sans SC', sans-serif;
-  background: #fff;
+  font-family: var(--font-body);
+  background: var(--color-card);
 }
 .markdown-editor-wrapper .bytemd-toolbar {
-  border-bottom: 1px solid #ebedf0;
-  background: #fafafa;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
 }
-/* 编辑器正文区域：白色背景 */
+/* 编辑器正文区域 */
 .markdown-editor-wrapper .CodeMirror {
-  font-family: 'Noto Sans SC', monospace;
+  font-family: var(--font-mono);
   font-size: 15px;
   line-height: 1.7;
-  background: #fff;
+  background: var(--color-card);
 }
 /* 预览区域 */
 .markdown-editor-wrapper .markdown-body {
   font-family: 'Noto Serif SC', serif;
   font-size: 15px;
   line-height: 1.8;
-  background: #fff;
+  background: var(--color-card);
   padding: 20px 24px;
 }
-/* 代码块：灰色底色高亮 */
+/* 代码块：底色高亮 */
 .markdown-editor-wrapper .markdown-body pre {
-  background: #f5f5f5;
-  border: 1px solid #e8e8e8;
-  border-radius: 6px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
 }
 .markdown-editor-wrapper .markdown-body code {
-  background: #f0f0f0;
+  background: var(--color-surface);
   padding: 2px 6px;
-  border-radius: 3px;
-  font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
   font-size: 13px;
 }
 .markdown-editor-wrapper .markdown-body pre code {
   background: transparent;
   padding: 0;
-  border-radius: 0;
 }
 /* 编辑区高亮匹配 markdown-body */
 .markdown-editor-wrapper .cm-s-default .cm-comment {
-  color: #6a737d;
+  color: var(--color-text-lighter);
   background: transparent;
 }
 

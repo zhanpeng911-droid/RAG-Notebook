@@ -188,17 +188,31 @@ async def save_uploaded_file(
     async with AsyncSessionLocal() as session:
         repo = DocumentIndexRepository(session)
 
-        # 检查是否已存在（MD5 去重）
+        # 文件名唯一性校验（按用户隔离，同名拒绝）
+        existing_filename = await repo.get_by_original_filename(filename, user_id)
+        if existing_filename:
+            # 同名文件已存在，删除刚保存的物理文件，拒绝上传
+            if os.path.exists(file_path):
+                os.unlink(file_path)
+            return {
+                "document_id": existing_filename.id,
+                "filename": existing_filename.original_filename,
+                "status": existing_filename.status.value,
+                "message": f"文件名「{filename}」已存在，请重命名后重新上传",
+                "duplicate_filename": True,
+            }
+
+        # 检查是否已存在（MD5 内容去重）
         existing = await repo.get_by_md5(md5_hex, user_id)
         if existing:
-            # 文件已存在，删除刚保存的文件
+            # 内容相同的文件已存在，删除刚保存的文件
             if os.path.exists(file_path):
                 os.unlink(file_path)
             return {
                 "document_id": existing.id,
                 "filename": existing.original_filename,
                 "status": existing.status.value,
-                "message": "文件已存在",
+                "message": "文件内容已存在",
                 "duplicate": True,
             }
 

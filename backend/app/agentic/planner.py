@@ -15,11 +15,12 @@ from app.core.logger_handler import logger
 
 class QueryType(str, Enum):
     """查询类型"""
-    FACTUAL = "factual"           # 事实查询（"什么是X"）
-    EXPLANATORY = "explanatory"   # 解释性问题（"为什么X"）
-    COMPARATIVE = "comparative"   # 比较问题（"X和Y的区别"）
-    PROCEDURAL = "procedural"     # 步骤问题（"如何做X"）
-    EXPLORATORY = "exploratory"   # 探索性问题（"关于X的信息"）
+    SIMPLE = "simple"           # 简单事实查询（"X的Y是什么"），走轻量路径
+    FACTUAL = "factual"         # 事实查询（"什么是X"）
+    EXPLANATORY = "explanatory" # 解释性问题（"为什么X"）
+    COMPARATIVE = "comparative" # 比较问题（"X和Y的区别"）
+    PROCEDURAL = "procedural"   # 步骤问题（"如何做X"）
+    EXPLORATORY = "exploratory" # 探索性问题（"关于X的信息"）
     UNKNOWN = "unknown"
 
 
@@ -47,14 +48,27 @@ class Planner:
     COMPARATIVE_KEYWORDS = ["区别", "比较", "对比", "差异", "vs", "和", "与"]
     PROCEDURAL_KEYWORDS = ["如何", "怎么", "步骤", "方法", "教程", "操作"]
 
+    # Adaptive-RAG: 简单查询判定阈值
+    SIMPLE_MAX_LENGTH = 20  # 查询长度 <= 20 字符且含事实关键词 -> SIMPLE
+
     def classify_query(self, query: str) -> QueryType:
         """
-        分类查询类型。
+        分类查询类型（Adaptive-RAG 风格：按复杂度路由）。
+
+        SIMPLE 类型优先判定：短查询 + 事实关键词 -> 轻量路径（跳过 HyDE/rerank）。
+        其余按 factual -> explanatory -> comparative -> procedural 顺序匹配。
 
         :param query: 用户查询
         :return: 查询类型
         """
         query_lower = query.lower()
+
+        # Adaptive-RAG: 简单查询优先判定
+        # 短查询且包含事实关键词，无需复杂检索策略
+        if len(query) <= self.SIMPLE_MAX_LENGTH:
+            for kw in self.FACTUAL_KEYWORDS:
+                if kw in query_lower:
+                    return QueryType.SIMPLE
 
         # 检查各类关键词
         for kw in self.FACTUAL_KEYWORDS:
@@ -95,7 +109,13 @@ class Planner:
         query_type = self.classify_query(query)
 
         # 根据查询类型调整参数
-        if query_type == QueryType.FACTUAL:
+        if query_type == QueryType.SIMPLE:
+            # Adaptive-RAG: 简单查询走轻量路径，降低延迟和成本
+            scope = "all"
+            top_k = 3
+            use_hyde = False
+            use_rerank = False
+        elif query_type == QueryType.FACTUAL:
             scope = "all"
             top_k = 5
             use_hyde = True
@@ -125,9 +145,13 @@ class Planner:
         if space_id:
             scope = f"space:{space_id}"
 
-        # 第二轮检索时降低 top_k
+        # 第二轮检索：CRAG 纠错策略
         if retrieval_round > 0:
-            top_k = max(3, top_k - 2)
+            # CRAG: 扩大检索范围 + 适当增加 top_k（而非默认降低）
+            if scope == "knowledge":
+                scope = "all"  # 从知识库扩大到知识库+笔记
+            top_k = max(5, top_k + 3)  # 扩大召回，而非缩减
+            logger.info(f"【CRAG】第二轮检索扩大范围: scope={scope}, top_k={top_k}")
 
         plan = RetrievalPlan(
             query_type=query_type,

@@ -137,7 +137,7 @@ const showPasswordConfirm = () => {
           type: 'password',
           value: oldPassword.value,
           onInput: (e) => { oldPassword.value = e.target.value },
-          style: 'width: 100%; border: 1px solid #dcdee0; border-radius: 4px; padding: 8px; box-sizing: border-box;'
+          style: 'width: 100%; border: 1px solid var(--color-border); border-radius: 2px; padding: 8px; box-sizing: border-box;'
         })
       ]),
       h('div', { style: 'margin-bottom: 15px;' }, [
@@ -146,7 +146,7 @@ const showPasswordConfirm = () => {
           type: 'password',
           value: newPassword.value,
           onInput: (e) => { newPassword.value = e.target.value },
-          style: 'width: 100%; border: 1px solid #dcdee0; border-radius: 4px; padding: 8px; box-sizing: border-box;'
+          style: 'width: 100%; border: 1px solid var(--color-border); border-radius: 2px; padding: 8px; box-sizing: border-box;'
         })
       ]),
       h('div', { style: 'margin-bottom: 15px;' }, [
@@ -155,7 +155,7 @@ const showPasswordConfirm = () => {
           type: 'password',
           value: confirmPassword.value,
           onInput: (e) => { confirmPassword.value = e.target.value },
-          style: 'width: 100%; border: 1px solid #dcdee0; border-radius: 4px; padding: 8px; box-sizing: border-box;'
+          style: 'width: 100%; border: 1px solid var(--color-border); border-radius: 2px; padding: 8px; box-sizing: border-box;'
         })
       ])
     ]),
@@ -220,7 +220,7 @@ const showBioDialog = () => {
         h('textarea', {
           value: newBioValue.value,
           onInput: (e) => { newBioValue.value = e.target.value },
-          style: 'width: 100%; border: 1px solid #dcdee0; border-radius: 4px; padding: 8px; box-sizing: border-box; min-height: 100px; resize: vertical;'
+          style: 'width: 100%; border: 1px solid var(--color-border); border-radius: 2px; padding: 8px; box-sizing: border-box; min-height: 100px; resize: vertical;'
         })
       ])
     ])
@@ -369,7 +369,7 @@ const showUsernameDialog = () => {
           type: 'text',
           value: newUsernameValue.value,
           onInput: (e) => { newUsernameValue.value = e.target.value },
-          style: 'width: 100%; border: 1px solid #dcdee0; border-radius: 4px; padding: 8px; box-sizing: border-box;'
+          style: 'width: 100%; border: 1px solid var(--color-border); border-radius: 2px; padding: 8px; box-sizing: border-box;'
         })
       ])
     ])
@@ -426,7 +426,7 @@ const showEmailDialog = () => {
           type: 'email',
           value: newEmailValue.value,
           onInput: (e) => { newEmailValue.value = e.target.value },
-          style: 'width: 100%; border: 1px solid #dcdee0; border-radius: 4px; padding: 8px; box-sizing: border-box;'
+          style: 'width: 100%; border: 1px solid var(--color-border); border-radius: 2px; padding: 8px; box-sizing: border-box;'
         })
       ])
     ])
@@ -483,7 +483,7 @@ const showPhoneDialog = () => {
           type: 'tel',
           value: newPhoneValue.value,
           onInput: (e) => { newPhoneValue.value = e.target.value },
-          style: 'width: 100%; border: 1px solid #dcdee0; border-radius: 4px; padding: 8px; box-sizing: border-box;'
+          style: 'width: 100%; border: 1px solid var(--color-border); border-radius: 2px; padding: 8px; box-sizing: border-box;'
         })
       ])
     ])
@@ -560,7 +560,7 @@ const showAvatarDialog = () => {
           style: 'width: 100%; padding: 8px; box-sizing: border-box; cursor: pointer;'
         })
       ]),
-      h('div', { style: 'margin-bottom: 15px; font-size: 12px; color: #999;' }, '请选择本地图片文件，建议使用正方形图片')
+      h('div', { style: 'margin-bottom: 15px; font-size: 12px; color: var(--color-text-lighter);' }, '请选择本地图片文件，建议使用正方形图片')
     ])
   }).then(async () => {
     // 点击确认按钮
@@ -631,7 +631,7 @@ const showAvatarDialog = () => {
 .info-group :deep(.van-cell),
 .security-group :deep(.van-cell) {
   background: var(--color-card);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   margin-bottom: 6px;
   box-shadow: 0 1px 2px var(--color-shadow);
 }
@@ -653,7 +653,7 @@ const showAvatarDialog = () => {
 
 .avatar-group :deep(.van-cell-group),
 .security-group :deep(.van-cell-group) {
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 .password-dialog .van-dialog__content {

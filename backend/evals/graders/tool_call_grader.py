@@ -11,7 +11,6 @@ Grades based on:
 
 # Known tools from backend/app/agent/agent_tools.py
 KNOWN_TOOLS = {
-    "rag_summary_tools",
     "search_notes_tool",
     "get_note_stats_tool",
     "get_today_reviews_tool",

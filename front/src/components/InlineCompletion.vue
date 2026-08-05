@@ -114,8 +114,8 @@ onUnmounted(() => {
 
 .ghost-text {
   opacity: 0.3;
-  color: #999;
-  font-family: 'Noto Sans SC', monospace;
+  color: var(--color-text-lightest);
+  font-family: var(--font-mono);
   font-size: 15px;
   white-space: pre-wrap;
 }
@@ -125,7 +125,7 @@ onUnmounted(() => {
   display: inline;
   white-space: nowrap;
   font-size: 11px;
-  color: #d0d0d0;
+  color: var(--color-border);
   user-select: none;
 }
 
@@ -135,16 +135,16 @@ onUnmounted(() => {
 
 .ghost-sep {
   margin: 0 3px;
-  color: #e0e0e0;
+  color: var(--color-border-light);
 }
 
 .ghost-accept-btn {
   pointer-events: auto;
   cursor: pointer;
-  color: #3f8cff;
+  color: var(--color-primary);
   -webkit-tap-highlight-color: transparent;
 }
 .ghost-accept-btn:active {
-  color: #2a78f0;
+  color: var(--color-primary-hover);
 }
 </style>

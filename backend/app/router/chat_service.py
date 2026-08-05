@@ -1,36 +1,17 @@
-from typing import List, Optional, Tuple, Dict, Any
+from typing import List, Optional, Tuple, Dict
 import uuid
 
 from fastapi import HTTPException
 
-from app.core.logger_handler import logger
-from app.rag.rag_service import RagService
-from app.agent.agent import get_agent_response
 from app.services import session_manager as sm
 
 
 class ChatService:
-    """路由服务层，处理业务逻辑"""
+    """路由服务层，处理会话管理业务逻辑。
 
-    async def handle_agent_query(self, query: str, session_id: Optional[str], user_id: str) -> Tuple[str, dict, str]:
-        """处理智能代理查询逻辑"""
-        session_id = session_id or str(uuid.uuid4())
-
-        history = await sm.session_manager.get_history(session_id, user_id)
-
-        result = await get_agent_response(query, history)
-        response = result.get("response")
-        steps = result.get("steps", [])
-
-        await sm.session_manager.add_message(session_id, user_id, query, response)
-
-        return session_id, response, steps
-
-    async def handle_rag_query(self, query: str, user_id: str, llm_config: dict = None) -> str:
-        """处理 RAG 查询逻辑"""
-        rag_service = RagService(user_id, llm_config=llm_config)
-        response = await rag_service.rag_summary(query)
-        return response
+    注意：RAG 查询和 Agent 对话已迁移至 agent_router，
+    本服务仅保留会话历史管理功能。
+    """
 
     async def handle_get_session(self, session_id: str, user_id: str) -> List[Tuple[str, str]]:
         """处理获取会话逻辑"""
