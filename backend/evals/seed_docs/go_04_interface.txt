@@ -1,0 +1,31 @@
+# Go interface（接口）
+
+Go 的接口是隐式实现的——不需要显式声明 implements。
+
+## 定义
+```go
+type Reader interface {
+    Read(p []byte) (n int, err error)
+}
+```
+
+## 隐式实现
+任何类型只要实现了 Read 方法，就满足 Reader 接口，无需声明。
+
+## 空接口
+interface{}（Go 1.18+ 可写为 any）可以接受任意类型。
+
+## 类型断言
+```go
+v, ok := i.(Reader)
+```
+
+## 类型开关
+```go
+switch v := i.(type) {
+case int:
+    fmt.Println("int", v)
+case string:
+    fmt.Println("string", v)
+}
+```

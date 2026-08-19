@@ -1,0 +1,16 @@
+# Kubernetes ConfigMap 和 Secret
+
+## ConfigMap
+- 存储非敏感配置数据（键值对）。
+- 可以作为环境变量或文件挂载到 Pod。
+- 修改 ConfigMap 不会自动重启 Pod（需要手动触发或使用工具）。
+
+## Secret
+- 存储敏感数据（密码、密钥、证书）。
+- Base64 编码（不是加密，需要配合 RBAC 控制访问）。
+- 类型：Opaque（通用）、dockerconfigjson（镜像仓库认证）、tls（TLS 证书）。
+
+## 使用方式
+1. 环境变量：envFrom 或 env.valueFrom。
+2. 文件挂载：volumeMounts 挂载为文件。
+3. 拉取私有镜像：imagePullSecrets。

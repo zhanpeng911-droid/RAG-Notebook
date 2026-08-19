@@ -1,0 +1,14 @@
+# MySQL undo log（回滚日志）
+
+undo log 记录数据修改前的旧值，用于事务回滚和 MVCC。
+
+## 作用
+1. 事务回滚：根据 undo log 恢复数据到修改前状态。
+2. MVCC：通过 undo log 构建数据的历史版本，实现非阻塞读。
+
+## 类型
+- insert undo log：INSERT 操作的回滚日志，事务提交后可直接删除。
+- update undo log：UPDATE/DELETE 操作的回滚日志，需要支持 MVCC，不能立即删除。
+
+## purge 线程
+当没有活跃事务需要读旧版本时，purge 线程清理对应的 undo log。

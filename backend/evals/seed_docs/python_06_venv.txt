@@ -1,0 +1,16 @@
+# Python 虚拟环境
+
+## 为什么需要虚拟环境
+- 不同项目可能需要不同版本的依赖包。
+- 虚拟环境隔离各项目的依赖，避免冲突。
+
+## 常用工具
+1. venv（内置）：python -m venv .venv
+2. virtualenv：第三方，比 venv 更快，支持更多功能。
+3. conda：适合科学计算，可以管理非 Python 依赖。
+4. uv：Rust 编写，极快的包管理和虚拟环境工具。
+
+## 依赖管理
+- requirements.txt：pip freeze > requirements.txt。
+- pyproject.toml：现代 Python 项目标准（PEP 621）。
+- uv.lock / poetry.lock：锁定文件，保证可复现安装。

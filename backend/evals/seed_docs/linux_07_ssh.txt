@@ -1,0 +1,17 @@
+# Linux SSH 远程连接
+
+## 基本用法
+- ssh user@host：远程登录。
+- ssh -p 2222 user@host：指定端口。
+- ssh-keygen：生成密钥对。
+- ssh-copy-id user@host：安装公钥到远程主机。
+
+## SSH 密钥认证
+1. 客户端生成密钥对（~/.ssh/id_rsa 和 id_rsa.pub）。
+2. 公钥复制到远程主机的 ~/.ssh/authorized_keys。
+3. 连接时用私钥认证，无需密码。
+
+## SSH 隧道
+- 本地端口转发：ssh -L 8080:remote:80 user@host。
+- 远程端口转发：ssh -R 8080:local:80 user@host。
+- 动态端口转发（SOCKS 代理）：ssh -D 1080 user@host。

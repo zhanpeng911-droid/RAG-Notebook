@@ -1,0 +1,25 @@
+# Python 装饰器
+
+装饰器是一种高阶函数，在不修改原函数的情况下为其添加新功能。
+
+## 基本语法
+```python
+def log(func):
+    def wrapper(*args, **kwargs):
+        print(f"调用 {func.__name__}")
+        return func(*args, **kwargs)
+    return wrapper
+
+@log
+def hello():
+    print("hello")
+```
+
+## 带参数的装饰器
+需要三层嵌套：外层接收参数，中层接收函数，内层执行。
+
+## functools.wraps
+使用 @functools.wraps(func) 保留原函数的元信息（__name__、__doc__）。
+
+## 类装饰器
+通过 __call__ 方法实现，可以在 __init__ 中接收参数。

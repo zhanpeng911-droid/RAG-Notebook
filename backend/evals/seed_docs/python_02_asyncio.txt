@@ -1,0 +1,18 @@
+# Python asyncio 异步编程
+
+asyncio 是 Python 的异步 I/O 框架，基于事件循环（Event Loop）。
+
+## 核心概念
+- async def：定义协程函数。
+- await：等待协程完成，交出控制权。
+- asyncio.create_task：调度协程并发执行。
+- asyncio.gather：并发运行多个协程。
+
+## 事件循环
+- 事件循环监控 I/O 事件，就绪时恢复对应协程。
+- 单线程内通过协程切换实现并发，不需要多线程。
+
+## 与多线程区别
+- asyncio：单线程协程切换，无锁问题，适合 I/O 密集型。
+- 多线程：受 GIL 限制，有线程切换开销。
+- 多进程：真正的并行，适合 CPU 密集型。

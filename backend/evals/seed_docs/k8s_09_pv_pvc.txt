@@ -1,0 +1,16 @@
+# Kubernetes 持久化存储
+
+## PV 和 PVC
+- PV（PersistentVolume）：集群管理员创建的存储资源。
+- PVC（PersistentVolumeClaim）：用户对存储的请求。
+- PVC 匹配 PV 的容量和访问模式。
+
+## 访问模式
+- ReadWriteOnce（RWO）：单节点读写。
+- ReadOnlyMany（ROX）：多节点只读。
+- ReadWriteMany（RWX）：多节点读写（需要 NFS 等共享存储）。
+
+## StorageClass
+- 动态供给：PVC 创建时自动创建 PV。
+- 支持多种 provisioner（NFS、Ceph、云盘等）。
+- 可以设置默认 StorageClass。

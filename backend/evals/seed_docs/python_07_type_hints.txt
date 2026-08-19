@@ -1,0 +1,21 @@
+# Python 类型提示（Type Hints）
+
+类型提示是 Python 3.5+ 的功能，用于标注变量和函数的类型。
+
+## 基本用法
+```python
+def greet(name: str) -> str:
+    return f"Hello, {name}"
+
+x: int = 10
+names: list[str] = []
+```
+
+## typing 模块
+- Optional[str]：等价于 str | None。
+- Union[int, str]：int 或 str。
+- Callable[[int], str]：接受 int 返回 str 的可调用对象。
+- TypedDict：带类型的字典。
+
+## 运行时不强制
+类型提示不影响运行时行为，但可以被 mypy/pyright 等工具静态检查。

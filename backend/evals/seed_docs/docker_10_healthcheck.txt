@@ -1,0 +1,21 @@
+# Docker 健康检查
+
+## HEALTHCHECK 指令
+```dockerfile
+HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
+  CMD curl -f http://localhost:8080/health || exit 1
+```
+
+## 状态
+- starting：初始状态，正在执行首次健康检查。
+- healthy：健康检查通过。
+- unhealthy：连续 retries 次检查失败。
+
+## 参数
+- interval：检查间隔（默认 30s）。
+- timeout：单次检查超时（默认 30s）。
+- start-period：启动宽限期（默认 0s）。
+- retries：连续失败次数（默认 3）。
+
+## 与编排工具配合
+Kubernetes 有独立的 liveness/readiness probe，不依赖 Docker HEALTHCHECK。

@@ -1,0 +1,18 @@
+# Dockerfile 指令
+
+## CMD vs ENTRYPOINT
+- CMD：容器默认启动命令，可被 docker run 参数覆盖。
+- ENTRYPOINT：容器入口命令，docker run 参数作为追加参数。
+- 组合使用：ENTRYPOINT 指定程序，CMD 指定默认参数。
+
+## 常用指令
+- FROM：基础镜像。
+- RUN：构建时执行命令。
+- COPY/ADD：复制文件到镜像。
+- ENV：设置环境变量。
+- EXPOSE：声明端口。
+- WORKDIR：设置工作目录。
+- VOLUME：声明挂载点。
+
+## 多阶段构建
+用多个 FROM 阶段，最终镜像只保留最后阶段的文件，减小镜像体积。

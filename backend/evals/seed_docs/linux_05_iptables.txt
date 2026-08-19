@@ -1,0 +1,25 @@
+# Linux iptables 防火墙
+
+iptables 是 Linux 内核的包过滤防火墙。
+
+## 四表五链
+- 表：filter（过滤）、nat（地址转换）、mangle（修改）、raw。
+- 链：INPUT、OUTPUT、FORWARD、PREROUTING、POSTROUTING。
+
+## 常用规则
+```bash
+# 允许 SSH
+iptables -A INPUT -p tcp --dport 22 -j ACCEPT
+# 允许 HTTP/HTTPS
+iptables -A INPUT -p tcp --dport 80 -j ACCEPT
+iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+# 拒绝其他入站
+iptables -A INPUT -j DROP
+# 保存规则
+iptables-save > /etc/iptables/rules.v4
+```
+
+## 动作
+- ACCEPT：放行。
+- DROP：丢弃。
+- REJECT：拒绝并返回错误。

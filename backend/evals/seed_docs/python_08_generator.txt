@@ -1,0 +1,23 @@
+# Python 生成器（Generator）
+
+生成器是一种特殊的迭代器，使用 yield 暂停函数执行并返回值。
+
+## 基本用法
+```python
+def count_up(n):
+    i = 0
+    while i < n:
+        yield i
+        i += 1
+```
+
+## 优势
+- 惰性求值：按需生成值，不占用大量内存。
+- 适合处理大数据流（读取大文件、数据库游标）。
+
+## 生成器表达式
+(x**2 for x in range(1000000)) 比 [x**2 for x in range(1000000)] 节省内存。
+
+## send 和 throw
+- gen.send(value)：向生成器发送值，yield 表达式接收。
+- gen.throw(Exception)：在 yield 处抛出异常。

@@ -1,0 +1,20 @@
+# Go goroutine
+
+goroutine 是 Go 语言的轻量级线程。
+
+## 特点
+- 初始栈仅 2KB（线程通常 1-8MB）。
+- 由 Go 运行时调度，不依赖操作系统线程。
+- M:N 调度——M 个 goroutine 映射到 N 个 OS 线程。
+
+## 创建
+```go
+go func() {
+    fmt.Println("hello from goroutine")
+}()
+```
+
+## 与线程区别
+- goroutine 更轻量，可以创建数十万个。
+- goroutine 通信通过 channel，不推荐共享内存。
+- goroutine 由 Go 运行时调度，切换成本远低于 OS 线程。

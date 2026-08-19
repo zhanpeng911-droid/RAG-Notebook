@@ -1,0 +1,18 @@
+# Kafka 消息保留策略
+
+## 基于时间
+- log.retention.hours：保留时间（默认 168 小时 = 7 天）。
+- 超过时间的消息被删除。
+
+## 基于大小
+- log.retention.bytes：每个 Partition 的最大大小（默认 -1 即无限）。
+- 超过大小从最旧的消息开始删除。
+
+## 日志压缩（Log Compaction）
+- 对于相同 key 的消息，只保留最新值。
+- 适合状态变更日志（如用户信息更新）。
+- 通过 cleanup.policy=compact 开启。
+
+## Segment
+- 日志文件分为多个 Segment（默认 1GB）。
+- 只有 inactive segment 才会被清理。

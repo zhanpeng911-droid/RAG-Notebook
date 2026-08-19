@@ -1,0 +1,24 @@
+# Docker Compose
+
+Docker Compose 用于定义和运行多容器应用。
+
+## docker-compose.yml
+```yaml
+services:
+  web:
+    build: .
+    ports:
+      - "8080:80"
+    depends_on:
+      - db
+  db:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: secret
+```
+
+## 常用命令
+- docker-compose up -d：启动所有服务。
+- docker-compose down：停止并删除容器。
+- docker-compose logs：查看日志。
+- docker-compose exec：进入容器。

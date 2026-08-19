@@ -1,0 +1,20 @@
+# Linux 日志管理
+
+## syslog
+- /var/log/messages 或 /var/log/syslog：系统日志。
+- /var/log/auth.log：认证日志。
+- /var/log/nginx/：Nginx 日志。
+- /var/log/docker：Docker 日志。
+
+## journalctl
+systemd 的日志管理工具：
+- journalctl -u service：查看服务日志。
+- journalctl --since today：今天的日志。
+- journalctl -f：实时跟踪日志。
+- journalctl -p err：只看错误级别。
+
+## logrotate
+日志轮转工具，自动压缩和清理旧日志：
+- 配置文件在 /etc/logrotate.d/。
+- 支持按大小或时间轮转。
+- 保留指定数量的历史日志。

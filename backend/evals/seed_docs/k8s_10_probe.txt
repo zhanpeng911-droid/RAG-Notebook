@@ -1,0 +1,17 @@
+# Kubernetes 健康探针
+
+## 三种探针
+1. livenessProbe：存活探针，失败时重启容器。
+2. readinessProbe：就绪探针，失败时从 Service 端点移除（不重启）。
+3. startupProbe：启动探针，成功后才执行 liveness/readiness（适合慢启动应用）。
+
+## 探测方式
+- HTTP GET：检查 HTTP 响应码（2xx/3xx 为成功）。
+- TCP Socket：检查 TCP 端口是否可连接。
+- Exec：执行容器内命令，退出码 0 为成功。
+
+## 参数
+- initialDelaySeconds：容器启动后等待多久开始探测。
+- periodSeconds：探测间隔。
+- timeoutSeconds：探测超时。
+- failureThreshold：连续失败次数。

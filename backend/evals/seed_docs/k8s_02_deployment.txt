@@ -1,0 +1,17 @@
+# Kubernetes Deployment
+
+Deployment 管理 Pod 的副本集（ReplicaSet），支持滚动更新和回滚。
+
+## 核心功能
+- 副本控制：确保指定数量的 Pod 运行。
+- 滚动更新：逐步替换旧版本 Pod。
+- 回滚：回退到之前的版本。
+- 扩缩容：修改 replicas 数量。
+
+## 滚动更新策略
+- RollingUpdate（默认）：逐步创建新 Pod，删除旧 Pod。
+- Recreate：先删除所有旧 Pod，再创建新 Pod。
+
+## maxSurge 和 maxUnavailable
+- maxSurge：滚动更新时最多超出期望副本数的数量。
+- maxUnavailable：滚动更新时最多不可用的副本数。

@@ -1,0 +1,14 @@
+# Docker 数据卷（Volume）
+
+## 为什么需要数据卷
+容器删除后数据丢失，数据卷将数据持久化到宿主机。
+
+## 三种挂载方式
+1. volume：由 Docker 管理的命名卷，存储在 /var/lib/docker/volumes/。
+2. bind mount：直接挂载宿主机目录，docker run -v /host/path:/container/path。
+3. tmpfs：数据存在内存中，容器停止后消失。
+
+## 特点
+- volume 可以在容器间共享。
+- volume 独立于容器生命周期。
+- bind mount 适合开发环境（挂载源代码）。

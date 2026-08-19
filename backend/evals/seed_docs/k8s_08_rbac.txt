@@ -1,0 +1,26 @@
+# Kubernetes RBAC（基于角色的访问控制）
+
+## 核心概念
+- Role：命名空间内的权限规则。
+- ClusterRole：集群级权限规则。
+- RoleBinding：将 Role 绑定到用户/组/服务账户。
+- ClusterRoleBinding：将 ClusterRole 绑定到主体。
+
+## ServiceAccount
+- Pod 默认使用 default ServiceAccount。
+- 可以创建自定义 ServiceAccount 并绑定角色。
+- Pod 通过 ServiceAccount 的 token 访问 K8s API。
+
+## 示例
+创建只读角色并绑定到 ServiceAccount：
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: default
+  name: pod-reader
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+```

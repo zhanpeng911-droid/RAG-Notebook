@@ -1,0 +1,17 @@
+# Redis 持久化机制
+
+## AOF（Append Only File）
+AOF 记录所有写操作命令，追加到文件中。
+
+### fsync 策略
+1. always：每次写操作都同步到磁盘，数据安全性最高，性能最差。
+2. everysec：每秒同步一次，是 Redis 的默认策略，最多丢失 1 秒数据。
+3. no：由操作系统决定何时同步，性能最好，数据安全性最低。
+
+## RDB（Redis Database）
+RDB 是快照持久化，将某个时间点的所有数据保存到二进制文件。
+- save：阻塞式快照。
+- bgsave：后台 fork 子进程执行快照。
+
+## 混合持久化（Redis 4.0+）
+AOF 重写时先以 RDB 格式写入快照，再将增量命令以 AOF 格式追加。配置 aof-use-rdb-preamble yes 开启。

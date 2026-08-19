@@ -1,0 +1,25 @@
+# Kubernetes Ingress
+
+Ingress 提供 HTTP/HTTPS 七层路由，将外部流量路由到集群内 Service。
+
+## Ingress Controller
+- 需要部署 Ingress Controller（如 nginx-ingress、traefik）。
+- Controller 监听 Ingress 资源变化并更新负载均衡配置。
+
+## 路由规则
+```yaml
+spec:
+  rules:
+  - host: api.example.com
+    http:
+      paths:
+      - path: /v1
+        backend:
+          service:
+            name: api-v1-service
+            port:
+              number: 80
+```
+
+## TLS
+通过 Secret 存储 TLS 证书，Ingress 配置 tls 字段启用 HTTPS。

@@ -1,0 +1,28 @@
+# Python 海象运算符（:=）
+
+海象运算符（walrus operator）是 Python 3.8 引入的赋值表达式。
+
+## 基本用法
+在表达式中赋值：
+```python
+if (n := len(data)) > 10:
+    print(f"数据太长: {n}")
+```
+
+## 常见场景
+1. while 循环读取输入：
+```python
+while chunk := f.read(8192):
+    process(chunk)
+```
+
+2. 列表推导中的条件过滤：
+```python
+results = [y for x in data if (y := f(x)) is not None]
+```
+
+3. 避免重复计算：
+```python
+if (match := pattern.search(text)):
+    print(match.group())
+```

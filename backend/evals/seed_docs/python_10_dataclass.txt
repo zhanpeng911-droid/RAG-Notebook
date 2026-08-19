@@ -1,0 +1,24 @@
+# Python dataclass
+
+dataclass 是 Python 3.7+ 的装饰器，自动生成类的样板代码。
+
+```python
+from dataclasses import dataclass, field
+
+@dataclass
+class User:
+    name: str
+    age: int = 0
+    tags: list = field(default_factory=list)
+```
+
+## 自动生成的方法
+- __init__：构造函数。
+- __repr__：字符串表示。
+- __eq__：相等比较。
+- __hash__（frozen=True 时生成）。
+
+## 参数
+- frozen=True：不可变（类似 NamedTuple）。
+- slots=True：使用 __slots__ 节省内存（3.10+）。
+- order=True：生成比较方法（__lt__ 等）。

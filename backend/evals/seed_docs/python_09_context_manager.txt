@@ -1,0 +1,20 @@
+# Python 上下文管理器（Context Manager）
+
+上下文管理器通过 with 语句管理资源的获取和释放。
+
+## 使用方式
+```python
+with open("file.txt") as f:
+    content = f.read()
+# 文件自动关闭
+```
+
+## 实现方式
+1. 类实现：定义 __enter__ 和 __exit__ 方法。
+2. contextlib.contextmanager 装饰器：用生成器实现。
+
+## __exit__ 处理异常
+__exit__ 方法接收异常信息，返回 True 则抑制异常，返回 False 则传播异常。
+
+## async with
+异步上下文管理器，使用 __aenter__ 和 __aexit__，配合 async with 使用。

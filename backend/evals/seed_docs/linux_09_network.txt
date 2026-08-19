@@ -1,0 +1,20 @@
+# Linux 网络配置
+
+## 常用命令
+- ip addr：查看 IP 地址。
+- ip route：查看路由表。
+- ping host：测试连通性。
+- netstat -tlnp / ss -tlnp：查看监听端口。
+- curl：HTTP 请求。
+- wget：下载文件。
+
+## 网络配置
+- /etc/hosts：主机名映射。
+- /etc/resolv.conf：DNS 配置。
+- /etc/network/interfaces 或 netplan：网络接口配置。
+
+## 排查网络问题
+1. ping 网关：检查局域网连通性。
+2. ping 8.8.8.8：检查外网连通性。
+3. ping google.com：检查 DNS 解析。
+4. telnet host port / nc -zv host port：检查端口连通性。

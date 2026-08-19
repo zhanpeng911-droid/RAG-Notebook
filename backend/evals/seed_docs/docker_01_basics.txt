@@ -1,0 +1,14 @@
+# Docker 容器基础
+
+## Docker vs 虚拟机
+- Docker 共享宿主机内核，启动秒级，资源占用 MB 级。
+- 虚拟机有独立内核，启动分钟级，资源占用 GB 级。
+- Docker 进程级隔离，虚拟机完全隔离。
+
+## 核心概念
+- 镜像（Image）：只读模板，包含运行环境和应用代码。
+- 容器（Container）：镜像的运行实例，可读写。
+- 仓库（Registry）：存储和分发镜像（如 Docker Hub）。
+
+## 镜像分层
+Docker 镜像采用联合文件系统，每条 Dockerfile 指令创建一层。只读层 + 可写层，修改时 Copy-on-Write。

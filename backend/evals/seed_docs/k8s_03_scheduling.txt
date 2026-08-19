@@ -1,0 +1,16 @@
+# Kubernetes 调度机制
+
+## 调度过程
+1. 过滤（Filter）：排除不满足条件的节点（资源不足、端口冲突等）。
+2. 打分（Score）：对剩余节点打分（资源均衡、亲和性等）。
+3. 绑定（Bind）：将 Pod 绑定到得分最高的节点。
+
+## 调度约束
+- nodeSelector：简单标签匹配。
+- nodeAffinity：更灵活的节点亲和性（硬性/软性）。
+- podAffinity/podAntiAffinity：Pod 间亲和/反亲和。
+- Taints 和 Tolerations：节点污点和容忍度。
+
+## 资源请求
+- requests：调度依据，保证最小资源。
+- limits：上限，超过会被限制或驱逐。

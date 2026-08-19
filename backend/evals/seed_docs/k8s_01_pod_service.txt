@@ -1,0 +1,14 @@
+# Kubernetes Pod 和 Service
+
+## Pod
+- Pod 是 K8s 最小调度单元，包含一个或多个容器。
+- 同一 Pod 内容器共享网络和存储。
+- Pod 是临时的，IP 会变化。
+
+## Service
+- Service 提供稳定的网络端点，负载均衡到后端 Pod。
+- 类型：ClusterIP（集群内部）、NodePort（节点端口）、LoadBalancer（云负载均衡）、ExternalName。
+
+## 标签选择器
+- Service 通过 selector 匹配 Pod 的 labels。
+- 流量通过 kube-proxy 的 iptables/IPVS 规则转发到 Pod。

@@ -1,0 +1,18 @@
+# 分布式事务 - Kafka 侧
+
+## Kafka 事务机制
+
+Kafka 从 0.11 版本开始支持跨分区、跨主题的原子事务。
+
+### 事务性生产者
+- 通过 transaction.id 开启事务
+- initTransactions -> beginTransaction -> 发送消息 -> commitTransaction
+- 事务消息通过 transaction marker 标记提交或中止
+
+### 隔离级别
+- read_committed：消费者只读已提交的事务消息（默认推荐）
+- read_uncommitted：消费者读取所有消息包括未提交的
+
+### 与外部系统的事务协调
+Kafka 本身不提供跨系统事务，需要通过**事务消息 + 本地消息表**或
+**Outbox Pattern** 模式实现分布式事务的最终一致性。

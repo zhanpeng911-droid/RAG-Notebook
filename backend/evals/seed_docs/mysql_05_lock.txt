@@ -1,0 +1,15 @@
+# MySQL InnoDB 锁
+
+## 行锁类型
+- 共享锁（S锁）：读锁，SELECT ... LOCK IN SHARE MODE。
+- 排他锁（X锁）：写锁，SELECT ... FOR UPDATE、UPDATE、DELETE。
+- 记录锁（Record Lock）：锁住索引记录。
+- 间隙锁（Gap Lock）：锁住索引记录之间的间隙，防止幻读。
+- 临键锁（Next-Key Lock）：记录锁 + 间隙锁，是 RR 隔离级别的默认行锁。
+
+## 表锁
+- 意向锁（IS/IX）：行锁前先加表级意向锁，提高锁冲突检测效率。
+- AUTO-INC 锁：自增列插入时使用。
+
+## 死锁
+InnoDB 自动检测死锁并回滚代价较小的事务。

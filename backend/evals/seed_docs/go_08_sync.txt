@@ -1,0 +1,39 @@
+# Go sync 包（同步原语）
+
+## Mutex（互斥锁）
+```go
+var mu sync.Mutex
+mu.Lock()
+// 临界区
+mu.Unlock()
+```
+
+## RWMutex（读写锁）
+- 允许多个读同时进行。
+- 写时排他。
+```go
+var rw sync.RWMutex
+rw.RLock() / rw.RUnlock()  // 读锁
+rw.Lock() / rw.Unlock()    // 写锁
+```
+
+## WaitGroup（等待组）
+```go
+var wg sync.WaitGroup
+wg.Add(3)
+for i := 0; i < 3; i++ {
+    go func() {
+        defer wg.Done()
+        // work
+    }()
+}
+wg.Wait()
+```
+
+## Once（一次性执行）
+```go
+var once sync.Once
+once.Do(func() {
+    // 只执行一次
+})
+```

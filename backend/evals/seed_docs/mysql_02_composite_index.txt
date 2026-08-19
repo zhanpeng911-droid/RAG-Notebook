@@ -1,0 +1,8 @@
+# MySQL 联合索引与最左前缀原则
+
+联合索引 (a, b, c) 遵循最左前缀原则：
+- WHERE a = 1 可以用索引。
+- WHERE a = 1 AND b = 2 可以用索引。
+- WHERE a = 1 AND b = 2 AND c = 3 可以用索引。
+- WHERE b = 2 不可以用索引（跳过了 a）。
+- WHERE a = 1 AND b > 5 AND c = 3 只有 a 和 b 能用索引，c 用不到（范围查询中断）。

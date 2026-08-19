@@ -1,0 +1,23 @@
+# Redis 分布式锁
+
+## 基本实现
+使用 SET key value NX PX timeout 命令实现分布式锁。
+- NX：key 不存在才设置（互斥）。
+- PX：设置过期时间（防死锁）。
+- value：设为唯一标识（UUID），用于安全释放锁。
+
+## 释放锁
+释放锁需要先判断 value 是否匹配，再删除。必须用 Lua 脚本保证原子性：
+```lua
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+else
+    return 0
+end
+```
+
+## Redisson
+Redisson 框架提供更完善的分布式锁：
+- 可重入锁：基于 Hash 结构记录重入次数。
+- 看门狗（Watchdog）：自动续期，避免业务未完成锁就过期。
+- 公平锁、读写锁、信号量等。

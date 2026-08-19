@@ -1,0 +1,24 @@
+# Linux systemd 服务管理
+
+systemd 是现代 Linux 的初始化系统和服务管理器。
+
+## 常用命令
+- systemctl start/stop/restart service：管理服务。
+- systemctl enable/disable service：开机自启。
+- systemctl status service：查看状态。
+- journalctl -u service：查看服务日志。
+
+## 服务文件
+```ini
+[Unit]
+Description=My App
+
+[Service]
+ExecStart=/usr/bin/myapp
+Restart=always
+User=app
+
+[Install]
+WantedBy=multi-user.target
+```
+放在 /etc/systemd/system/ 下，执行 systemctl daemon-reload 生效。

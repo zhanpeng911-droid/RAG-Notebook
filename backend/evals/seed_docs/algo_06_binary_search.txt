@@ -1,0 +1,28 @@
+# 二分查找
+
+二分查找要求数组有序，时间复杂度 O(log n)。
+
+## 基本模板
+```python
+def binary_search(nums, target):
+    lo, hi = 0, len(nums) - 1
+    while lo <= hi:
+        mid = lo + (hi - lo) // 2
+        if nums[mid] == target:
+            return mid
+        elif nums[mid] < target:
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return -1
+```
+
+## 变体
+- 查找第一个等于 target 的位置。
+- 查找最后一个等于 target 的位置。
+- 查找第一个大于 target 的位置。
+- 查找最后一个小于 target 的位置。
+
+## 适用条件
+- 数组有序（或部分有序）。
+- 支持随机访问（数组，非链表）。

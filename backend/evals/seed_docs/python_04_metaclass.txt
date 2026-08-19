@@ -1,0 +1,20 @@
+# Python 元类（Metaclass）
+
+元类是创建类的类。普通类通过 type 创建，元类可以自定义类的创建过程。
+
+## type
+type 是 Python 的默认元类。type('Foo', (object,), {'attr': 1}) 创建一个类。
+
+## 自定义元类
+```python
+class MyMeta(type):
+    def __new__(mcs, name, bases, attrs):
+        attrs['custom'] = True
+        return super().__new__(mcs, name, bases, attrs)
+
+class Foo(metaclass=MyMeta):
+    pass
+```
+
+## __init_subclass__
+Python 3.6+ 的 __init_subclass__ 可以替代大多数元类场景，更简单。

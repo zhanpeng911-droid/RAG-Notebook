@@ -1,0 +1,15 @@
+# Docker 镜像仓库（Registry）
+
+## Docker Hub
+- 公共镜像仓库，官方镜像和用户镜像。
+- 支持自动构建（GitHub 集成）。
+
+## 私有仓库
+- Docker Registry：官方开源的私有仓库。
+- Harbor：企业级仓库，支持权限管理、镜像扫描、复制。
+- 云厂商：ACR（阿里云）、ECR（AWS）。
+
+## 镜像标签
+- latest：默认标签，不保证是最新的。
+- 语义化版本：1.2.3。
+- digest：不可变标识，sha256:xxx。

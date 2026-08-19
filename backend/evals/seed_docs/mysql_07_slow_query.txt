@@ -1,0 +1,17 @@
+# MySQL 慢查询优化
+
+## 定位慢查询
+- 开启 slow_query_log，设置 long_query_time 阈值。
+- 使用 EXPLAIN 分析执行计划。
+
+## EXPLAIN 关键字段
+- type：访问类型，从好到差：const > eq_ref > ref > range > index > ALL。
+- key：实际使用的索引。
+- rows：预估扫描行数。
+- Extra：Using index（覆盖索引）、Using filesort（文件排序）、Using temporary（临时表）。
+
+## 优化手段
+- 添加合适索引（遵循最左前缀原则）。
+- 避免 SELECT *，只查需要的列。
+- 避免索引失效：不在索引列上做运算、函数、类型转换。
+- 大分页用延迟关联：先查主键再关联查询。

@@ -1,0 +1,17 @@
+# Kafka 消费者组
+
+## 核心概念
+- 消费者组是一组协同消费 Topic 的消费者。
+- 组内每个消费者负责不同的 Partition。
+- 不同消费者组互不影响，各自消费完整数据。
+
+## Offset 管理
+- 消费者记录消费位置（offset）。
+- 自动提交：enable.auto.commit=true（默认每 5 秒提交）。
+- 手动提交：commitSync() / commitAsync()，更精确但需要自行管理。
+- __consumer_offsets 主题存储所有消费者组的 offset。
+
+## Rebalance（重平衡）
+- 消费者加入/退出时触发 Rebalance。
+- 分区重新分配给消费者。
+- Rebalance 期间消费者无法消费（Stop the World）。

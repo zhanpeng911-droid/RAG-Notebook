@@ -1,0 +1,15 @@
+# Kubernetes HPA（水平自动扩缩容）
+
+HPA 根据 Pod 资源使用率自动调整 Deployment 副本数。
+
+## 工作原理
+1. HPA 通过 Metrics Server 获取 Pod 的 CPU/内存使用率。
+2. 计算期望副本数 = ceil(当前副本数 × 当前指标 / 目标指标)。
+3. 调整 Deployment 的 replicas。
+
+## 扩缩容策略
+- 扩容快速（60秒内可扩容）。
+- 缩容缓慢（默认 5 分钟稳定窗口，防止抖动）。
+
+## 自定义指标
+支持基于自定义指标（QPS、队列长度等）扩缩容，需要部署 Custom Metrics API。

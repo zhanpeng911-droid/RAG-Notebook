@@ -1,0 +1,17 @@
+# Spring 框架基础
+
+Spring 是 Java 生态最流行的应用开发框架。
+
+## Spring Core
+- IoC（控制反转）：对象的创建和管理交给 Spring 容器
+- DI（依赖注入）：通过构造函数、setter、字段注入依赖
+- Bean 生命周期：实例化、属性填充、初始化、使用、销毁
+
+## Spring Boot
+- 自动配置：根据 classpath 自动配置组件
+- Starter 依赖：简化依赖管理
+- 内嵌服务器：内嵌 Tomcat/Jetty
+
+## Spring 事务
+- @Transactional 注解声明式事务管理
+- 传播行为：REQUIRED、REQUIRES_NEW、NESTED 等

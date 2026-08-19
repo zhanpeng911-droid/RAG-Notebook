@@ -1,0 +1,16 @@
+# RabbitMQ 消息模型
+
+## 核心组件
+- Producer：生产者，发送消息到 Exchange。
+- Exchange：交换机，根据规则路由消息到队列。
+- Queue：队列，存储消息。
+- Binding：绑定，连接 Exchange 和 Queue 的规则。
+- Consumer：消费者，从队列消费消息。
+
+## 消息确认
+- 自动确认（autoAck=true）：消息发出即确认，可能丢失。
+- 手动确认（autoAck=false）：消费者处理完后调用 basic.ack 确认。
+- 拒绝（basic.nack/basic.reject）：可以选择重入队列或变为死信。
+
+## QoS 预取
+prefetch_count：消费者未确认消息的最大数量，防止消费者被压垮。

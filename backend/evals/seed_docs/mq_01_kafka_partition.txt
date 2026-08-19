@@ -1,0 +1,16 @@
+# Kafka 分区（Partition）
+
+## 分区机制
+- 每个 Topic 分为多个 Partition。
+- Partition 是并行度的基本单位。
+- 每个 Partition 内消息有序，跨 Partition 不保证顺序。
+
+## 消费者组
+- 同一 Consumer Group 内的消费者共同消费所有 Partition。
+- 每个 Partition 只能被组内一个消费者消费。
+- 消费者数超过 Partition 数时，多余消费者空闲。
+
+## 分区分配策略
+- Range：按主题分配连续分区。
+- RoundRobin：轮询分配所有主题的分区。
+- Sticky：尽量保持原有分配，减少重平衡开销。

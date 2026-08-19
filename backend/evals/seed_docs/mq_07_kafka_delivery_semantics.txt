@@ -1,0 +1,17 @@
+# Kafka 消息投递语义
+
+## 三种语义
+1. At Most Once（最多一次）：消息可能丢失但不会重复。
+   - 先提交 offset 再处理消息。
+2. At Least Once（至少一次）：消息不会丢失但可能重复。
+   - 先处理消息再提交 offset（默认）。
+3. Exactly Once（精确一次）：不丢失不重复。
+   - 事务性生产者 + 幂等消费者。
+
+## 幂等生产者
+enable.idempotence=true：Kafka 为每条消息分配序列号，Broker 去重。
+
+## 事务
+Kafka 事务支持跨 Partition 的原子写入：
+- initTransactions, beginTransaction, commitTransaction。
+- 消费端设置 isolation.level=read_committed 只读已提交消息。

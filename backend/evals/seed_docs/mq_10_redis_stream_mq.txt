@@ -1,0 +1,18 @@
+# Redis Stream 作为消息队列
+
+## 与 Kafka/RabbitMQ 对比
+- Redis Stream 轻量级，适合小规模场景。
+- Kafka 适合高吞吐、大数据量场景。
+- RabbitMQ 适合复杂路由场景。
+
+## 消费者组
+- XGROUP CREATE：创建消费者组。
+- XREADGROUP：消费者组读取消息。
+- XACK：确认消息（消息必须确认，否则留在 PEL 中）。
+- XPENDING：查看待确认消息。
+- XCLAIM：将超时消息转移给其他消费者。
+
+## 与 Pub/Sub 区别
+- Stream 持久化消息，Pub/Sub 不持久化。
+- Stream 支持消费者组和 ACK，Pub/Sub 没有。
+- Stream 支持消息回溯，Pub/Sub 不支持。

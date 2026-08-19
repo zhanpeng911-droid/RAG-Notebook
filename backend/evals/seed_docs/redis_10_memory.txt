@@ -1,0 +1,15 @@
+# Redis 内存管理
+
+## 内存分配
+- Redis 所有数据存在内存中，通过 maxmemory 配置上限。
+- 超出上限时触发内存淘汰策略。
+
+## 内存优化
+- 使用ziplist（压缩列表）存储小的 Hash/List/ZSet，减少内存碎片。
+- Redis 7.0 使用 listpack 替代 ziplist。
+- 使用对象共享池：小整数（0-9999）共享同一个对象。
+- 设置合理的过期时间，避免无用数据堆积。
+
+## 内存碎片
+- used_memory_rss / used_memory 比值表示碎片率。
+- 碎片率 > 1.5 时需要关注，可通过 activedefrag 自动碎片整理。

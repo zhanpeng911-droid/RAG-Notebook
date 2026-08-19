@@ -1,0 +1,28 @@
+# Linux cron 定时任务
+
+cron 是 Linux 的定时任务调度器。
+
+## crontab 格式
+```
+分 时 日 月 周 命令
+*  *  *  *  *  command
+```
+- 分：0-59
+- 时：0-23
+- 日：1-31
+- 月：1-12
+- 周：0-7（0和7都是周日）
+
+## 示例
+```bash
+# 每天凌晨3点备份
+0 3 * * * /usr/bin/backup.sh
+# 每5分钟检查
+*/5 * * * * /usr/bin/check.sh
+# 每周一上午9点
+0 9 * * 1 /usr/bin/weekly.sh
+```
+
+## 命令
+- crontab -e：编辑当前用户的定时任务。
+- crontab -l：列出定时任务。

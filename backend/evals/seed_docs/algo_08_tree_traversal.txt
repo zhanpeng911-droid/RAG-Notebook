@@ -1,0 +1,25 @@
+# 二叉树遍历
+
+## 四种遍历方式
+1. 前序遍历（Pre-order）：根 -> 左 -> 右。
+2. 中序遍历（In-order）：左 -> 根 -> 右。BST 中序遍历得到有序序列。
+3. 后序遍历（Post-order）：左 -> 右 -> 根。
+4. 层序遍历（Level-order / BFS）：按层从上到下、从左到右。
+
+## 递归实现
+```python
+def preorder(node):
+    if not node: return
+    visit(node)
+    preorder(node.left)
+    preorder(node.right)
+```
+
+## 非递归实现
+- 前序/中序：用栈。
+- 层序：用队列。
+
+## 二叉搜索树（BST）
+- 左子树所有值 < 根 < 右子树所有值。
+- 中序遍历得到升序序列。
+- 查找/插入/删除平均 O(log n)，最坏 O(n)（退化为链表）。

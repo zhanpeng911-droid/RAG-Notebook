@@ -1,0 +1,17 @@
+# Linux 文件权限
+
+## 权限模型
+每个文件有三组权限：所有者（u）、所属组（g）、其他用户（o）。
+每组三个权限：读（r=4）、写（w=2）、执行（x=1）。
+
+## chmod
+- 数字模式：chmod 755 file（rwxr-xr-x）。
+- 符号模式：chmod u+x file、chmod g-w file。
+
+## chown
+- chown user:group file：修改所有者和组。
+
+## 特殊权限
+- SUID（4xxx）：以文件所有者身份执行。
+- SGID（2xxx）：以文件所属组身份执行。
+- Sticky Bit（1xxx）：只有所有者能删除（/tmp 目录）。

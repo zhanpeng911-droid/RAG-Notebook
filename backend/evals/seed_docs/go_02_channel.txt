@@ -1,0 +1,34 @@
+# Go channel（通道）
+
+channel 是 goroutine 间通信的管道。
+
+## 基本用法
+```go
+ch := make(chan int)     // 无缓冲通道
+ch := make(chan int, 10) // 有缓冲通道
+
+ch <- 42    // 发送
+v := <-ch   // 接收
+close(ch)   // 关闭
+```
+
+## 无缓冲 vs 有缓冲
+- 无缓冲：发送和接收必须同时就绪（同步）。
+- 有缓冲：缓冲区满前发送不阻塞（异步）。
+
+## 方向
+- chan int：双向。
+- chan<- int：只发送。
+- <-chan int：只接收。
+
+## select
+```go
+select {
+case v := <-ch1:
+    fmt.Println(v)
+case ch2 <- 42:
+    fmt.Println("sent")
+default:
+    fmt.Println("no activity")
+}
+```

@@ -1,0 +1,23 @@
+# Python 迭代器协议
+
+## 可迭代对象（Iterable）
+实现了 __iter__ 方法的对象，返回一个迭代器。
+常见可迭代对象：list、dict、set、str、tuple、generator。
+
+## 迭代器（Iterator）
+实现了 __iter__ 和 __next__ 方法的对象。
+- __iter__ 返回自身。
+- __next__ 返回下一个值，没有值时抛出 StopIteration。
+
+## for 循环原理
+```python
+for x in iterable:
+    pass
+# 等价于
+it = iter(iterable)
+while True:
+    try:
+        x = next(it)
+    except StopIteration:
+        break
+```

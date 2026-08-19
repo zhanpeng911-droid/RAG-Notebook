@@ -1,0 +1,22 @@
+# Docker 多阶段构建
+
+多阶段构建用一个 Dockerfile 产出精简镜像。
+
+## 示例
+```dockerfile
+# 阶段1：构建
+FROM golang:1.21 AS builder
+WORKDIR /app
+COPY . .
+RUN go build -o myapp
+
+# 阶段2：运行
+FROM alpine:latest
+COPY --from=builder /app/myapp /usr/local/bin/
+CMD ["myapp"]
+```
+
+## 优势
+- 最终镜像不含编译器和源码，体积小。
+- 安全性更好：攻击面更小。
+- 无需单独的构建脚本。

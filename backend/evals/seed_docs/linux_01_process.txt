@@ -1,0 +1,16 @@
+# Linux 进程管理
+
+## 进程状态
+- R（Running）：运行中。
+- S（Sleeping）：可中断睡眠。
+- D（Disk Sleep）：不可中断睡眠（等待 I/O）。
+- Z（Zombie）：僵尸进程，已终止但父进程未回收。
+- T（Stopped）：停止/暂停。
+
+## 常用命令
+- ps aux：查看所有进程。
+- top/htop：实时进程监控。
+- kill PID：发送 SIGTERM。
+- kill -9 PID：发送 SIGKILL（强制终止）。
+- jobs：查看后台任务。
+- nohup：终端关闭后继续运行。

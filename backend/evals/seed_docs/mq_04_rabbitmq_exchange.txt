@@ -1,0 +1,18 @@
+# RabbitMQ Exchange 类型
+
+## Direct Exchange
+- 根据 routing key 精确匹配。
+- 消息 routing key 与 binding key 完全一致才路由。
+
+## Fanout Exchange
+- 忽略 routing key，广播到所有绑定的队列。
+- 每个队列都收到完整消息。
+
+## Topic Exchange
+- 根据 routing key 模式匹配。
+- * 匹配一个单词，# 匹配零或多个单词。
+- 例如 order.*.created 匹配 order.payment.created。
+
+## Headers Exchange
+- 根据消息头（headers）匹配，不使用 routing key。
+- x-match: all（全部匹配）或 any（任一匹配）。

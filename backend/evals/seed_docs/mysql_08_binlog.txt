@@ -1,0 +1,18 @@
+# MySQL binlog（二进制日志）
+
+binlog 记录所有DDL和DML语句（不含SELECT），用于主从复制和数据恢复。
+
+## 格式
+1. Statement：记录 SQL 语句（可能导致函数结果不一致，如 NOW()）。
+2. Row：记录每行数据的变更（日志量大但精确）。
+3. Mixed：混合模式，默认用 Statement，不安全的用 Row。
+
+## 相关命令
+- SHOW BINLOG EVENTS：查看 binlog 事件。
+- mysqlbinlog 工具：解析 binlog 文件。
+- binlog_format 参数：设置格式。
+
+## 与 redo log 区别
+- redo log 是 InnoDB 引擎层的物理日志，循环写入。
+- binlog 是 Server 层的逻辑日志，追加写入。
+- 两阶段提交：先写 redo log（prepare），再写 binlog，再写 redo log（commit）。

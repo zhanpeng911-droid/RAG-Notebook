@@ -1,0 +1,18 @@
+# MySQL redo log（重做日志）
+
+redo log 是 InnoDB 引擎层的物理日志，记录数据页的物理修改。
+
+## 作用
+- 保证事务的持久性（Durability）：事务提交后即使宕机也能恢复。
+- Write-Ahead Log（WAL）：先写日志再写数据页，提升性能。
+
+## 机制
+- redo log 是循环写入的固定大小文件（ib_logfile0, ib_logfile1）。
+- write position 追加写入，check point 表示已刷盘位置。
+- 当 write position 追上 check point 时，需要强制刷盘推进 check point。
+
+## 两阶段提交
+1. InnoDB 写 redo log（prepare 状态）。
+2. Server 层写 binlog。
+3. InnoDB 写 redo log（commit 状态）。
+保证 redo log 和 binlog 数据一致性。

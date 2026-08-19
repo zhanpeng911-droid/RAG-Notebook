@@ -1,0 +1,17 @@
+# RabbitMQ 死信队列
+
+死信队列存储无法正常消费的消息。
+
+## 产生死信的情况
+1. 消息被拒绝（NACK/Reject）且 requeue=false。
+2. 消息 TTL 过期。
+3. 队列达到最大长度（x-max-length）。
+
+## 死信路由
+通过队列属性指定死信 Exchange：
+- x-dead-letter-exchange：死信发送到哪个 Exchange。
+- x-dead-letter-routing-key：死信的 routing key。
+
+## 应用场景
+- 延迟队列：设置消息 TTL，过期后进入死信队列消费。
+- 异常处理：消费失败的消息转入死信队列人工处理。

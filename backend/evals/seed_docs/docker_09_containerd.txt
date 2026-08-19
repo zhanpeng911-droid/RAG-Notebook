@@ -1,0 +1,16 @@
+# containerd 与 Docker 的关系
+
+## 架构
+Docker 实际上是多层架构：
+- Docker CLI：命令行工具。
+- dockerd：Docker 守护进程。
+- containerd：容器运行时管理。
+- runc：OCI 标准的容器运行时。
+
+## containerd
+- containerd 是从 Docker 中拆分出的核心容器运行时。
+- Kubernetes 1.24+ 默认使用 containerd 而非 Docker（弃用 dockershim）。
+- containerd 的 CLI 是 ctr，Kubernetes 使用 crictl。
+
+## CRI 标准
+容器运行时接口（CRI）是 Kubernetes 的标准接口，containerd 和 CRI-O 都实现了 CRI。

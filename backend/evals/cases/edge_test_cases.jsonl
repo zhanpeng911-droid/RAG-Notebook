@@ -1,0 +1,26 @@
+{"id": "ld-01", "edge_type": "long_doc", "query": "MySQL 的架构分为哪三层？", "expected_keywords": ["连接层", "服务层", "存储引擎"], "expected_refusal": false, "note": ""}
+{"id": "ld-02", "edge_type": "long_doc", "query": "MySQL 8.0 移除了什么功能？", "expected_keywords": ["查询缓存"], "expected_refusal": false, "note": ""}
+{"id": "ld-03", "edge_type": "long_doc", "query": "innodb_buffer_pool_size 建议设为物理内存的多少？", "expected_keywords": ["70%", "缓冲池"], "expected_refusal": false, "note": ""}
+{"id": "ld-04", "edge_type": "long_doc", "query": "MySQL 主从复制中 relay log 的作用是什么？", "expected_keywords": ["relay log", "中继", "IO线程"], "expected_refusal": false, "note": ""}
+{"id": "ld-05", "edge_type": "long_doc", "query": "MySQL 高可用方案有哪些？", "expected_keywords": ["MHA", "MGR", "Orchestrator", "Router"], "expected_refusal": false, "note": ""}
+{"id": "ld-06", "edge_type": "long_doc", "query": "什么是索引下推？", "expected_keywords": ["ICP", "下推", "存储引擎", "5.6"], "expected_refusal": false, "note": ""}
+{"id": "ld-07", "edge_type": "long_doc", "query": "MySQL 半同步复制要求什么？", "expected_keywords": ["从库", "确认", "binlog"], "expected_refusal": false, "note": ""}
+{"id": "ld-08", "edge_type": "long_doc", "query": "什么是分区表？支持哪些分区方式？", "expected_keywords": ["range", "list", "hash", "key"], "expected_refusal": false, "note": ""}
+{"id": "cd-01", "edge_type": "cross_doc", "query": "分布式事务中 MySQL 的 XA 两阶段提交是怎样的？", "expected_keywords": ["PREPARE", "COMMIT", "协调者"], "expected_refusal": false, "note": ""}
+{"id": "cd-02", "edge_type": "cross_doc", "query": "Kafka 如何配合实现分布式事务的最终一致性？", "expected_keywords": ["事务", "Outbox", "本地消息表", "最终一致"], "expected_refusal": false, "note": ""}
+{"id": "cd-03", "edge_type": "cross_doc", "query": "Outbox Pattern 发件箱模式的完整流程是什么？", "expected_keywords": ["outbox", "本地事务", "MQ", "重试"], "expected_refusal": false, "note": ""}
+{"id": "cd-04", "edge_type": "cross_doc", "query": "Redis 分布式锁如何与数据库事务配合实现并发安全？", "expected_keywords": ["SET", "NX", "PX", "锁"], "expected_refusal": false, "note": ""}
+{"id": "cd-05", "edge_type": "cross_doc", "query": "分布式事务有哪些常见的实现方案？", "expected_keywords": ["XA", "最终一致", "消息", "Outbox"], "expected_refusal": false, "note": ""}
+{"id": "cd-06", "edge_type": "cross_doc", "query": "什么是事务消息？它如何保证分布式一致性？", "expected_keywords": ["消息", "本地", "一致性", "事务"], "expected_refusal": false, "note": ""}
+{"id": "am-01", "edge_type": "ambiguous", "query": "Spring 的 IoC 是什么？", "expected_keywords": ["控制反转", "容器", "依赖"], "expected_refusal": false, "note": ""}
+{"id": "am-02", "edge_type": "ambiguous", "query": "Spring 的事务传播行为有哪些？", "expected_keywords": ["REQUIRED", "REQUIRES_NEW", "NESTED", "传播"], "expected_refusal": false, "note": ""}
+{"id": "am-03", "edge_type": "ambiguous", "query": "Spring Watch 是怎么工作的？", "expected_keywords": ["发条", "擒纵", "齿轮", "摆轮"], "expected_refusal": false, "note": ""}
+{"id": "am-04", "edge_type": "ambiguous", "query": "数据库连接池 maxPoolSize 应该设多少？", "expected_keywords": ["10", "小池子", "连接"], "expected_refusal": false, "note": ""}
+{"id": "am-05", "edge_type": "ambiguous", "query": "连接池的最大连接数原则是什么？", "expected_keywords": ["核心数", "小池子", "压测"], "expected_refusal": false, "note": ""}
+{"id": "am-06", "edge_type": "ambiguous", "query": "Spring 框架支持哪些依赖注入方式？", "expected_keywords": ["构造函数", "setter", "字段"], "expected_refusal": false, "note": ""}
+{"id": "cf-01", "edge_type": "conflict", "query": "MySQL 应该建多少个索引合适？", "expected_keywords": ["5-6", "不是越多越好", "写开销"], "expected_refusal": false, "note": ""}
+{"id": "cf-02", "edge_type": "conflict", "query": "text 大字段应该怎么建索引？", "expected_keywords": ["前缀索引", "前N个字符", "前缀"], "expected_refusal": false, "note": ""}
+{"id": "cf-03", "edge_type": "conflict", "query": "小表应该走索引还是全表扫描？", "expected_keywords": ["全表扫描", "优化器", "小表"], "expected_refusal": false, "note": ""}
+{"id": "cf-04", "edge_type": "conflict", "query": "数据库连接池 maxPoolSize 推荐值是多少？", "expected_keywords": ["10", "小池子"], "expected_refusal": false, "note": ""}
+{"id": "cf-05", "edge_type": "conflict", "query": "索引区分度低的列应该建索引吗？", "expected_keywords": ["区分度", "收益低", "不建"], "expected_refusal": false, "note": ""}
+{"id": "cf-06", "edge_type": "conflict", "query": "冗余索引应该怎么处理？", "expected_keywords": ["删除", "联合索引", "替代"], "expected_refusal": false, "note": ""}

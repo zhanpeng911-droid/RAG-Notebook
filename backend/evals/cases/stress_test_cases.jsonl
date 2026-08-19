@@ -1,0 +1,66 @@
+{"id": "s-01", "intent": "simple", "query": "Redis默认fsync策略是什么", "expected_keywords": ["everysec", "默认"], "expected_refusal": false}
+{"id": "s-02", "intent": "simple", "query": "MySQL默认隔离级别", "expected_keywords": ["可重复读", "Repeatable", "RR"], "expected_refusal": false}
+{"id": "s-03", "intent": "simple", "query": "Docker和虚拟机的区别", "expected_keywords": ["共享", "内核", "启动"], "expected_refusal": false}
+{"id": "s-04", "intent": "simple", "query": "Python的GIL是什么", "expected_keywords": ["全局解释器锁", "互斥锁", "线程"], "expected_refusal": false}
+{"id": "s-05", "intent": "simple", "query": "TCP三次握手过程", "expected_keywords": ["SYN", "ACK", "连接"], "expected_refusal": false}
+{"id": "s-06", "intent": "simple", "query": "Kafka的ISR是什么", "expected_keywords": ["同步", "副本", "Leader"], "expected_refusal": false}
+{"id": "s-07", "intent": "simple", "query": "Go的goroutine是什么", "expected_keywords": ["轻量级", "线程", "协程"], "expected_refusal": false}
+{"id": "s-08", "intent": "simple", "query": "B+树的特点", "expected_keywords": ["叶子", "链表", "数据"], "expected_refusal": false}
+{"id": "s-09", "intent": "simple", "query": "RabbitMQ Exchange类型", "expected_keywords": ["Direct", "Fanout", "Topic"], "expected_refusal": false}
+{"id": "s-10", "intent": "simple", "query": "HTTP状态码422", "expected_keywords": ["校验", "Unprocessable", "验证"], "expected_refusal": false}
+{"id": "f-01", "intent": "factual", "query": "什么是MySQL的MVCC？", "expected_keywords": ["多版本", "并发", "undo", "ReadView"], "expected_refusal": false}
+{"id": "f-02", "intent": "factual", "query": "Docker的多阶段构建是什么？", "expected_keywords": ["FROM", "阶段", "镜像", "体积"], "expected_refusal": false}
+{"id": "f-03", "intent": "factual", "query": "Python的装饰器是什么？", "expected_keywords": ["高阶函数", "wrapper", "功能"], "expected_refusal": false}
+{"id": "f-04", "intent": "factual", "query": "Kubernetes的ConfigMap是什么？", "expected_keywords": ["配置", "环境变量", "挂载"], "expected_refusal": false}
+{"id": "f-05", "intent": "factual", "query": "什么是Redis的混合持久化？", "expected_keywords": ["RDB", "AOF", "重写", "4.0"], "expected_refusal": false}
+{"id": "f-06", "intent": "factual", "query": "Go语言的channel是什么？", "expected_keywords": ["通道", "通信", "goroutine"], "expected_refusal": false}
+{"id": "f-07", "intent": "factual", "query": "什么是Linux的inode？", "expected_keywords": ["元数据", "文件", "索引"], "expected_refusal": false}
+{"id": "f-08", "intent": "factual", "query": "什么是CDN内容分发网络？", "expected_keywords": ["边缘", "缓存", "加速"], "expected_refusal": false}
+{"id": "f-09", "intent": "factual", "query": "什么是Kafka的消费者组？", "expected_keywords": ["Partition", "消费", "offset"], "expected_refusal": false}
+{"id": "f-10", "intent": "factual", "query": "什么是HTTPS的TLS握手？", "expected_keywords": ["证书", "密钥", "加密", "握手"], "expected_refusal": false}
+{"id": "e-01", "intent": "explanatory", "query": "为什么TCP需要三次握手而不是两次？", "expected_keywords": ["历史", "连接", "SYN", "确认"], "expected_refusal": false}
+{"id": "e-02", "intent": "explanatory", "query": "为什么Python有GIL？它的原理是什么？", "expected_keywords": ["引用计数", "线程安全", "内存"], "expected_refusal": false}
+{"id": "e-03", "intent": "explanatory", "query": "MySQL的redo log原理是什么？为什么需要它？", "expected_keywords": ["持久性", "物理日志", "WAL", "崩溃"], "expected_refusal": false}
+{"id": "e-04", "intent": "explanatory", "query": "为什么Docker容器启动比虚拟机快？", "expected_keywords": ["共享", "内核", "进程", "秒级"], "expected_refusal": false}
+{"id": "e-05", "intent": "explanatory", "query": "Kubernetes HPA自动扩缩容的原理是什么？", "expected_keywords": ["指标", "CPU", "副本", "Metrics"], "expected_refusal": false}
+{"id": "e-06", "intent": "explanatory", "query": "为什么TCP的TIME_WAIT要等待2MSL？", "expected_keywords": ["ACK", "报文", "消失", "重发"], "expected_refusal": false}
+{"id": "e-07", "intent": "explanatory", "query": "Redis的RDB持久化原理是什么？", "expected_keywords": ["快照", "fork", "子进程", "二进制"], "expected_refusal": false}
+{"id": "e-08", "intent": "explanatory", "query": "Go的GMP调度模型原理是什么？", "expected_keywords": ["Goroutine", "Machine", "Processor", "调度"], "expected_refusal": false}
+{"id": "e-09", "intent": "explanatory", "query": "MySQL MVCC实现原理是什么？", "expected_keywords": ["undo", "版本链", "ReadView", "事务ID"], "expected_refusal": false}
+{"id": "e-10", "intent": "explanatory", "query": "为什么Kafka能保证高吞吐？", "expected_keywords": ["顺序", "零拷贝", "分区", "批量"], "expected_refusal": false}
+{"id": "c-01", "intent": "comparative", "query": "Docker和虚拟机有什么区别？", "expected_keywords": ["共享", "内核", "启动", "资源"], "expected_refusal": false}
+{"id": "c-02", "intent": "comparative", "query": "MySQL InnoDB和MyISAM有什么区别？", "expected_keywords": ["事务", "行锁", "表锁", "聚簇"], "expected_refusal": false}
+{"id": "c-03", "intent": "comparative", "query": "TCP和UDP有什么区别？", "expected_keywords": ["连接", "可靠", "头部", "顺序"], "expected_refusal": false}
+{"id": "c-04", "intent": "comparative", "query": "Redis RDB和AOF有什么区别？", "expected_keywords": ["快照", "命令", "二进制", "追加"], "expected_refusal": false}
+{"id": "c-05", "intent": "comparative", "query": "正向代理和反向代理有什么区别？", "expected_keywords": ["客户端", "服务端", "目标"], "expected_refusal": false}
+{"id": "c-06", "intent": "comparative", "query": "Kubernetes Deployment和StatefulSet有什么区别？", "expected_keywords": ["有序", "标识", "存储", "状态"], "expected_refusal": false}
+{"id": "c-07", "intent": "comparative", "query": "Go的Mutex和RWMutex有什么区别？", "expected_keywords": ["读锁", "写锁", "共享", "排他"], "expected_refusal": false}
+{"id": "c-08", "intent": "comparative", "query": "Kafka和RabbitMQ有什么区别？", "expected_keywords": ["吞吐", "分区", "Exchange", "顺序"], "expected_refusal": false}
+{"id": "c-09", "intent": "comparative", "query": "Python多线程和多进程有什么区别？", "expected_keywords": ["GIL", "内存", "并行", "进程"], "expected_refusal": false}
+{"id": "c-10", "intent": "comparative", "query": "Docker的CMD和ENTRYPOINT有什么区别？", "expected_keywords": ["覆盖", "追加", "默认", "入口"], "expected_refusal": false}
+{"id": "p-01", "intent": "procedural", "query": "如何配置Nginx负载均衡？", "expected_keywords": ["upstream", "轮询", "权重", "server"], "expected_refusal": false}
+{"id": "p-02", "intent": "procedural", "query": "怎么优化MySQL慢查询？", "expected_keywords": ["EXPLAIN", "索引", "扫描", "优化"], "expected_refusal": false}
+{"id": "p-03", "intent": "procedural", "query": "如何实现Redis分布式锁？", "expected_keywords": ["SET", "NX", "PX", "Lua"], "expected_refusal": false}
+{"id": "p-04", "intent": "procedural", "query": "怎么配置Kubernetes的Ingress？", "expected_keywords": ["rules", "host", "path", "Service"], "expected_refusal": false}
+{"id": "p-05", "intent": "procedural", "query": "如何使用Docker多阶段构建减小镜像体积？", "expected_keywords": ["FROM", "AS", "COPY", "alpine"], "expected_refusal": false}
+{"id": "p-06", "intent": "procedural", "query": "怎么在Python中实现异步编程？", "expected_keywords": ["async", "await", "事件循环", "协程"], "expected_refusal": false}
+{"id": "p-07", "intent": "procedural", "query": "如何配置Linux的crontab定时任务？", "expected_keywords": ["分", "时", "日", "月", "周"], "expected_refusal": false}
+{"id": "p-08", "intent": "procedural", "query": "怎么使用Go的context实现超时控制？", "expected_keywords": ["WithTimeout", "cancel", "Done", "select"], "expected_refusal": false}
+{"id": "p-09", "intent": "procedural", "query": "如何配置Docker Compose的多容器应用？", "expected_keywords": ["services", "ports", "depends_on", "image"], "expected_refusal": false}
+{"id": "p-10", "intent": "procedural", "query": "怎么在MySQL中创建联合索引？", "expected_keywords": ["INDEX", "最左前缀", "联合", "列"], "expected_refusal": false}
+{"id": "x-01", "intent": "exploratory", "query": "关于Redis持久化机制的详细信息", "expected_keywords": ["AOF", "RDB", "fsync", "混合"], "expected_refusal": false}
+{"id": "x-02", "intent": "exploratory", "query": "关于MySQL索引优化的相关知识", "expected_keywords": ["聚簇", "二级", "回表", "覆盖"], "expected_refusal": false}
+{"id": "x-03", "intent": "exploratory", "query": "关于Kubernetes调度机制的介绍", "expected_keywords": ["过滤", "打分", "绑定", "节点"], "expected_refusal": false}
+{"id": "x-04", "intent": "exploratory", "query": "关于Python垃圾回收机制的信息", "expected_keywords": ["引用计数", "分代", "标记清除", "循环"], "expected_refusal": false}
+{"id": "x-05", "intent": "exploratory", "query": "关于Docker网络模式的信息", "expected_keywords": ["bridge", "host", "none", "端口"], "expected_refusal": false}
+{"id": "x-06", "intent": "exploratory", "query": "关于Go语言并发模型的介绍", "expected_keywords": ["goroutine", "channel", "GMP", "调度"], "expected_refusal": false}
+{"id": "x-07", "intent": "exploratory", "query": "关于计算机网络负载均衡的知识", "expected_keywords": ["L4", "L7", "轮询", "算法"], "expected_refusal": false}
+{"id": "x-08", "intent": "exploratory", "query": "关于Kafka消息顺序性保证的信息", "expected_keywords": ["分区", "有序", "Key", "跨分区"], "expected_refusal": false}
+{"id": "x-09", "intent": "exploratory", "query": "关于Linux进程管理的信息", "expected_keywords": ["状态", "ps", "kill", "信号"], "expected_refusal": false}
+{"id": "x-10", "intent": "exploratory", "query": "关于HTTPS和TLS加密的知识", "expected_keywords": ["证书", "握手", "对称", "非对称"], "expected_refusal": false}
+{"id": "o-01", "intent": "out_of_scope", "query": "量子计算的量子比特原理是什么？", "expected_keywords": [], "expected_refusal": true}
+{"id": "o-02", "intent": "out_of_scope", "query": "区块链智能合约的Gas费用怎么计算？", "expected_keywords": [], "expected_refusal": true}
+{"id": "o-03", "intent": "out_of_scope", "query": "React的Fiber架构原理是什么？", "expected_keywords": [], "expected_refusal": true}
+{"id": "o-04", "intent": "out_of_scope", "query": "天文学中黑洞的事件视界是什么？", "expected_keywords": [], "expected_refusal": true}
+{"id": "o-05", "intent": "out_of_scope", "query": "经济学中的菲利普斯曲线是什么？", "expected_keywords": [], "expected_refusal": true}
+{"id": "o-06", "intent": "out_of_scope", "query": "生物学中CRISPR基因编辑的原理是什么？", "expected_keywords": [], "expected_refusal": true}
