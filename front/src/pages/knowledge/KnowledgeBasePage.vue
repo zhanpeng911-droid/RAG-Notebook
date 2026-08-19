@@ -859,7 +859,7 @@ function askAIAboutDoc(doc) {
 async function handleReindex(doc) {
   if (!userStore.token || !doc.id) return
   try {
-    const res = await http.post(`/knowledge/${doc.id}/reindex`)
+    const res = await http.post(`/api/v1/knowledge/${doc.id}/reindex`)
     if (res.data?.code === 200) {
       showToast('已提交重新索引任务')
       await fetchDocuments()

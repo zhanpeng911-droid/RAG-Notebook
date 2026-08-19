@@ -54,7 +54,7 @@ async function fetchCompletion(context) {
   if (controller) controller.abort()
   controller = new AbortController()
   try {
-    const res = await http.post('/note/autocomplete', {
+    const res = await http.post('/api/v1/note/autocomplete', {
       context,
       llm_config: modelStore.isConfigured ? modelStore.config : undefined
     }, { signal: controller.signal })

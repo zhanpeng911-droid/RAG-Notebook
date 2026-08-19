@@ -13,14 +13,12 @@
           <line x1="21" y1="21" x2="16.65" y2="16.65"/>
         </svg>
         <input
-          ref="searchInputRef"
           type="text"
           class="search-input"
           placeholder="搜索笔记..."
           v-model="searchQuery"
           @keydown.enter="handleSearch"
         />
-        <kbd class="search-shortcut">⌘K</kbd>
       </div>
     </div>
 
@@ -104,7 +102,6 @@ const modelStore = useModelStore()
 const searchQuery = ref('')
 const showUserMenu = ref(false)
 const userMenuRef = ref(null)
-const searchInputRef = ref(null)
 
 // 页面标题映射
 const pageTitleMap = {
@@ -159,22 +156,12 @@ function handleClickOutside(event) {
   }
 }
 
-// ⌘K / Ctrl+K 聚焦搜索框
-function handleShortcut(event) {
-  if ((event.metaKey || event.ctrlKey) && event.key === 'k') {
-    event.preventDefault()
-    searchInputRef.value?.focus()
-  }
-}
-
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
-  document.addEventListener('keydown', handleShortcut)
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
-  document.removeEventListener('keydown', handleShortcut)
 })
 </script>
 
@@ -258,19 +245,6 @@ onUnmounted(() => {
 
 .search-input::placeholder {
   color: var(--color-text-lightest);
-}
-
-.search-shortcut {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 6px;
-  font-size: 11px;
-  font-family: var(--font-mono);
-  color: var(--color-text-lightest);
-  background: var(--color-card);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  flex-shrink: 0;
 }
 
 /* 右侧工具区 */
@@ -427,10 +401,6 @@ onUnmounted(() => {
 
   .topbar-center {
     padding: 0 var(--space-sm);
-  }
-
-  .search-shortcut {
-    display: none;
   }
 
   .model-status {

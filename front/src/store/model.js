@@ -12,22 +12,22 @@ const PROVIDERS = {
   openai: {
     name: 'OpenAI',
     baseUrl: 'https://api.openai.com/v1',
-    models: ['gpt-4o', 'gpt-4o-mini', 'o3-mini', 'o1-mini'],
-    defaultModel: 'gpt-4o-mini',
+    models: [],
+    defaultModel: '',
     protocol: 'openai',
   },
   anthropic: {
     name: 'Anthropic',
     baseUrl: 'https://api.anthropic.com',
-    models: ['claude-sonnet-4-20250514', 'claude-haiku-4-20250514'],
-    defaultModel: 'claude-sonnet-4-20250514',
+    models: [],
+    defaultModel: '',
     protocol: 'anthropic',
   },
   ollama: {
     name: 'Ollama (本地)',
     baseUrl: 'http://localhost:11434/v1',
-    models: ['qwen3:7b', 'qwen3:4b', 'llama3.2', 'deepseek-r1'],
-    defaultModel: 'qwen3:7b',
+    models: [],
+    defaultModel: '',
     protocol: 'openai',  // Ollama 兼容 OpenAI 协议
   },
   custom: {

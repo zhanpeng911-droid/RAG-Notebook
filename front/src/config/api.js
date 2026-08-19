@@ -34,14 +34,6 @@ export const apiConfig = {
     getAllSessions: `${API_V1}/chat/sessions`,
     getUserSessions: `${API_V1}/chat/sessions`,
 
-    // 向量数据库
-    uploadSingleFile: `${API_V1}/knowledge/add/single`,
-    uploadMultipleFiles: `${API_V1}/knowledge/add/multiple`,
-    cleanVectors: `${API_V1}/knowledge/clean`,
-
-    // 文档重排序
-    reorderDocuments: `${API_V1}/chat/reorder`,
-
     // 笔记管理
     noteCreate: `${API_V1}/note/create`,
     noteUpdate: (noteId) => `${API_V1}/note/${noteId}`,
