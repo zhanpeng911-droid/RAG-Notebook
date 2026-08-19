@@ -320,11 +320,11 @@ def _get_llm_config():
 
         # Get model name based on provider
         if provider == "ALIYUN":
-            model_name = getattr(settings, "DASHSCOPE_MODEL_NAME", "qwen-plus")
+            model_name = getattr(settings, "ALIYUN_MODEL_NAME", "qwen-plus")
         elif provider == "OLLAMA":
-            model_name = getattr(settings, "OLLAMA_MODEL", "qwen3:8b")
+            model_name = getattr(settings, "OLLAMA_MODEL_NAME", "qwen3:8b")
         elif provider == "OPENAI":
-            model_name = getattr(settings, "OPENAI_MODEL", "gpt-3.5-turbo")
+            model_name = getattr(settings, "CHAT_MODEL_NAME", "deepseek-chat")
         else:
             return None, None, None
 

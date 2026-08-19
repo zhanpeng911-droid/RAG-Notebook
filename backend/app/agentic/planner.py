@@ -55,22 +55,15 @@ class Planner:
         """
         分类查询类型（Adaptive-RAG 风格：按复杂度路由）。
 
-        SIMPLE 类型优先判定：短查询 + 事实关键词 -> 轻量路径（跳过 HyDE/rerank）。
-        其余按 factual -> explanatory -> comparative -> procedural 顺序匹配。
+        优先判定明确的事实/解释/对比/操作类查询，最后才检查 SIMPLE。
+        SIMPLE 仅用于不含上述关键词的短查询。
 
         :param query: 用户查询
         :return: 查询类型
         """
         query_lower = query.lower()
 
-        # Adaptive-RAG: 简单查询优先判定
-        # 短查询且包含事实关键词，无需复杂检索策略
-        if len(query) <= self.SIMPLE_MAX_LENGTH:
-            for kw in self.FACTUAL_KEYWORDS:
-                if kw in query_lower:
-                    return QueryType.SIMPLE
-
-        # 检查各类关键词
+        # 优先检查明确的关键词类型（避免 "什么是X" 被误判为 SIMPLE）
         for kw in self.FACTUAL_KEYWORDS:
             if kw in query_lower:
                 return QueryType.FACTUAL
@@ -109,16 +102,18 @@ class Planner:
         query_type = self.classify_query(query)
 
         # 根据查询类型调整参数
+        # use_rerank: 启用 qwen3-vl-rerank 重排序（已接入）
+        # use_hyde: 事实类查询禁用 HyDE（研究证明伪文档会稀释精确术语匹配），
+        #           解释/探索类保留（词汇差距大时需要语义扩展）
         if query_type == QueryType.SIMPLE:
-            # Adaptive-RAG: 简单查询走轻量路径，降低延迟和成本
             scope = "all"
-            top_k = 3
+            top_k = 5
             use_hyde = False
-            use_rerank = False
+            use_rerank = True
         elif query_type == QueryType.FACTUAL:
             scope = "all"
             top_k = 5
-            use_hyde = True
+            use_hyde = False
             use_rerank = True
         elif query_type == QueryType.EXPLANATORY:
             scope = "all"
@@ -131,9 +126,9 @@ class Planner:
             use_hyde = True
             use_rerank = True
         elif query_type == QueryType.PROCEDURAL:
-            scope = "knowledge"
-            top_k = 5
-            use_hyde = False
+            scope = "all"
+            top_k = 6
+            use_hyde = True
             use_rerank = True
         else:
             scope = "all"

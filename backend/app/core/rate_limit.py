@@ -19,8 +19,23 @@ from app.db.redis_config import connect_redis, is_redis_available
 
 
 def _is_rate_limit_enabled() -> bool:
-    """动态读取限流开关（每次调用读取，避免 .env 缓存问题）"""
-    return os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
+    """动态读取限流开关（优先读 os.environ，再读 .env 文件）"""
+    # 1. 先读系统环境变量（测试时可手动设置）
+    val = os.getenv("RATE_LIMIT_ENABLED")
+    if val is not None:
+        return val.lower() == "true"
+    # 2. fallback：直接读 .env 文件
+    try:
+        from pathlib import Path
+        env_path = Path(__file__).resolve().parents[2] / ".env"
+        if env_path.exists():
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line.startswith("RATE_LIMIT_ENABLED"):
+                    return line.split("=", 1)[1].strip().lower() == "true"
+    except Exception:
+        pass
+    return True
 
 
 def _build_rate_limit_key(request: Request) -> str:

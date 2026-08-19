@@ -168,6 +168,9 @@ async def agent_query(
     await db.commit()
 
     start_time = time.time()
+    from app.config.validator import get_settings
+    _s = get_settings()
+    logger.info(f"【Agent非流式】OPENAI_API_KEY={str(_s.OPENAI_API_KEY)[:12]}... CHAT_MODEL={_s.CHAT_MODEL_NAME} LLM_TYPE={_s.LLM_TYPE}")
     result = await run_agent(
         query=request.query,
         user_id=user_id,
@@ -177,6 +180,7 @@ async def agent_query(
     )
 
     total_ms = int((time.time() - start_time) * 1000)
+    logger.info(f"【Agent非流式】result answer preview: {str(result.get('answer',''))[:100]}")
     await repo.update_run(
         run.id,
         status="completed" if not result.get("error") else "failed",

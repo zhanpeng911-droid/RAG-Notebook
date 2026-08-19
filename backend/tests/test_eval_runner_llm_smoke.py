@@ -85,8 +85,8 @@ class TestMockUnchanged:
         """mock agent_tool 模式仍然通过"""
         cases = load_cases("agent_tool")
         report = mock_run(cases)
-        assert report["behavior_evaluated"] == 14
-        assert report["behavior_passed"] == 14
+        assert report["behavior_evaluated"] == 13  # tool-007 已随 rag_summary_tools 删除
+        assert report["behavior_passed"] == 13
 
 
 class TestCaseLoading:

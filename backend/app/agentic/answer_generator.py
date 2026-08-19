@@ -103,7 +103,8 @@ class AnswerGenerator:
                 "quality_scores": None,
             }
         except Exception as e:
-            logger.error(f"【答案生成】失败: {e}")
+            import traceback
+            logger.error(f"【答案生成】失败: {e}\n{traceback.format_exc()}")
             return {
                 "answer": "抱歉，生成答案时出现错误。",
                 "citations": [],
@@ -228,6 +229,8 @@ class AnswerGenerator:
 2. 如果证据不足以回答问题，请明确说明
 3. 回答要准确、简洁、有帮助
 4. 使用中文回答
+5. 如果不同证据之间存在矛盾（例如旧版建议和新版建议冲突），请优先采用最新版本的信息（如文档标题或内容中带年份/新版/新建议/2023/2024 等标识的），并简要说明旧版已被新版取代
+6. 对于数值型推荐（如连接池大小、索引数量），给出明确结论而非罗列多个选项
 
 {citation_instruction}
 

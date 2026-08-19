@@ -208,7 +208,8 @@ def test_frontend_clean_passes_space_id():
     page = Path(__file__).resolve().parents[2] / "front" / "src" / "pages" / "knowledge" / "KnowledgeBasePage.vue"
     source = page.read_text(encoding="utf-8")
 
-    assert "selectedSpaceId.value" in source
+    # 空间选择器已拆分为上传归属（uploadSpaceId）和列表筛选（filterSpaceId）
+    assert "uploadSpaceId.value" in source or "filterSpaceId.value" in source
     assert "space_id" in source
 
 

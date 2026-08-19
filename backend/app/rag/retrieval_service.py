@@ -101,21 +101,24 @@ class RetrievalService:
         if not query or not query.strip():
             return []
 
-        logger.info(f"【统一检索】query={query[:50]}, scope={scope}, top_k={top_k}")
+        logger.info(f"【统一检索】query={query[:50]}, scope={scope}, top_k={top_k}, use_rerank={use_rerank}")
 
         # 解析 scope
         effective_space_id = self.space_id
         if scope.startswith("space:"):
             effective_space_id = scope.split(":", 1)[1]
 
+        # 重排序时扩大候选集（候选 top_k*3，重排后取 top_k）
+        candidate_k = top_k * 3 if use_rerank else top_k
+
         # 并行检索知识库和笔记
         tasks = []
 
         if scope in ("knowledge", "all") or scope.startswith("space:"):
-            tasks.append(self._retrieve_knowledge(query, top_k, effective_space_id, use_hyde))
+            tasks.append(self._retrieve_knowledge(query, candidate_k, effective_space_id, use_hyde))
 
         if scope in ("notes", "all") and not effective_space_id:
-            tasks.append(self._retrieve_notes(query, top_k))
+            tasks.append(self._retrieve_notes(query, candidate_k))
 
         if not tasks:
             return []
@@ -136,6 +139,12 @@ class RetrievalService:
         # 相邻片段合并
         all_evidences = self._merge_adjacent(all_evidences)
 
+        # 重排序（如果启用且候选数足够）
+        if use_rerank and len(all_evidences) > top_k:
+            reranked = await self._rerank_evidences(query, all_evidences)
+            if reranked:
+                all_evidences = reranked
+
         # 排序
         all_evidences.sort(key=lambda e: e.score, reverse=True)
 
@@ -144,6 +153,40 @@ class RetrievalService:
 
         logger.info(f"【统一检索】返回 {len(all_evidences)} 个证据")
         return all_evidences
+
+    async def _rerank_evidences(
+        self, query: str, evidences: List[Evidence]
+    ) -> List[Evidence]:
+        """
+        使用 qwen3-vl-rerank 对候选证据重排序。
+
+        :param query: 原始查询
+        :param evidences: 候选证据列表
+        :return: 重排后的证据列表（按重排分数降序）
+        """
+        try:
+            from app.rag.reranker import reranker
+
+            texts = [e.content[:1000] for e in evidences]  # 限制单条长度
+            results = await reranker.rerank(query=query, documents=texts)
+
+            if not results:
+                return []
+
+            # 按重排分数重写 evidence 的 score
+            reranked = []
+            for r in results:
+                if r.index < len(evidences):
+                    ev = evidences[r.index]
+                    ev.score = r.score
+                    ev.metadata["rerank_score"] = r.score
+                    reranked.append(ev)
+
+            logger.info(f"【重排序】{len(evidences)} 条候选 → 重排完成")
+            return reranked
+        except Exception as e:
+            logger.error(f"【重排序】失败: {e}")
+            return []
 
     async def _retrieve_knowledge(
         self, query: str, top_k: int, space_id: str = None, use_hyde: bool = True

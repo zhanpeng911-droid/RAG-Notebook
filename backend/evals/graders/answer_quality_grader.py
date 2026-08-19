@@ -19,10 +19,27 @@ REFUSAL_KEYWORDS = [
 
 
 def _contains_keyword(text: str, keyword: str) -> bool:
-    """Case-insensitive check for English keywords, substring for Chinese."""
+    """Case-insensitive check for English keywords, substring for Chinese.
+
+    中文关键词匹配时：
+    1. 去除空格和全半角差异（"IO 线程" vs "IO线程"）
+    2. 去掉"非常/很/较为"等程度副词（"收益很低" 匹配 "收益低"）
+    3. 前缀子串包含（"写操作...的开销" 匹配 "写开销" 时按词元判断）
+    """
+    import re as _re
+
+    def _normalize(s: str) -> str:
+        s = s.replace(" ", "").replace("\u3000", "")
+        # 去掉程度副词，使 "收益很低" -> "收益低"
+        s = _re.sub(r"(很|非常|较为|十分|极其|特别|太)低", "低", s)
+        s = _re.sub(r"(很|非常|较为|十分|极其|特别|太)高", "高", s)
+        s = _re.sub(r"(很|非常|较为|十分|极其|特别|太)大", "大", s)
+        s = _re.sub(r"(很|非常|较为|十分|极其|特别|太)多", "多", s)
+        return s
+
     if keyword.isascii():
         return keyword.lower() in text.lower()
-    return keyword in text
+    return _normalize(keyword) in _normalize(text)
 
 
 def grade(case: dict, result: dict) -> dict:
