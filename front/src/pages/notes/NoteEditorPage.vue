@@ -490,8 +490,11 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: var(--color-card);
-  border-right: 1px solid var(--color-border-light);
+  /* 编辑区用高不透明玻璃：保留磨砂质感同时保证长文可读性 */
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  border-right: 1px solid var(--glass-border);
 }
 
 /* ===== Toolbar ===== */
@@ -501,8 +504,10 @@ onUnmounted(() => {
   justify-content: space-between;
   padding: 0 var(--space-lg);
   height: 48px;
-  background: var(--color-card);
-  border-bottom: 1px solid var(--color-border-light);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--glass-border);
   flex-shrink: 0;
 }
 
@@ -582,8 +587,8 @@ onUnmounted(() => {
 /* ===== Title Bar ===== */
 .title-bar {
   padding: var(--space-lg) var(--space-xl);
-  background: var(--color-card);
-  border-bottom: 1px solid var(--color-border-light);
+  background: transparent;
+  border-bottom: 1px solid var(--glass-border);
   flex-shrink: 0;
 }
 
@@ -672,7 +677,7 @@ onUnmounted(() => {
 .editor-body {
   flex: 1;
   overflow-y: auto;
-  background: var(--color-card);
+  background: transparent;
   position: relative;
   min-height: 0;
 }
@@ -690,8 +695,10 @@ onUnmounted(() => {
   justify-content: center;
   width: 36px;
   height: 100%;
-  background: var(--color-card);
-  border-left: 1px solid var(--color-border-light);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  border-left: 1px solid var(--glass-border);
   cursor: pointer;
   transition: background 0.15s ease;
 }
@@ -727,8 +734,10 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--color-card);
-  border-left: 1px solid var(--color-border-light);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  border-left: 1px solid var(--glass-border);
   animation: slideIn 0.2s ease;
 }
 
@@ -819,7 +828,7 @@ onUnmounted(() => {
 }
 
 .related-card:hover {
-  background: var(--color-card);
+  background: var(--glass-bg-strong);
   border-color: var(--color-primary);
 }
 

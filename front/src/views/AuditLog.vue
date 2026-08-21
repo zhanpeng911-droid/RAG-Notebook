@@ -191,7 +191,9 @@ onMounted(async () => {
 .loading-state { display: flex; justify-content: center; padding: 40px; }
 .log-list { display: flex; flex-direction: column; gap: 8px; }
 .log-item {
-  background: var(--color-card);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
   border-radius: var(--radius-lg);
   padding: 14px 16px;
   border: 1px solid var(--color-border-light);

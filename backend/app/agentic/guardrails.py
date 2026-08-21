@@ -103,5 +103,6 @@ class Guardrails:
         return len(space_id) <= 64 and bool(re.match(r'^[a-zA-Z0-9_-]+$', space_id))
 
 
-# 全局实例
-guardrails = Guardrails()
+# 注意：Guardrails 持有可变的计时状态（start_time），
+# 必须按请求/图实例创建（AgentGraph 中实例化），禁止提供共享全局单例，
+# 否则并发请求会互相覆盖计时起点，导致超时防护失效。

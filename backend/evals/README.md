@@ -7,18 +7,22 @@ backend/evals/
 ├── README.md              # 本文件：schema 定义 + 使用说明
 ├── cases/                 # 评估用例（JSONL 格式）
 │   ├── rag_retrieval_cases.jsonl
+│   ├── ir_eval_cases.jsonl    # IR 评测集（Recall@K / MRR / 分阶段归因）
 │   ├── agent_tool_cases.jsonl
 │   └── safety_cases.jsonl
 ├── runners/
-│   └── run_eval.py        # 主 runner（dry-run / mock / real）
+│   ├── run_eval.py        # 主 runner（dry-run / mock / llm-smoke）
+│   └── run_ir_eval.py     # IR 评测 runner（真实检索四阶段归因）
 ├── graders/
 │   ├── __init__.py
 │   ├── schema_validator.py    # Case schema 校验
 │   ├── keyword_grader.py      # 关键词匹配 grader
 │   ├── tool_call_grader.py    # 工具调用 grader
-│   └── forbidden_content_grader.py  # 禁止内容 grader
-└── reports/
-    └── .gitkeep
+│   ├── forbidden_content_grader.py  # 禁止内容 grader
+│   ├── ir_metrics.py          # IR 标准指标（Recall@K/Precision@K/MRR，纯函数）
+│   └── retrieval_grader.py    # 检索 grader（可选附带 IR 指标）
+├── seed_docs/             # 评测语料（112 篇主题文档，与业务数据隔离）
+└── reports/               # 报告产物（已 gitignore）
 ```
 
 ## Case Schema
@@ -413,3 +417,65 @@ Max tokens:               256
 - 小样本结果受 case 选择影响大
 - 不能代表系统整体质量
 - 只能作为 smoke 验证框架可用性
+
+## Eval 4：IR 指标评测（Recall@K / MRR / 四阶段归因）
+
+### 目标
+
+把检索质量从"关键词命中"升级为标准 IR 指标，并对同一批 case 以四种检索模式
+（vector / bm25 / hybrid / rerank）分别评测，回答"融合与精排是否真的带来增益"。
+
+### 指标定义
+
+| 指标 | 定义 |
+|---|---|
+| Recall@K（出处级） | 标准出处文档（`expected_sources`）是否出现在 Top-K 出处集合中；多出处按命中比例计分 |
+| Precision@K（chunk 级） | Top-K 切片中来自标准出处文档的比例，反映上下文噪声量 |
+| MRR | 首个命中标准出处的切片排名倒数均值，未命中记 0 |
+| 拒答正确率 | 不可答 case 的 Top-K 内容不含 `forbidden_keywords` 的比例 |
+
+### ir_eval_cases.jsonl 扩展字段
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `expected_sources` | list[string] | 标准出处文件名（须存在于 seed_docs），用于排名类指标 |
+| `topic` | string | 主题标签（mysql/redis/...），用于分主题得分 |
+| `ir_top_k` | int | 可选，该 case 的 K 值（默认 3） |
+
+### 运行方式
+
+```bash
+cd backend
+# 全部四种模式（rerank 需要 DASHSCOPE_API_KEY，未配置自动跳过）
+python -m evals.runners.run_ir_eval --top-k 3
+
+# 只跑指定模式
+python -m evals.runners.run_ir_eval --top-k 3 --modes vector,bm25,hybrid
+
+# 语料或切分参数变更后强制重建评测索引
+python -m evals.runners.run_ir_eval --rebuild
+```
+
+### 前置条件与隔离性
+
+- 需要可用 embedding 模型（Ollama 本地 或 DashScope，读应用 `.env`）
+- 评测索引使用独立目录 `data/ir_eval_chromadb`，与生产 `data/chromadb` 完全隔离
+- 不 import 生产单例 `VectorStoreService`，评测语料（seed_docs）与业务数据隔离，结论可复现
+
+### CI 与本地的分工
+
+- CI：`tests/test_eval_ir_metrics.py` 覆盖指标纯函数 + 标注文件 schema/规模/出处存在性守护（不依赖 embedding）
+- 本地：`run_ir_eval.py` 真实检索评测（依赖 embedding），报告输出到 `reports/ir_eval_*.md`
+
+### 基线参考（阿里云 qwen3.7-text-embedding，top_k=3，2026-08）
+
+| 模式 | Recall@K | Precision@K | MRR | 拒答正确率 |
+|---|---|---|---|---|
+| vector | 1.0000 | 0.3768 | 0.9565 | 100% |
+| bm25 | 0.6304 | 0.2174 | 0.5580 | 100% |
+| hybrid | 0.9783 | 0.3623 | 0.8623 | 100% |
+
+已知观察（样本量 27，仅作方向参考）：
+- BM25 单路在中文术语查询（"回表"、"死信"）上明显弱于向量
+- hybrid 会引入 BM25 噪声稀释向量排名，在向量已近满分的语料上增益为负——
+  这正是分阶段归因的价值：调参前先知道哪一阶段在拖后腿

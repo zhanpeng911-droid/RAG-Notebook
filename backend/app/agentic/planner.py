@@ -11,6 +11,7 @@ from typing import List, Optional
 from enum import Enum
 
 from app.core.logger_handler import logger
+from app.core.runtime_config import get as get_runtime_config
 
 
 class QueryType(str, Enum):
@@ -80,6 +81,10 @@ class Planner:
             if kw in query_lower:
                 return QueryType.PROCEDURAL
 
+        # 短查询且不含上述关键词 -> SIMPLE（轻量路径）
+        if len(query) <= self.SIMPLE_MAX_LENGTH:
+            return QueryType.SIMPLE
+
         # 默认为探索性查询
         return QueryType.EXPLORATORY
 
@@ -101,38 +106,41 @@ class Planner:
         """
         query_type = self.classify_query(query)
 
+        # top_k 基准值支持运行时热更新；各查询类型按策略在基准上偏移
+        baseline = get_runtime_config("retrieval.top_k_baseline")
+
         # 根据查询类型调整参数
         # use_rerank: 启用 qwen3-vl-rerank 重排序（已接入）
         # use_hyde: 事实类查询禁用 HyDE（研究证明伪文档会稀释精确术语匹配），
         #           解释/探索类保留（词汇差距大时需要语义扩展）
         if query_type == QueryType.SIMPLE:
             scope = "all"
-            top_k = 5
+            top_k = baseline
             use_hyde = False
             use_rerank = True
         elif query_type == QueryType.FACTUAL:
             scope = "all"
-            top_k = 5
+            top_k = baseline
             use_hyde = False
             use_rerank = True
         elif query_type == QueryType.EXPLANATORY:
             scope = "all"
-            top_k = 8
+            top_k = baseline + 3
             use_hyde = True
             use_rerank = True
         elif query_type == QueryType.COMPARATIVE:
             scope = "all"
-            top_k = 10
+            top_k = baseline + 5
             use_hyde = True
             use_rerank = True
         elif query_type == QueryType.PROCEDURAL:
             scope = "all"
-            top_k = 6
+            top_k = baseline + 1
             use_hyde = True
             use_rerank = True
         else:
             scope = "all"
-            top_k = 8
+            top_k = baseline + 3
             use_hyde = True
             use_rerank = True
 
@@ -142,11 +150,10 @@ class Planner:
 
         # 第二轮检索：CRAG 纠错策略
         if retrieval_round > 0:
-            # CRAG: 扩大检索范围 + 适当增加 top_k（而非默认降低）
-            if scope == "knowledge":
-                scope = "all"  # 从知识库扩大到知识库+笔记
+            # CRAG: 扩大召回（top_k+3）。默认 scope 已是 all（知识库+笔记），
+            # 无需再扩；space 范围是用户显式指定的约束，必须保持不变
             top_k = max(5, top_k + 3)  # 扩大召回，而非缩减
-            logger.info(f"【CRAG】第二轮检索扩大范围: scope={scope}, top_k={top_k}")
+            logger.info(f"【CRAG】第二轮检索扩大召回: scope={scope}, top_k={top_k}")
 
         plan = RetrievalPlan(
             query_type=query_type,
@@ -164,9 +171,8 @@ class Planner:
         改写查询（当证据不足时）。
 
         策略：
-        - 移除过于具体的限定词
-        - 扩展同义词
-        - 简化复杂查询
+        - 移除引号等定界符号
+        - 截断过长查询，保留核心部分
 
         :param original_query: 原始查询
         :param failed_reason: 失败原因

@@ -931,11 +931,13 @@ onMounted(() => {
 .space-select,
 .space-filter-select {
   padding: 6px 10px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-md);
   font-size: 13px;
   color: var(--color-text);
-  background: var(--color-card);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
   outline: none;
 }
 .space-select:focus,
@@ -950,7 +952,9 @@ onMounted(() => {
   padding: var(--space-2xl);
   text-align: center;
   cursor: pointer;
-  background: var(--color-card);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
   transition: all 0.2s ease;
   margin-bottom: var(--space-lg);
 }
@@ -985,11 +989,14 @@ onMounted(() => {
 
 /* ===== Selected Files ===== */
 .selected-files {
-  background: var(--color-card);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
   border-radius: var(--radius-lg);
   padding: var(--space-lg);
   margin-bottom: var(--space-lg);
-  border: 1px solid var(--color-border-light);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
 }
 
 .selected-header {
@@ -1141,11 +1148,14 @@ onMounted(() => {
 
 /* ===== Upload Progress ===== */
 .upload-progress {
-  background: var(--color-card);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
   border-radius: var(--radius-lg);
   padding: var(--space-lg);
   margin-bottom: var(--space-lg);
-  border: 1px solid var(--color-border-light);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
 }
 
 .progress-header {
@@ -1237,11 +1247,14 @@ onMounted(() => {
 }
 
 .status-card {
-  background: var(--color-card);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
   border-radius: var(--radius-lg);
   padding: var(--space-lg);
   text-align: center;
-  border: 1px solid var(--color-border-light);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
 }
 
 .status-value {
@@ -1258,10 +1271,13 @@ onMounted(() => {
 
 /* ===== Document Section ===== */
 .document-section {
-  background: var(--color-card);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
   border-radius: var(--radius-lg);
   padding: var(--space-lg);
-  border: 1px solid var(--color-border-light);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
 }
 
 .section-header {
@@ -1521,7 +1537,10 @@ onMounted(() => {
 .drawer {
   width: 480px;
   max-width: 90vw;
-  background: var(--color-card);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) + 6px));
+  backdrop-filter: blur(calc(var(--glass-blur) + 6px));
+  border-left: 1px solid var(--glass-border);
   display: flex;
   flex-direction: column;
   animation: slideIn 0.2s ease-out;

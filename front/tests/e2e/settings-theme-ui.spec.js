@@ -1,4 +1,4 @@
-// @ts-check
+﻿// @ts-check
 import { test, expect } from '@playwright/test';
 
 const AUTH_SCRIPT = `
@@ -46,11 +46,11 @@ test.describe('设置页主题交互', () => {
     const stored = await page.evaluate(() => localStorage.getItem('theme'));
     expect(stored).toBe('dark');
 
-    // 断言：CSS 变量更新
+    // 断言：CSS 变量更新（不再是浅色纸感底色）
     const bgColor = await page.evaluate(() =>
       getComputedStyle(document.documentElement).getPropertyValue('--color-bg').trim()
     );
-    expect(bgColor).not.toBe('#e7eef7');
+    expect(bgColor).not.toBe('#eef2f8');
   });
 
   test('通过设置页 UI 切换回浅色主题', async ({ page }) => {
@@ -66,8 +66,8 @@ test.describe('设置页主题交互', () => {
 
     // 操作：切换回浅色
     await page.getByText('主题定制').or(page.getByText('个性化设置')).click();
-    await expect(page.getByText('浅色·深蓝')).toBeVisible();
-    await page.getByText('浅色·深蓝').click();
+    await expect(page.getByText('浅色·湛蓝')).toBeVisible();
+    await page.getByText('浅色·湛蓝').click();
 
     // 断言：data-theme 切换为 light
     const lightTheme = await page.evaluate(() =>

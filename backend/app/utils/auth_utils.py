@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import Optional, Dict, Any
 import requests
@@ -62,6 +63,52 @@ def decode_django_jwt(token: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+async def _reject_if_blacklisted(payload: Dict[str, Any]) -> None:
+    """
+    检查 JWT 是否在黑名单中（登出/刷新撤销）。
+
+    所有从 token 提取用户身份的依赖必须经过此检查，否则已撤销的 token 仍可访问接口。
+    无法确认撤销状态时拒绝请求，避免撤销 token 被继续使用。
+    """
+    jti = payload.get("jti")
+    if not (jti and JWT_BLACKLIST_CHECK_ENABLED):
+        return
+
+    try:
+        async def _check_blacklist():
+            if JWT_BLACKLIST_REDIS_URL:
+                client = redis.from_url(
+                    JWT_BLACKLIST_REDIS_URL,
+                    decode_responses=True,
+                    socket_connect_timeout=0.3,
+                    socket_timeout=0.3,
+                )
+                try:
+                    return await client.exists(f"blacklist:{jti}", f":1:blacklist:{jti}")
+                finally:
+                    await client.aclose()
+
+            client = await connect_redis()
+            if client is None:
+                raise RuntimeError("Redis unavailable")
+            return await client.exists(f"blacklist:{jti}", f":1:blacklist:{jti}")
+
+        is_blacklisted = await asyncio.wait_for(_check_blacklist(), timeout=0.3)
+        if is_blacklisted:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token has been revoked",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not verify token revocation status",
+        )
+
+
 async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
     """
     获取当前用户ID —— FastAPI 依赖函数。
@@ -89,59 +136,27 @@ async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depend
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # 检查JWT是否在黑名单中。无法确认撤销状态时拒绝请求，避免撤销 token 被继续使用。
-    jti = payload.get("jti")
-    if jti and JWT_BLACKLIST_CHECK_ENABLED:
-        try:
-            import asyncio
-            async def _check_blacklist():
-                if JWT_BLACKLIST_REDIS_URL:
-                    client = redis.from_url(
-                        JWT_BLACKLIST_REDIS_URL,
-                        decode_responses=True,
-                        socket_connect_timeout=0.3,
-                        socket_timeout=0.3,
-                    )
-                    try:
-                        return await client.exists(f"blacklist:{jti}", f":1:blacklist:{jti}")
-                    finally:
-                        await client.aclose()
-
-                client = await connect_redis()
-                if client is None:
-                    raise RuntimeError("Redis unavailable")
-                return await client.exists(f"blacklist:{jti}", f":1:blacklist:{jti}")
-            is_blacklisted = await asyncio.wait_for(_check_blacklist(), timeout=0.3)
-            if is_blacklisted:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Token has been revoked",
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
-        except HTTPException:
-            raise
-        except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Could not verify token revocation status",
-            )
+    # 检查JWT是否在黑名单中
+    await _reject_if_blacklisted(payload)
 
     # 从Django JWT中提取user_id（uuid）
     user_id: str = payload.get("user_id")
-    
+
     if user_id is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not find user ID in token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     return user_id
 
 
 async def get_current_user_info(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
     """
     获取当前用户信息 —— 返回 user_id 和 username。
+
+    与 get_current_user_id 保持一致：同样执行 JWT 黑名单（撤销）检查。
 
     :return: {"user_id": "xxx", "username": "xxx"}
     """
@@ -154,6 +169,9 @@ async def get_current_user_info(credentials: HTTPAuthorizationCredentials = Depe
             detail="Could not validate credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    # 检查JWT是否在黑名单中
+    await _reject_if_blacklisted(payload)
 
     user_id = payload.get("user_id")
     username = payload.get("username", "")

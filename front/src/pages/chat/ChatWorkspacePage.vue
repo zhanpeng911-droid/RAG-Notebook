@@ -112,12 +112,14 @@
                 <span class="thinking-toggle">{{ message.thinkingCollapsed ? '展开' : '收起' }}</span>
               </div>
               <div v-show="!message.thinkingCollapsed" class="thinking-body">
+                <!-- Agentic RAG 检索链路可视化摘要 -->
+                <RetrievalTrace :steps="message.thinking" />
                 <div v-for="(step, sIndex) in message.thinking" :key="sIndex" class="thinking-step">
                   <span class="thinking-stage-label" :style="{ backgroundColor: getStageColor(step.stage) }">
                     {{ getStageLabel(step.stage) }}
                   </span>
                   <span class="thinking-step-content">{{ step.content }}</span>
-                  <div v-if="step.details" class="thinking-details">
+                  <div v-if="visibleDetails(step.details)" class="thinking-details">
                     <template v-if="step.details.documents">
                       <div v-for="(doc, dIndex) in step.details.documents.slice(0, 3)" :key="dIndex" class="thinking-doc-item">
                         <span class="thinking-doc-source">{{ doc.source }}</span>
@@ -138,7 +140,7 @@
                       <div class="thinking-detail-text">{{ truncateText(step.details.hypothetical_doc_preview, 80) }}</div>
                     </template>
                     <template v-else>
-                      <div v-for="(val, key) in step.details" :key="key" class="thinking-detail-kv">
+                      <div v-for="(val, key) in visibleDetails(step.details)" :key="key" class="thinking-detail-kv">
                         <span class="thinking-detail-key">{{ key }}:</span>
                         <span class="thinking-detail-val">{{ typeof val === 'object' ? JSON.stringify(val) : val }}</span>
                       </div>
@@ -185,7 +187,7 @@
       </div>
     </main>
 
-    <!-- 右栏：引用来源/思考时间线 (320px, 可折叠) -->
+    <!-- 右栏：问答记录（引用/检索过程/相关笔记手风琴）(320px, 可折叠) -->
     <aside class="reference-panel" :class="{ collapsed: referencePanelCollapsed }">
       <button class="panel-toggle" @click="referencePanelCollapsed = !referencePanelCollapsed" :title="referencePanelCollapsed ? '展开面板' : '折叠面板'">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -194,76 +196,13 @@
       </button>
 
       <div v-if="!referencePanelCollapsed" class="reference-content">
-        <div class="reference-tabs">
-          <button
-            v-for="tab in referenceTabs"
-            :key="tab.key"
-            class="tab-item"
-            :class="{ active: activeReferenceTab === tab.key }"
-            @click="activeReferenceTab = tab.key"
-          >
-            {{ tab.label }}
-          </button>
-        </div>
-
-        <div class="reference-body">
-          <!-- 引用来源 Tab -->
-          <div v-if="activeReferenceTab === 'references'" class="reference-list">
-            <div v-if="currentThinkingSteps.length === 0" class="reference-empty">
-              <p>发送消息后，引用来源将在此显示</p>
-            </div>
-            <template v-else>
-              <div v-for="(step, idx) in referenceDocuments" :key="idx" class="reference-item">
-                <div class="reference-source">{{ step.source || '未知来源' }}</div>
-                <div class="reference-score" v-if="step.score != null && !isNaN(step.score)">{{ (step.score * 100).toFixed(0) }}% 相关</div>
-                <div class="reference-score" v-else>引用</div>
-              </div>
-            </template>
-          </div>
-
-          <!-- 检索过程 Tab -->
-          <div v-if="activeReferenceTab === 'retrieval'" class="reference-list">
-            <div v-if="currentThinkingSteps.length === 0" class="reference-empty">
-              <p>发送消息后，检索过程将在此显示</p>
-            </div>
-            <template v-else>
-              <div v-for="(step, idx) in currentThinkingSteps" :key="idx" class="thinking-timeline-item">
-                <div class="timeline-dot" :style="{ backgroundColor: getStageColor(step.stage) }"></div>
-                <div class="timeline-content">
-                  <div class="timeline-stage">{{ getStageLabel(step.stage) }}</div>
-                  <div class="timeline-text">{{ step.content }}</div>
-                </div>
-              </div>
-            </template>
-          </div>
-
-          <!-- 相关笔记 Tab -->
-          <div v-if="activeReferenceTab === 'notes'" class="reference-list">
-            <div v-if="relatedLoading" class="reference-loading">
-              <div class="spinner-small"></div>
-              <p>检索相关笔记中...</p>
-            </div>
-            <div v-else-if="relatedNotes.length === 0" class="reference-empty">
-              <p>{{ relatedQuery ? '未找到相关笔记' : '发送消息后自动检索相关笔记' }}</p>
-            </div>
-            <template v-else>
-              <div
-                v-for="note in relatedNotes"
-                :key="note.id || note.note_id"
-                class="related-note-item"
-                @click="goToNote(note.id || note.note_id)"
-              >
-                <div class="related-note-header">
-                  <span class="related-note-title ellipsis">{{ note.title || '无标题' }}</span>
-                  <span v-if="note.similarity != null && !isNaN(note.similarity)" class="related-note-score">
-                    {{ (note.similarity * 100).toFixed(0) }}% 相关
-                  </span>
-                </div>
-                <p class="related-note-preview">{{ truncatePreview(note.content_preview || note.content || note.summary) }}</p>
-              </div>
-            </template>
-          </div>
-        </div>
+        <QaHistoryPanel
+          :qa-history="qaHistory"
+          :expanded-qa-id="expandedQaId"
+          :limit="QA_HISTORY_LIMIT"
+          @toggle="toggleQaExpand"
+          @clear="clearQaHistory"
+        />
       </div>
     </aside>
   </div>
@@ -277,8 +216,20 @@
 import 'highlight.js/styles/github.css'
 import 'highlight.js/lib/common'
 import { useChatWorkspace } from '../../composables/useChatWorkspace'
+import RetrievalTrace from '../../components/RetrievalTrace.vue'
+import QaHistoryPanel from '../../components/QaHistoryPanel.vue'
 
 defineOptions({ name: 'AIChat' })
+
+// Agentic 过程字段已由 RetrievalTrace 组件渲染，kv 列表中排除避免重复展示
+const TRACE_DETAIL_KEYS = new Set(['plan', 'retrieval', 'grading', 'rewrite'])
+
+function visibleDetails(details) {
+  if (!details) return null
+  const keys = Object.keys(details).filter((key) => !TRACE_DETAIL_KEYS.has(key))
+  if (keys.length === 0) return null
+  return Object.fromEntries(keys.map((key) => [key, details[key]]))
+}
 
 const {
   modelStore,
@@ -298,6 +249,11 @@ const {
   filteredSessions,
   currentThinkingSteps,
   referenceDocuments,
+  qaHistory,
+  expandedQaId,
+  QA_HISTORY_LIMIT,
+  toggleQaExpand,
+  clearQaHistory,
   quickQuestions,
   referenceTabs,
   getStageLabel,
@@ -321,15 +277,18 @@ const {
   display: flex;
   height: 100%;
   width: 100%;
-  background: var(--color-bg);
+  /* 透明底：透出全局网格背景 */
+  background: transparent;
   overflow: hidden;
 }
 
-/* ===== 左栏：会话列表 ===== */
+/* ===== 左栏：会话列表（玻璃） ===== */
 .session-panel {
   width: 260px;
-  background: var(--color-card);
-  border-right: 1px solid var(--color-border);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  border-right: 1px solid var(--glass-border);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -401,6 +360,7 @@ const {
 
 .session-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: var(--space-sm);
 }
@@ -637,18 +597,23 @@ const {
 }
 
 .ai-message .message-content {
-  background: var(--color-card);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
   color: var(--color-text);
   border-bottom-left-radius: var(--radius-sm);
   box-shadow: 0 1px 3px var(--color-shadow);
+  border: 1px solid var(--glass-border);
 }
 
-/* 输入区 */
+/* 输入区（玻璃） */
 .input-container {
   flex-shrink: 0;
   padding: var(--space-md) var(--space-lg);
-  border-top: 1px solid var(--color-border-light);
-  background: var(--color-card);
+  border-top: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
 }
 
 .input-wrapper {
@@ -713,16 +678,18 @@ const {
   cursor: not-allowed;
 }
 
-/* ===== 右栏：引用来源 ===== */
+/* ===== 右栏：问答记录（玻璃） ===== */
 .reference-panel {
-  width: 320px;
-  background: var(--color-card);
-  border-left: 1px solid var(--color-border);
+  width: 330px;
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  border-left: 1px solid var(--glass-border);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
   position: relative;
-  transition: width 0.2s ease;
+  transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .reference-panel.collapsed {
@@ -745,183 +712,30 @@ const {
   z-index: 10;
   color: var(--color-text-lighter);
   transition: all 0.15s ease;
+  box-shadow: 0 1px 3px var(--color-shadow);
 }
 
 .panel-toggle:hover {
   background: var(--color-surface);
-  color: var(--color-text);
+  color: var(--color-primary);
+  border-color: var(--color-primary);
 }
 
 .reference-content {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  animation: panelSlideIn 0.25s ease-out;
 }
 
-.reference-tabs {
-  display: flex;
-  border-bottom: 1px solid var(--color-border-light);
-  padding: 0 var(--space-sm);
+@keyframes panelSlideIn {
+  from { opacity: 0; transform: translateX(8px); }
+  to { opacity: 1; transform: translateX(0); }
 }
 
-.tab-item {
-  flex: 1;
-  padding: var(--space-md) var(--space-sm);
-  border: none;
-  background: transparent;
-  font-size: 13px;
-  color: var(--color-text-lighter);
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  transition: all 0.15s ease;
-}
-
-.tab-item:hover {
-  color: var(--color-text);
-}
-
-.tab-item.active {
-  color: var(--color-primary);
-  border-bottom-color: var(--color-primary);
-  font-weight: 500;
-}
-
-.reference-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--space-md);
-}
-
-.reference-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
-}
-
-.reference-empty {
-  text-align: center;
-  padding: var(--space-xl);
-  color: var(--color-text-lightest);
-  font-size: 13px;
-}
-
-.reference-loading {
-  text-align: center;
-  padding: var(--space-xl);
-  color: var(--color-text-lighter);
-  font-size: 13px;
-}
-
-.reference-loading .spinner-small {
-  width: 20px;
-  height: 20px;
-  border: 2px solid var(--color-border);
-  border-top-color: var(--color-primary);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-  margin: 0 auto var(--space-sm);
-}
-
-.related-note-item {
-  padding: var(--space-md);
-  border-bottom: 1px solid var(--color-border-light);
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-
-.related-note-item:last-child {
-  border-bottom: none;
-}
-
-.related-note-item:hover {
-  background: var(--color-surface);
-}
-
-.related-note-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: var(--space-sm);
-  margin-bottom: var(--space-xs);
-}
-
-.related-note-title {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--color-text);
-  flex: 1;
-  min-width: 0;
-}
-
-.related-note-score {
-  font-size: 11px;
-  color: var(--color-primary);
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.related-note-preview {
-  font-size: 12px;
-  color: var(--color-text-lighter);
-  line-height: 1.5;
-  margin: 0;
-}
-
-.reference-item {
-  padding: var(--space-sm) var(--space-md);
-  background: var(--color-surface);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--color-border-light);
-}
-
-.reference-source {
-  font-size: 13px;
-  color: var(--color-text);
-  font-weight: 500;
-  margin-bottom: 2px;
-}
-
-.reference-score {
-  font-size: 11px;
-  color: var(--color-primary);
-}
-
-/* 思考时间线 */
-.thinking-timeline-item {
-  display: flex;
-  gap: var(--space-sm);
-  padding: var(--space-sm) 0;
-  border-bottom: 1px solid var(--color-border-light);
-}
-
-.thinking-timeline-item:last-child {
-  border-bottom: none;
-}
-
-.timeline-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  margin-top: 4px;
-}
-
-.timeline-content {
-  flex: 1;
-}
-
-.timeline-stage {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--color-text-light);
-  margin-bottom: 2px;
-}
-
-.timeline-text {
-  font-size: 12px;
-  color: var(--color-text-lighter);
-  line-height: 1.4;
-}
+/* 消息内思考区的 RetrieveTrace 引用（组件自带样式） */
 
 /* ===== 思考过程（消息内） ===== */
 .thinking-section {

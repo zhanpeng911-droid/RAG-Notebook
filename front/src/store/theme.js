@@ -5,42 +5,42 @@ export const useThemeStore = defineStore('theme', {
     currentTheme: localStorage.getItem('theme') || 'light',
     themes: {
       light: {
-        name: '浅色·纸感',
-        bg: '#ede9e0',
-        surface: '#f5f4ee',
+        name: '浅色·湛蓝',
+        bg: '#eef2f8',
+        surface: '#f6f9fd',
         card: '#ffffff',
-        text: '#141413',
-        textLight: '#3a3a36',
-        textLighter: '#6b6a63',
-        textLightest: '#9c9b91',
+        text: '#0f1e3d',
+        textLight: '#33436b',
+        textLighter: '#5b6b8f',
+        textLightest: '#8b99b8',
         primary: '#1e40af',
         primaryHover: '#1e3a8a',
         tabbarActive: '#1e40af',
-        border: '#ebe9e0',
-        borderLight: '#f0eee6',
-        divider: '#ebe9e0',
-        shadow: 'rgba(20, 20, 19, 0.06)',
-        success: '#15803d',
-        error: '#b91c1c',
-        warning: '#b45309',
+        border: '#dbe4f0',
+        borderLight: '#e6edf6',
+        divider: '#dbe4f0',
+        shadow: 'rgba(15, 30, 61, 0.08)',
+        success: '#059669',
+        error: '#dc2626',
+        warning: '#d97706',
       },
       dark: {
-        name: '深色·纸感',
-        bg: '#1a1816',
-        surface: '#242220',
-        card: '#2a2725',
-        text: '#e8e6e0',
-        textLight: '#b8b5ad',
-        textLighter: '#8a8780',
-        textLightest: '#5c5a54',
+        name: '深色·深蓝',
+        bg: '#0c1222',
+        surface: '#141d33',
+        card: '#1a2540',
+        text: '#e6ecf8',
+        textLight: '#b6c2dc',
+        textLighter: '#8494b5',
+        textLightest: '#5a6a8c',
         primary: '#3b82f6',
         primaryHover: '#60a5fa',
         tabbarActive: '#3b82f6',
-        border: '#3a3735',
-        borderLight: '#302e2c',
-        divider: '#3a3735',
-        shadow: 'rgba(0, 0, 0, 0.20)',
-        success: '#4ade80',
+        border: '#26334f',
+        borderLight: '#1f2b44',
+        divider: '#26334f',
+        shadow: 'rgba(0, 0, 0, 0.35)',
+        success: '#34d399',
         error: '#f87171',
         warning: '#fbbf24',
       },
@@ -93,32 +93,47 @@ export const useThemeStore = defineStore('theme', {
       root.style.setProperty('--color-border-light', t.borderLight);
       root.style.setProperty('--color-divider', t.divider);
       root.style.setProperty('--color-shadow', t.shadow);
-      root.style.setProperty('--color-shadow-strong', dark ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.08)');
+      root.style.setProperty('--color-shadow-strong', dark ? 'rgba(0,0,0,0.45)' : 'rgba(15,30,61,0.14)');
       root.style.setProperty('--van-tabbar-item-active-color', t.tabbarActive);
+
+      // 玻璃拟态变量（DocMind 风格核心）
+      if (dark) {
+        root.style.setProperty('--glass-bg', 'rgba(20, 29, 51, 0.62)');
+        root.style.setProperty('--glass-bg-strong', 'rgba(26, 37, 64, 0.82)');
+        root.style.setProperty('--glass-border', 'rgba(148, 175, 226, 0.14)');
+        root.style.setProperty('--glass-shadow', '0 8px 32px rgba(0, 0, 0, 0.38)');
+        root.style.setProperty('--grid-line', 'rgba(96, 165, 250, 0.055)');
+      } else {
+        root.style.setProperty('--glass-bg', 'rgba(255, 255, 255, 0.62)');
+        root.style.setProperty('--glass-bg-strong', 'rgba(255, 255, 255, 0.84)');
+        root.style.setProperty('--glass-border', 'rgba(255, 255, 255, 0.65)');
+        root.style.setProperty('--glass-shadow', '0 8px 32px rgba(15, 30, 61, 0.10)');
+        root.style.setProperty('--grid-line', 'rgba(30, 64, 175, 0.05)');
+      }
 
       // 语义状态色
       if (dark) {
         root.style.setProperty('--status-success-bg', '#052e16');
-        root.style.setProperty('--status-success-text', '#4ade80');
+        root.style.setProperty('--status-success-text', '#34d399');
         root.style.setProperty('--status-warning-bg', '#422006');
         root.style.setProperty('--status-warning-text', '#fbbf24');
         root.style.setProperty('--status-error-bg', '#450a0a');
         root.style.setProperty('--status-error-text', '#f87171');
         root.style.setProperty('--status-info-bg', '#172554');
         root.style.setProperty('--status-info-text', '#60a5fa');
-        root.style.setProperty('--status-neutral-bg', '#27272a');
+        root.style.setProperty('--status-neutral-bg', '#1f2b44');
         root.style.setProperty('--status-neutral-text', '#a1a1aa');
       } else {
-        root.style.setProperty('--status-success-bg', '#f0fdf4');
-        root.style.setProperty('--status-success-text', '#15803d');
+        root.style.setProperty('--status-success-bg', '#ecfdf5');
+        root.style.setProperty('--status-success-text', '#059669');
         root.style.setProperty('--status-warning-bg', '#fffbeb');
-        root.style.setProperty('--status-warning-text', '#b45309');
+        root.style.setProperty('--status-warning-text', '#d97706');
         root.style.setProperty('--status-error-bg', '#fef2f2');
-        root.style.setProperty('--status-error-text', '#b91c1c');
+        root.style.setProperty('--status-error-text', '#dc2626');
         root.style.setProperty('--status-info-bg', '#eff6ff');
         root.style.setProperty('--status-info-text', '#1e40af');
-        root.style.setProperty('--status-neutral-bg', '#f5f5f5');
-        root.style.setProperty('--status-neutral-text', '#737373');
+        root.style.setProperty('--status-neutral-bg', '#f1f5fb');
+        root.style.setProperty('--status-neutral-text', '#5b6b8f');
       }
     },
 

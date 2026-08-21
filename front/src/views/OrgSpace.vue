@@ -511,7 +511,9 @@ onMounted(() => { loadData() })
   background: var(--color-bg);
 }
 .org-card {
-  background: var(--color-card);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
   border-radius: var(--radius-lg);
   padding: 20px;
   margin-bottom: 20px;
@@ -622,9 +624,12 @@ onMounted(() => { loadData() })
   max-height: 560px;
 }
 .doc-panel {
-  border: 1px solid var(--color-border-light);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-md);
-  background: var(--color-card);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  box-shadow: var(--glass-shadow);
   min-height: 320px;
   overflow: hidden;
 }

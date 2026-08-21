@@ -232,8 +232,10 @@ async function handleLogout() {
   left: 0;
   bottom: 0;
   width: var(--sidebar-width);
-  background: var(--color-card);
-  border-right: 1px solid var(--color-border);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  border-right: 1px solid var(--glass-border);
   display: flex;
   flex-direction: column;
   z-index: var(--z-sidebar);

@@ -10,6 +10,7 @@ from typing import List, Dict, Any
 from dataclasses import dataclass
 
 from app.core.logger_handler import logger
+from app.core.runtime_config import get as get_runtime_config
 from app.rag.retrieval_service import Evidence
 
 
@@ -28,27 +29,16 @@ class EvidenceGrader:
     证据质量评估器。
 
     使用规则引擎快速评估，避免额外的 LLM 调用。
+    阈值参数支持运行时热更新（grader.min_relevance / grader.confidence_*）。
     """
-
-    # 最低相关性分数阈值
-    MIN_RELEVANCE_SCORE = 0.3
-    # 最少证据数量
-    MIN_EVIDENCE_COUNT = 1
-    # 最低置信度阈值
-    MIN_CONFIDENCE = 0.4
-
-    # CRAG 纠错回路的置信度分级阈值
-    CONFIDENCE_HIGH = 0.7    # >= 0.7: 证据充足，直接生成
-    CONFIDENCE_MEDIUM = 0.4  # >= 0.4: 证据可用，正常生成
-    CONFIDENCE_LOW = 0.1     # >= 0.1: 证据勉强，CRAG 触发扩大检索
 
     def _confidence_level(self, confidence: float) -> str:
         """将置信度映射为分级，供 CRAG 纠错回路决策。"""
-        if confidence >= self.CONFIDENCE_HIGH:
+        if confidence >= get_runtime_config("grader.confidence_high"):
             return "high"
-        elif confidence >= self.CONFIDENCE_MEDIUM:
+        elif confidence >= get_runtime_config("grader.confidence_medium"):
             return "medium"
-        elif confidence >= self.CONFIDENCE_LOW:
+        elif confidence >= get_runtime_config("grader.confidence_low"):
             return "low"
         else:
             return "none"
@@ -77,9 +67,10 @@ class EvidenceGrader:
             )
 
         # 过滤低相关性证据
+        min_relevance = get_runtime_config("grader.min_relevance")
         relevant = [
             ev for ev in evidences
-            if ev.score >= self.MIN_RELEVANCE_SCORE
+            if ev.score >= min_relevance
         ]
 
         if not relevant:
@@ -96,10 +87,10 @@ class EvidenceGrader:
         coverage = len(relevant) / max(len(evidences), 1)
         confidence = (avg_score * 0.7 + coverage * 0.3)
 
-        # 判断是否充分
+        # 判断是否充分（confidence_medium 同时作为"最低可用置信度"阈值）
         is_sufficient = (
-            len(relevant) >= self.MIN_EVIDENCE_COUNT
-            and confidence >= self.MIN_CONFIDENCE
+            len(relevant) >= 1
+            and confidence >= get_runtime_config("grader.confidence_medium")
         )
 
         # 第二轮检索时放宽标准

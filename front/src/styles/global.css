@@ -1,6 +1,6 @@
 /* ============================================
    全局样式 - 基础重置 + 排版 + 工具类
-   纸感编辑风：零圆角 · 零渐变 · 边框分层
+   DocMind 深海蓝 · 蓝图网格背景 · 玻璃拟态
    ============================================ */
 
 @import './tokens.css';
@@ -27,15 +27,17 @@ body {
   overflow-x: hidden;
 }
 
-/* ---- 纸张纹理：极淡噪点，模拟纸张纤维质感 ---- */
+/* ---- 蓝图网格背景：科技感底纹，玻璃面板在其上产生磨砂效果 ---- */
 body::before {
   content: "";
   position: fixed;
   inset: 0;
   z-index: -1;
   pointer-events: none;
-  opacity: 0.35;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3CfeColorMatrix values='0 0 0 0 0.6 0 0 0 0 0.55 0 0 0 0 0.45 0 0 0 0.06 0'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-image:
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size: 28px 28px;
 }
 
 /* ---- 排版层级（强字重对比：标题 800 vs 正文 400） ---- */

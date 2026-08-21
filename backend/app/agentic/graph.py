@@ -17,7 +17,7 @@ from app.agentic.planner import planner
 from app.agentic.retrieval_grader import evidence_grader
 from app.agentic.answer_generator import create_answer_generator
 from app.agentic.citation import citation_manager
-from app.agentic.guardrails import guardrails
+from app.agentic.guardrails import Guardrails
 
 
 class AgentGraph:
@@ -49,6 +49,9 @@ class AgentGraph:
         self.space_id = space_id
         self.session_id = session_id
         self.llm_config = llm_config
+        # 实例级防护栏：Guardrails 持有可变计时状态（start_time），
+        # 必须每个 AgentGraph 一份，避免并发请求互相覆盖计时起点导致超时判断失真
+        self.guardrails = Guardrails()
 
     async def run(self, query: str) -> AsyncGenerator[Dict[str, Any], None]:
         """
@@ -58,7 +61,7 @@ class AgentGraph:
         :yield: SSE 事件
         """
         # 初始化
-        guardrails.start()
+        self.guardrails.start()
 
         state = AgentState(
             user_id=self.user_id,
@@ -68,16 +71,16 @@ class AgentGraph:
         )
 
         # 输入校验
-        if not guardrails.validate_user_id(self.user_id):
+        if not self.guardrails.validate_user_id(self.user_id):
             yield self._create_event(AgentPhase.ERROR, error="无效的用户ID")
             return
 
-        if not guardrails.validate_space_id(self.space_id):
+        if not self.guardrails.validate_space_id(self.space_id):
             yield self._create_event(AgentPhase.ERROR, error="无效的空间ID")
             return
 
         # 清洗查询
-        state.query = guardrails.sanitize_query(query)
+        state.query = self.guardrails.sanitize_query(query)
         if not state.query:
             yield self._create_event(AgentPhase.ERROR, error="查询不能为空")
             return
@@ -85,11 +88,12 @@ class AgentGraph:
         # 开始
         yield self._create_event(AgentPhase.STARTED, state=state)
 
+        grading_summary = None
         try:
             # 主循环：检索 -> 评估 -> (可能)重新检索
             while state.can_retry():
                 # 检查超时
-                if not guardrails.check_timeout():
+                if not self.guardrails.check_timeout():
                     logger.warning("【Agent】总超时")
                     state.error = "处理超时"
                     break
@@ -103,8 +107,18 @@ class AgentGraph:
                     retrieval_round=state.current_retrieval_round,
                 )
 
-                # 检索
-                yield self._create_event(AgentPhase.RETRIEVING, state=state)
+                # 检索（事件附带检索计划摘要，供前端展示检索链路）
+                yield self._create_event(
+                    AgentPhase.RETRIEVING,
+                    state=state,
+                    plan={
+                        "query_type": plan.query_type.value,
+                        "scope": plan.scope,
+                        "top_k": plan.top_k,
+                        "use_hyde": plan.use_hyde,
+                        "use_rerank": plan.use_rerank,
+                    },
+                )
                 retrieval_service = RetrievalService(
                     user_id=self.user_id,
                     space_id=self.space_id,
@@ -120,7 +134,15 @@ class AgentGraph:
                 )
 
                 state.evidences = evidences
-                yield self._create_event(AgentPhase.RETRIEVAL_COMPLETED, state=state)
+                yield self._create_event(
+                    AgentPhase.RETRIEVAL_COMPLETED,
+                    state=state,
+                    retrieval={
+                        "evidence_count": len(evidences),
+                        "scope": plan.scope,
+                        "top_k": plan.top_k,
+                    },
+                )
 
                 # 评估
                 yield self._create_event(AgentPhase.GRADING_EVIDENCE, state=state)
@@ -129,6 +151,12 @@ class AgentGraph:
                     evidences=evidences,
                     retrieval_round=state.current_retrieval_round,
                 )
+                grading_summary = {
+                    "confidence": round(grading.confidence, 4),
+                    "confidence_level": grading.confidence_level,
+                    "is_sufficient": grading.is_sufficient,
+                    "relevant_count": len(grading.relevant_evidences),
+                }
 
                 if grading.is_sufficient:
                     # 证据充分，生成答案
@@ -138,27 +166,39 @@ class AgentGraph:
                     if not state.can_retry():
                         break
 
-                    yield self._create_event(AgentPhase.REWRITING_QUERY, state=state)
-
                     # CRAG 纠错：置信度极低（none）时扩大检索范围
                     crag_expanded = False
                     if grading.confidence_level == "none" and state.current_retrieval_round == 0:
                         logger.info("【CRAG】置信度极低，触发纠错回路：扩大检索范围")
                         crag_expanded = True
 
-                    state.query = planner.rewrite_query(
+                    rewritten = planner.rewrite_query(
                         original_query=state.query,
                         failed_reason=grading.reason,
+                    )
+                    yield self._create_event(
+                        AgentPhase.REWRITING_QUERY,
+                        state=state,
+                        grading=grading_summary,
+                        rewrite={
+                            "rewritten_query": rewritten,
+                            "crag_triggered": crag_expanded,
+                        },
                     )
                     # CRAG 纠错：改写后扩大 scope 和 top_k
                     if crag_expanded:
                         # 临时扩大检索范围：下一轮 create_plan 会读取 retrieval_round
-                        logger.info(f"【CRAG】改写查询: {state.query[:50]}, 扩大检索范围")
+                        logger.info(f"【CRAG】改写查询: {rewritten[:50]}, 扩大检索范围")
+                    state.query = rewritten
                     state.rewritten_queries.append(state.query)
                     state.increment_round()
 
-            # 生成答案
-            yield self._create_event(AgentPhase.GENERATING_ANSWER, state=state)
+            # 生成答案（事件附带证据评估结果摘要）
+            yield self._create_event(
+                AgentPhase.GENERATING_ANSWER,
+                state=state,
+                grading=grading_summary,
+            )
 
             answer_generator = create_answer_generator(llm_config=self.llm_config)
             result = await answer_generator.generate(
@@ -191,8 +231,13 @@ class AgentGraph:
         state: AgentState = None,
         error: str = None,
         quality_scores: Any = None,
+        **extra,
     ) -> Dict[str, Any]:
-        """创建 SSE 事件"""
+        """创建 SSE 事件
+
+        :param extra: 附加到事件的扩展字段（plan/retrieval/grading/rewrite 等），
+                      值为 None 的字段不输出
+        """
         event = {
             "type": phase.value,
             "timestamp": self._get_timestamp(),
@@ -200,6 +245,11 @@ class AgentGraph:
 
         if state:
             event["state"] = state.to_dict()
+
+        # 合并扩展字段（检索链路过程数据，供前端可视化）
+        for key, value in extra.items():
+            if value is not None:
+                event[key] = value
 
         if phase == AgentPhase.COMPLETED and state:
             event["answer"] = state.answer

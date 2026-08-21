@@ -172,8 +172,10 @@ onUnmounted(() => {
   left: var(--sidebar-width);
   right: 0;
   height: var(--topbar-height);
-  background: var(--color-card);
-  border-bottom: 1px solid var(--color-border);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  border-bottom: 1px solid var(--glass-border);
   display: flex;
   align-items: center;
   padding: 0 var(--space-lg);
@@ -336,10 +338,12 @@ onUnmounted(() => {
   right: 0;
   margin-top: var(--space-sm);
   width: 200px;
-  background: var(--color-card);
-  border: 1px solid var(--color-border);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) + 6px));
+  backdrop-filter: blur(calc(var(--glass-blur) + 6px));
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-md);
-  box-shadow: 0 4px 12px var(--color-shadow-strong);
+  box-shadow: 0 8px 32px var(--color-shadow-strong);
   z-index: 1000;
   overflow: hidden;
 }

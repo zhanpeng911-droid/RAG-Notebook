@@ -16,6 +16,7 @@ from enum import Enum
 from langchain_core.documents import Document
 
 from app.core.logger_handler import logger
+from app.core.runtime_config import get as get_runtime_config
 
 
 class SourceType(str, Enum):
@@ -101,15 +102,22 @@ class RetrievalService:
         if not query or not query.strip():
             return []
 
-        logger.info(f"【统一检索】query={query[:50]}, scope={scope}, top_k={top_k}, use_rerank={use_rerank}")
+        # 运行时可调参数（热更新）
+        rerank_enabled = get_runtime_config("retrieval.rerank_enabled")
+        candidate_multiplier = get_runtime_config("retrieval.rerank_candidate_multiplier")
+
+        logger.info(
+            f"【统一检索】query={query[:50]}, scope={scope}, top_k={top_k}, "
+            f"use_rerank={use_rerank}(enabled={rerank_enabled})"
+        )
 
         # 解析 scope
         effective_space_id = self.space_id
         if scope.startswith("space:"):
             effective_space_id = scope.split(":", 1)[1]
 
-        # 重排序时扩大候选集（候选 top_k*3，重排后取 top_k）
-        candidate_k = top_k * 3 if use_rerank else top_k
+        # 重排序时扩大候选集（候选 top_k×倍数，重排后取 top_k）
+        candidate_k = top_k * candidate_multiplier if (use_rerank and rerank_enabled) else top_k
 
         # 并行检索知识库和笔记
         tasks = []
@@ -140,7 +148,7 @@ class RetrievalService:
         all_evidences = self._merge_adjacent(all_evidences)
 
         # 重排序（如果启用且候选数足够）
-        if use_rerank and len(all_evidences) > top_k:
+        if use_rerank and rerank_enabled and len(all_evidences) > top_k:
             reranked = await self._rerank_evidences(query, all_evidences)
             if reranked:
                 all_evidences = reranked

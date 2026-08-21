@@ -41,8 +41,12 @@ const categoryMap = { work: '工作', study: '学习', life: '生活', project: 
 .review-card {
   padding: 20px;
   margin-bottom: 16px;
-  background: var(--color-card);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
   border-radius: var(--radius-lg);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
   transition: opacity 0.3s;
 }
 .review-card--done {

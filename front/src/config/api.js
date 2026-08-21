@@ -49,5 +49,9 @@ export const apiConfig = {
     // 回顾提醒
     reviewToday: `${API_V1}/review/today`,
     reviewDone: (noteId) => `${API_V1}/review/done/${noteId}`,
+
+    // 运行时配置（检索参数热更新）
+    runtimeConfig: `${API_V1}/admin/runtime-config`,
+    runtimeConfigReset: `${API_V1}/admin/runtime-config/reset`,
   }
 }

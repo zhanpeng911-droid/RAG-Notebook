@@ -8,16 +8,25 @@ import os
 from celery import Celery
 
 from app.core.logger_handler import logger
+from app.config.validator import get_settings
 
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = os.getenv("REDIS_PORT", "6379")
-REDIS_DB = os.getenv("REDIS_DB", "0")
+# 配置读取：优先系统环境变量（Docker env_file 注入），其次应用 .env（pydantic-settings）
+_settings = get_settings()
+REDIS_HOST = os.getenv("REDIS_HOST") or _settings.REDIS_HOST or "localhost"
+REDIS_PORT = os.getenv("REDIS_PORT") or _settings.REDIS_PORT or "6379"
+REDIS_DB = os.getenv("REDIS_DB") or _settings.REDIS_DB or "0"
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD") or _settings.REDIS_PASSWORD or ""
+
+# Redis 带认证时 URL 形如 redis://:password@host:port/db（密码需要 URL 编码）
+from urllib.parse import quote
+_redis_auth = f":{quote(REDIS_PASSWORD, safe='')}@" if REDIS_PASSWORD else ""
+_redis_base = f"redis://{_redis_auth}{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
 
 # 创建 Celery 实例
 celery_app = Celery(
     "notebook",
-    broker=f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}",
-    backend=f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}",
+    broker=_redis_base,
+    backend=_redis_base,
 )
 
 # 显式注册任务模块 —— 确保 worker 启动时必定发现 index_task 中的任务。

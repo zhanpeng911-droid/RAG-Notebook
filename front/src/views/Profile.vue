@@ -630,7 +630,10 @@ const showAvatarDialog = () => {
 .avatar-group :deep(.van-cell),
 .info-group :deep(.van-cell),
 .security-group :deep(.van-cell) {
-  background: var(--color-card);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-md);
   margin-bottom: 6px;
   box-shadow: 0 1px 2px var(--color-shadow);

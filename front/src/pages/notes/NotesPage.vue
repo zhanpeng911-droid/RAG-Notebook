@@ -380,8 +380,10 @@ watch(() => route.query.q, (newQ) => {
   align-items: center;
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  background: var(--color-card);
-  border: 1px solid var(--color-border);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-md);
   transition: border-color 0.15s ease;
 }
@@ -414,8 +416,10 @@ watch(() => route.query.q, (newQ) => {
   justify-content: center;
   width: 36px;
   height: 36px;
-  border: 1px solid var(--color-border);
-  background: var(--color-card);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
   color: var(--color-text-lighter);
   border-radius: var(--radius-md);
   cursor: pointer;
@@ -457,13 +461,15 @@ watch(() => route.query.q, (newQ) => {
 .category-tab {
   padding: var(--space-xs) var(--space-md);
   border-radius: var(--radius-full);
-  background: var(--color-card);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
   font-size: 13px;
   color: var(--color-text-light);
   white-space: nowrap;
   cursor: pointer;
   transition: all 0.15s ease;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--glass-border);
 }
 
 .category-tab:hover {
@@ -515,17 +521,20 @@ watch(() => route.query.q, (newQ) => {
 }
 
 .note-card {
-  background: var(--color-card);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
   border-radius: var(--radius-lg);
   padding: var(--space-lg);
-  border: 1px solid var(--color-border-light);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .note-card:hover {
   border-color: var(--color-primary);
-  box-shadow: 0 4px 12px var(--color-shadow);
+  box-shadow: 0 8px 24px var(--color-shadow-strong);
   transform: translateY(-2px);
 }
 
@@ -593,9 +602,12 @@ watch(() => route.query.q, (newQ) => {
 
 /* ===== Table View ===== */
 .table-view {
-  background: var(--color-card);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
   border-radius: var(--radius-lg);
-  border: 1px solid var(--color-border-light);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
   overflow: hidden;
 }
 

@@ -13,13 +13,14 @@ import os
 from pathlib import Path
 
 import pymysql
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 pymysql.install_as_MySQLdb()
 
 load_dotenv()
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
+# Build paths inside your project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -27,7 +28,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
+# 该密钥同时用于 JWT 签发/校验，必须与 backend(FastAPI) 的 SECRET_KEY 完全一致（见 docs/JWT_CONTRACT.md）。
+# 缺失时立即失败，避免以 None 密钥静默签发不可校验的 token。
 SECRET_KEY = os.getenv('JWT_SECRET_KEY')
+if not SECRET_KEY:
+    raise ImproperlyConfigured(
+        "JWT_SECRET_KEY 环境变量未设置：请在 DjangoUserService/.env 中配置，"
+        "且必须与 backend(FastAPI) 的 SECRET_KEY 保持一致（详见 docs/JWT_CONTRACT.md）。"
+    )
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
@@ -187,13 +195,12 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 MEDIA_ROOT = BASE_DIR / 'media'
 MEDIA_URL = '/media/'
 
-# CORS 配置（生产环境请修改为实际域名）
+# CORS 配置（通过环境变量覆盖，生产环境设置为实际域名）
 CORS_ALLOW_ALL_ORIGINS = False
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://localhost:3000",
-    "http://localhost:3076",
-]
+CORS_ALLOWED_ORIGINS = os.getenv(
+    "CORS_ALLOWED_ORIGINS",
+    "http://localhost:5173,http://localhost:3000,http://localhost:3076",
+).split(",")
 
 # 覆盖默认的用户模型
 AUTH_USER_MODEL = 'user.User'

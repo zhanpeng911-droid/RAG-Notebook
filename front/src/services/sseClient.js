@@ -87,12 +87,23 @@ export function createSSEStream(url, body, handlers) {
               case 'rewriting_query':
               case 'generating_answer':
               case 'citation':
-                // 将 Agentic 阶段事件转为 thinking 步骤展示
-                handlers.onThinking?.({
-                  stage: json.type,
-                  content: _agenticStageLabel(json.type),
-                  details: json.state || null,
-                })
+                // 将 Agentic 阶段事件转为 thinking 步骤展示；
+                // details 合并 state 与过程数据（plan/retrieval/grading/rewrite），
+                // 供 RetrievalTrace 组件渲染检索链路
+                {
+                  const details = {
+                    ...(json.state || null),
+                    ...(json.plan ? { plan: json.plan } : null),
+                    ...(json.retrieval ? { retrieval: json.retrieval } : null),
+                    ...(json.grading ? { grading: json.grading } : null),
+                    ...(json.rewrite ? { rewrite: json.rewrite } : null),
+                  }
+                  handlers.onThinking?.({
+                    stage: json.type,
+                    content: _agenticStageLabel(json.type),
+                    details: Object.keys(details).length > 0 ? details : null,
+                  })
+                }
                 break
               case 'completed':
                 // Agentic 完成事件，提取 answer 和 citations

@@ -22,10 +22,21 @@ from app.core.logger_handler import logger
 
 NOTES_COLLECTION_NAME = "notes_collection"
 
+# ChromaDB 多进程写入（web + celery worker 同时操作同一持久目录）时，
+# 长驻进程缓存的 HNSW 索引可能过期，查询报 "Error finding id" 等内部错误。
+# 该错误可通过丢弃客户端缓存并重建来恢复。
+_STALE_CLIENT_MARKERS = ("error finding id", "internal error")
+
 
 def _user_note_filter(user_id: str) -> dict:
     """构建用户笔记过滤条件，防止跨用户泄露"""
     return {"$and": [{"user_id": user_id}, {"doc_type": "note"}]}
+
+
+def _looks_like_stale_client_error(exc: Exception) -> bool:
+    """判断异常是否为客户端索引缓存过期（可重建恢复）的特征"""
+    message = str(exc).lower()
+    return any(marker in message for marker in _STALE_CLIENT_MARKERS)
 
 
 class NoteVectorIndex:
@@ -49,6 +60,32 @@ class NoteVectorIndex:
                 persist_directory=persist_dir,
             )
         return self._store
+
+    def _reset_store(self) -> None:
+        """丢弃底层 Chroma 客户端缓存（索引过期时重建恢复）。"""
+        self._store = None
+        try:
+            from chromadb.api.shared_system_client import SharedSystemClient
+            SharedSystemClient.clear_system_cache()
+        except (ImportError, AttributeError):
+            pass
+
+    def _search_with_self_heal(self, search_fn):
+        """
+        执行向量检索，遇到客户端索引缓存过期错误时重建客户端并重试一次。
+
+        celery worker 与 web 进程共用同一 Chroma 持久目录时，
+        另一进程写入会使本进程缓存的 HNSW 索引失效（"Error finding id"），
+        重建客户端即可恢复，无需人工重启服务。
+        """
+        try:
+            return search_fn(self._ensure_store())
+        except Exception as exc:
+            if not _looks_like_stale_client_error(exc):
+                raise
+            logger.warning(f"【笔记索引】检测到客户端索引缓存过期，重建后重试: {exc}")
+            self._reset_store()
+            return search_fn(self._ensure_store())
 
     @property
     def store(self) -> Chroma:
@@ -101,10 +138,8 @@ class NoteVectorIndex:
         """
         语义搜索当前用户的笔记，返回 note_id 列表（按相似度排序）。
         """
-        docs = self._store.similarity_search(
-            query,
-            k=top_k,
-            filter=_user_note_filter(user_id),
+        docs = self._search_with_self_heal(
+            lambda s: s.similarity_search(query, k=top_k, filter=_user_note_filter(user_id))
         )
         return [doc.metadata.get("note_id") for doc in docs if doc.metadata.get("note_id")]
 
@@ -115,10 +150,10 @@ class NoteVectorIndex:
         搜索相关笔记，返回 (Document, score) 列表。
         用于 AI 对话的"相关笔记"标签页。
         """
-        return self._store.similarity_search_with_score(
-            query,
-            k=top_k,
-            filter=_user_note_filter(user_id),
+        return self._search_with_self_heal(
+            lambda s: s.similarity_search_with_score(
+                query, k=top_k, filter=_user_note_filter(user_id)
+            )
         )
 
     def find_related_for_note_content(
@@ -132,10 +167,10 @@ class NoteVectorIndex:
         根据笔记内容检索关联笔记，排除自身。
         用于 get_related_notes 方法。
         """
-        docs_with_scores = self._store.similarity_search_with_score(
-            content,
-            k=top_k + 1,  # 多取一个，排除自身
-            filter=_user_note_filter(user_id),
+        docs_with_scores = self._search_with_self_heal(
+            lambda s: s.similarity_search_with_score(
+                content, k=top_k + 1, filter=_user_note_filter(user_id)  # 多取一个，排除自身
+            )
         )
         return [
             (doc, score)

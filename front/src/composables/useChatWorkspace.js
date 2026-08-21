@@ -14,6 +14,7 @@ import { noteApi } from '../services/noteApi'
 import { useUserStore } from '../store/user'
 import { useModelStore } from '../store/model'
 import { useSessionStore } from '../store/session'
+import { useQaHistoryStore } from '../store/qaHistory'
 
 const stageConfig = {
   retrieval: { label: '检索', color: '#3f8cff' },
@@ -76,6 +77,25 @@ export function useChatWorkspace() {
     }
     return docs
   })
+
+  // ===== 右栏问答记录栈：Pinia store 持久化（跨路由/刷新保留最近 N 组） =====
+  // 数据源迁移至 store/qaHistory.js：离开对话页再回来记录不丢
+  const qaHistoryStore = useQaHistoryStore()
+  const qaHistory = computed(() => qaHistoryStore.history)
+  const expandedQaId = computed(() => qaHistoryStore.expandedId)
+  const QA_HISTORY_LIMIT = qaHistoryStore.limit
+
+  function pushQaSnapshot({ question, thinking = [], citations = [], relatedNotes = [] }) {
+    return qaHistoryStore.push({ question, thinking, citations, relatedNotes })
+  }
+
+  function toggleQaExpand(id) {
+    qaHistoryStore.toggleExpand(id)
+  }
+
+  function clearQaHistory() {
+    qaHistoryStore.clear()
+  }
 
   const quickQuestions = [
     '帮我整理笔记要点',
@@ -269,6 +289,7 @@ export function useChatWorkspace() {
     scrollToBottom()
     isLoading.value = true
     let aiResponse = ''
+    let completedCitations = []
     fetchRelatedNotes(userMessage)
 
     try {
@@ -292,6 +313,19 @@ export function useChatWorkspace() {
                 thinking: [...messages.value[idx].thinking, newStep],
               }
               nextTick(() => scrollToBottom())
+            }
+          },
+          onCompleted(json) {
+            // Agent 完成事件：捕获引用，入栈右栏问答记录
+            completedCitations = Array.isArray(json.citations) ? json.citations : []
+            const lastMsg = messages.value[messages.value.length - 1]
+            if (lastMsg?.role === 'assistant') {
+              pushQaSnapshot({
+                question: userMessage,
+                thinking: lastMsg.thinking || [],
+                citations: completedCitations,
+                relatedNotes: relatedNotes.value,
+              })
             }
           },
           onResponse(json) {
@@ -453,6 +487,12 @@ export function useChatWorkspace() {
     filteredSessions,
     currentThinkingSteps,
     referenceDocuments,
+    qaHistory,
+    expandedQaId,
+    QA_HISTORY_LIMIT,
+    pushQaSnapshot,
+    toggleQaExpand,
+    clearQaHistory,
     quickQuestions,
     referenceTabs,
     getStageLabel,

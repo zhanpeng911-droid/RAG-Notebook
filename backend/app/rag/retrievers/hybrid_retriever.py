@@ -14,6 +14,7 @@ from langchain_community.retrievers import BM25Retriever
 from langchain_classic.retrievers import EnsembleRetriever
 
 from app.utils.config import chroma_config
+from app.core.runtime_config import get as get_runtime_config
 
 from .empty_retriever import EmptyRetriever
 
@@ -46,7 +47,7 @@ class HybridRetriever:
         if documents:
             bm25_retriever = BM25Retriever.from_documents(
                 documents=documents,
-                k=chroma_config['k']
+                k=get_runtime_config("retrieval.chroma_k")
             )
             return bm25_retriever
         else:
@@ -80,7 +81,10 @@ class HybridRetriever:
         filter_dict = {'user_id': user_id}
         vector_retriever = self.vectors_store.as_retriever(
             search_type='similarity',
-            search_kwargs={'k': chroma_config['k'], 'filter': filter_dict},
+            search_kwargs={
+                'k': get_runtime_config("retrieval.chroma_k"),
+                'filter': filter_dict,
+            },
         )
         bm25_retriever = await self.get_bm25_retriever(user_id)
 

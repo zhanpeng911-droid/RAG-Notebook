@@ -5,6 +5,11 @@ Grades based on:
 - forbidden_keywords absent from retrieved docs content
 - expected_no_answer correctness (empty/low-relevance docs vs non-empty)
 - min_retrieved_count / max_retrieved_count bounds (optional)
+
+IR metrics extension (optional, additive):
+- When the case has `expected_sources` and docs carry a source in metadata,
+  standard IR metrics (Recall@K / Precision@K / RR) are computed into
+  details["ir_metrics"] without affecting pass/fail.
 """
 
 
@@ -100,6 +105,18 @@ def grade(case: dict, result: dict) -> dict:
             and len(count_violations) == 0
         )
 
+    # --- IR metrics extension (additive, does not affect pass/fail) ---
+    ir_metrics = None
+    expected_sources = case.get("expected_sources") or []
+    if expected_sources:
+        try:
+            from evals.graders.ir_metrics import grade_case_ir
+
+            ir_top_k = case.get("ir_top_k", 3)
+            ir_metrics = grade_case_ir(retrieved_docs, expected_sources, k=ir_top_k)
+        except Exception as e:
+            ir_metrics = {"error": str(e)}
+
     details = {
         "expected_keywords_found": expected_found,
         "expected_keywords_missing": expected_missing,
@@ -109,6 +126,8 @@ def grade(case: dict, result: dict) -> dict:
         "no_answer_violations": no_answer_violations,
         "count_violations": count_violations,
     }
+    if ir_metrics is not None:
+        details["ir_metrics"] = ir_metrics
 
     return {
         "passed": passed,

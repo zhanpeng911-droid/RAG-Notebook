@@ -27,6 +27,7 @@ from app.models.space_document import SpaceDocument  # noqa: F401
 from app.models.audit_log import AuditLog  # noqa: F401
 from app.models.document_index import DocumentIndex  # noqa: F401
 from app.models.agent_run import AgentRun, AgentStep, AgentFeedback  # noqa: F401
+from app.models.runtime_config import RuntimeConfig  # noqa: F401
 from app.config.validator import get_settings
 
 # 从统一配置读取

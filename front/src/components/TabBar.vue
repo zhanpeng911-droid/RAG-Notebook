@@ -1,5 +1,5 @@
 <template>
-  <van-tabbar v-model="active" route>
+  <van-tabbar v-model="active" route class="glass-tabbar">
     <van-tabbar-item to="/notes">
       <span>笔记</span>
       <template #icon="props">
@@ -73,3 +73,14 @@ watch(() => route.path, () => {
   setActiveTab()
 })
 </script>
+
+<style scoped>
+/* 移动端底部导航：玻璃拟态（透出蓝图网格背景）
+   双类选择器提升优先级，覆盖 Vant 默认实心背景 */
+.glass-tabbar.van-tabbar {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  border-top: 1px solid var(--glass-border);
+}
+</style>

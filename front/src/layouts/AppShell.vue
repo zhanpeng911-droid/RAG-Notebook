@@ -63,7 +63,8 @@ onUnmounted(() => {
   display: flex;
   height: 100vh;
   overflow: hidden;
-  background: var(--color-bg);
+  /* 透明底：透出 body 的蓝图网格背景，玻璃侧栏/顶栏产生磨砂效果 */
+  background: transparent;
 }
 
 .app-main {

@@ -169,11 +169,14 @@ onMounted(async () => {
 .loading-state { display: flex; justify-content: center; padding: 40px; }
 .empty-hint { text-align: center; padding: 20px; color: var(--color-text-lighter); font-size: 13px; }
 .role-info-card {
-  background: var(--color-card);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
   border-radius: var(--radius-lg);
   padding: 16px;
   margin-bottom: 20px;
-  border: 1px solid var(--color-border-light);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
 }
 .role-info-title { font-size: 14px; font-weight: 600; color: var(--color-text); margin: 0 0 12px; }
 .role-info-list { display: flex; flex-direction: column; gap: 8px; }
@@ -190,7 +193,9 @@ onMounted(async () => {
 .role-admin { background: var(--status-info-bg); color: var(--status-info-text); }
 .role-member { background: var(--color-surface); color: var(--color-text-lighter); }
 .permission-table {
-  background: var(--color-card);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
   border-radius: var(--radius-lg);
   border: 1px solid var(--color-border-light);
   overflow: hidden;

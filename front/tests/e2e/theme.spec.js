@@ -11,15 +11,15 @@ test.describe('主题切换', () => {
     );
     expect(theme).toBe('light');
 
-    // --color-bg 应为浅蓝色 #e7eef7，不是纯白
+    // --color-bg 应为湛蓝色调 #eef2f8（DocMind 浅色主题），不是纯白
     const bgColor = await page.evaluate(() =>
       getComputedStyle(document.documentElement).getPropertyValue('--color-bg').trim()
     );
     expect(bgColor).not.toBe('#fff');
     expect(bgColor).not.toBe('#ffffff');
     expect(bgColor).not.toBe('rgb(255, 255, 255)');
-    // 应包含浅蓝灰色调
-    expect(bgColor.toLowerCase()).toContain('#e7eef7');
+    // 应包含湛蓝冷色调（与 tokens.css 的浅色主题保持一致）
+    expect(bgColor.toLowerCase()).toContain('#eef2f8');
 
     // --color-card 不应为空
     const cardColor = await page.evaluate(() =>

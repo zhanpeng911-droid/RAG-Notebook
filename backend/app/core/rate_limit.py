@@ -18,13 +18,13 @@ from fastapi import Request, HTTPException
 from app.db.redis_config import connect_redis, is_redis_available
 
 
-def _is_rate_limit_enabled() -> bool:
-    """动态读取限流开关（优先读 os.environ，再读 .env 文件）"""
-    # 1. 先读系统环境变量（测试时可手动设置）
-    val = os.getenv("RATE_LIMIT_ENABLED")
-    if val is not None:
-        return val.lower() == "true"
-    # 2. fallback：直接读 .env 文件
+# .env 文件读取结果的进程级缓存：避免每个请求都读盘解析 .env
+_UNSET = object()
+_env_file_flag_cache = _UNSET
+
+
+def _read_rate_limit_flag_from_env_file() -> bool:
+    """从 backend/.env 文件读取 RATE_LIMIT_ENABLED（读不到时默认开启）。"""
     try:
         from pathlib import Path
         env_path = Path(__file__).resolve().parents[2] / ".env"
@@ -36,6 +36,25 @@ def _is_rate_limit_enabled() -> bool:
     except Exception:
         pass
     return True
+
+
+def _is_rate_limit_enabled() -> bool:
+    """
+    动态读取限流开关。
+
+    优先读系统环境变量（测试/CI 可动态设置）；
+    未设置时读 backend/.env，读取结果进程内缓存（配置文件不会在运行中变化，
+    避免每个请求都解析一次 .env 文件）。
+    """
+    # 1. 先读系统环境变量（测试时可手动设置，保持动态）
+    val = os.getenv("RATE_LIMIT_ENABLED")
+    if val is not None:
+        return val.lower() == "true"
+    # 2. fallback：读 .env 文件（结果缓存，只读一次盘）
+    global _env_file_flag_cache
+    if _env_file_flag_cache is _UNSET:
+        _env_file_flag_cache = _read_rate_limit_flag_from_env_file()
+    return _env_file_flag_cache
 
 
 def _build_rate_limit_key(request: Request) -> str:
@@ -63,8 +82,8 @@ def rate_limit(limit: int = 1, window: int = 60):
 
     原理：基于 Redis 的固定窗口计数器。
     - 每个客户端身份（token 或 IP）+ 路由对应一个 Redis key
-    - 第一次请求时设置 EXPIRE（窗口过期时间）
-    - 后续请求 INCR 自增计数
+    - 每次请求原子 INCR 自增计数
+    - 首次请求（或 key 丢失 TTL 时）设置窗口过期时间
     - 超过 limit 则返回 429
 
     :param limit: 时间窗口内的最大请求数
@@ -83,21 +102,18 @@ def rate_limit(limit: int = 1, window: int = 60):
             if redis is None:
                 return
 
-            current = await redis.get(key)
-            current = int(current) if current else 0
+            # 原子计数：先 INCR 再判断，避免"先 GET 再 SET"在并发下互相覆盖计数
+            current = await redis.incr(key)
 
-            if current >= limit:
+            # 首次请求（或 key 意外丢失 TTL 时）设置窗口过期时间
+            if current == 1 or await redis.ttl(key) == -1:
+                await redis.expire(key, window)
+
+            if current > limit:
                 raise HTTPException(
                     status_code=429,
                     detail="请求过于频繁，请稍后再试"
                 )
-
-            if current == 0:
-                # 首次请求，设置窗口过期时间
-                await redis.setex(key, window, 1)
-            else:
-                # 非首次请求，自增计数
-                await redis.incr(key)
         except HTTPException:
             raise
         except Exception:

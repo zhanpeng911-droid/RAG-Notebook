@@ -1,6 +1,6 @@
 /* ============================================
-   设计令牌系统 — 纸感编辑风 · 无圆角 · 无渐变
-   深靛蓝强调色 · 黑白灰主体 · 1px 边框分层
+   设计令牌系统 — DocMind 深海蓝 · 玻璃拟态
+   深靛蓝品牌色 · 科技蓝强调 · 蓝图网格背景
    ============================================ */
 
 :root {
@@ -9,41 +9,49 @@
   --font-body: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Consolas', 'Monaco', 'Courier New', monospace;
 
-  /* ---- 颜色（浅色主题 — 纸感暖白 + 近黑文字） ---- */
+  /* ---- 颜色（浅色主题 — 湛蓝冷调 + 海军蓝文字） ---- */
   --color-primary: #1e40af;
   --color-primary-hover: #1e3a8a;
   --color-primary-active: #172554;
   --color-primary-light: rgba(30, 64, 175, 0.10);
   --color-primary-softer: rgba(30, 64, 175, 0.05);
   --color-primary-soft: #c7d2fe;
-  --color-bg: #ede9e0;
-  --color-surface: #f5f4ee;
+  --color-bg: #eef2f8;
+  --color-surface: #f6f9fd;
   --color-card: #ffffff;
-  --color-sidebar: #f5f4ee;
-  --color-text: #141413;
-  --color-text-light: #3a3a36;
-  --color-text-lighter: #6b6a63;
-  --color-text-lightest: #9c9b91;
-  --color-border: #ebe9e0;
-  --color-border-light: #f0eee6;
-  --color-divider: #ebe9e0;
-  --color-shadow: rgba(20, 20, 19, 0.06);
-  --color-shadow-strong: rgba(20, 20, 19, 0.10);
-  --color-success: #15803d;
-  --color-error: #b91c1c;
-  --color-warning: #b45309;
+  --color-sidebar: #f6f9fd;
+  --color-text: #0f1e3d;
+  --color-text-light: #33436b;
+  --color-text-lighter: #5b6b8f;
+  --color-text-lightest: #8b99b8;
+  --color-border: #dbe4f0;
+  --color-border-light: #e6edf6;
+  --color-divider: #dbe4f0;
+  --color-shadow: rgba(15, 30, 61, 0.08);
+  --color-shadow-strong: rgba(15, 30, 61, 0.14);
+  --color-success: #059669;
+  --color-error: #dc2626;
+  --color-warning: #d97706;
 
-  /* ---- 语义状态色（收编散落硬编码，低饱和柔底 + 深色文字） ---- */
-  --status-success-bg: #f0fdf4;
-  --status-success-text: #15803d;
+  /* ---- 玻璃拟态（DocMind 风格核心） ---- */
+  --glass-bg: rgba(255, 255, 255, 0.62);
+  --glass-bg-strong: rgba(255, 255, 255, 0.84);
+  --glass-border: rgba(255, 255, 255, 0.65);
+  --glass-blur: 18px;
+  --glass-shadow: 0 8px 32px rgba(15, 30, 61, 0.10);
+  --grid-line: rgba(30, 64, 175, 0.05);
+
+  /* ---- 语义状态色 ---- */
+  --status-success-bg: #ecfdf5;
+  --status-success-text: #059669;
   --status-warning-bg: #fffbeb;
-  --status-warning-text: #b45309;
+  --status-warning-text: #d97706;
   --status-error-bg: #fef2f2;
-  --status-error-text: #b91c1c;
+  --status-error-text: #dc2626;
   --status-info-bg: #eff6ff;
   --status-info-text: #1e40af;
-  --status-neutral-bg: #f5f5f5;
-  --status-neutral-text: #737373;
+  --status-neutral-bg: #f1f5fb;
+  --status-neutral-text: #5b6b8f;
 
   /* ---- 间距 ---- */
   --space-xs: 4px;
@@ -96,40 +104,46 @@
   -webkit-text-size-adjust: 100%;
 }
 
-/* ---- 暗色主题覆盖 ---- */
+/* ---- 暗色主题覆盖（深蓝午夜） ---- */
 [data-theme="dark"] {
-  --color-bg: #1a1816;
-  --color-surface: #242220;
-  --color-card: #2a2725;
-  --color-sidebar: #242220;
-  --color-text: #e8e6e0;
-  --color-text-light: #b8b5ad;
-  --color-text-lighter: #8a8780;
-  --color-text-lightest: #5c5a54;
+  --color-bg: #0c1222;
+  --color-surface: #141d33;
+  --color-card: #1a2540;
+  --color-sidebar: #141d33;
+  --color-text: #e6ecf8;
+  --color-text-light: #b6c2dc;
+  --color-text-lighter: #8494b5;
+  --color-text-lightest: #5a6a8c;
   --color-primary: #3b82f6;
   --color-primary-hover: #60a5fa;
   --color-primary-active: #2563eb;
   --color-primary-light: rgba(59, 130, 246, 0.12);
   --color-primary-softer: rgba(59, 130, 246, 0.06);
   --color-primary-soft: #1e3a5f;
-  --color-border: #3a3735;
-  --color-border-light: #302e2c;
-  --color-divider: #3a3735;
-  --color-shadow: rgba(0, 0, 0, 0.20);
-  --color-shadow-strong: rgba(0, 0, 0, 0.35);
-  --color-success: #4ade80;
+  --color-border: #26334f;
+  --color-border-light: #1f2b44;
+  --color-divider: #26334f;
+  --color-shadow: rgba(0, 0, 0, 0.35);
+  --color-shadow-strong: rgba(0, 0, 0, 0.45);
+  --color-success: #34d399;
   --color-error: #f87171;
   --color-warning: #fbbf24;
 
+  --glass-bg: rgba(20, 29, 51, 0.62);
+  --glass-bg-strong: rgba(26, 37, 64, 0.82);
+  --glass-border: rgba(148, 175, 226, 0.14);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.38);
+  --grid-line: rgba(96, 165, 250, 0.055);
+
   --status-success-bg: #052e16;
-  --status-success-text: #4ade80;
+  --status-success-text: #34d399;
   --status-warning-bg: #422006;
   --status-warning-text: #fbbf24;
   --status-error-bg: #450a0a;
   --status-error-text: #f87171;
   --status-info-bg: #172554;
   --status-info-text: #60a5fa;
-  --status-neutral-bg: #27272a;
+  --status-neutral-bg: #1f2b44;
   --status-neutral-text: #a1a1aa;
 }
 

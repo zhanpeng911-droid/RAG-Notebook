@@ -90,6 +90,54 @@
         </div>
       </div>
 
+      <!-- 检索参数（运行时热更新） -->
+      <div class="model-status-section">
+        <h3 class="section-title">检索参数</h3>
+        <div class="model-card">
+          <p class="retrieval-params-hint">
+            调整 Agentic RAG 检索链路参数，保存后即时生效（无需重启服务）。
+            建议配合后端 IR 评测（run_ir_eval）验证调参收益。
+          </p>
+
+          <div v-if="retrievalParamsLoading" class="retrieval-params-loading">加载中...</div>
+          <template v-else>
+            <div v-for="param in retrievalParams" :key="param.key" class="config-field">
+              <label class="config-label">
+                {{ param.key }}
+                <span v-if="param.overridden" class="param-overridden-badge">已覆盖</span>
+              </label>
+              <p class="param-description">{{ param.description }}</p>
+
+              <div v-if="param.value_type === 'bool'" class="param-bool-row">
+                <van-switch :model-value="param.editValue" size="20px" @update:model-value="param.editValue = $event" />
+              </div>
+              <input
+                v-else
+                v-model.number="param.editValue"
+                type="number"
+                class="config-input"
+                :min="param.min_value"
+                :max="param.max_value"
+                :step="param.value_type === 'float' ? 0.05 : 1"
+              />
+              <p class="param-range">
+                默认 {{ param.default }}
+                <template v-if="param.min_value != null"> · 范围 [{{ param.min_value }}, {{ param.max_value }}]</template>
+              </p>
+            </div>
+
+            <div class="config-actions">
+              <van-button size="small" type="primary" :disabled="!hasParamChanges || savingParams" @click="saveRetrievalParams">
+                {{ savingParams ? '保存中...' : '保存修改' }}
+              </van-button>
+              <van-button size="small" plain :disabled="resettingParams" @click="resetRetrievalParams">
+                {{ resettingParams ? '重置中...' : '恢复默认' }}
+              </van-button>
+            </div>
+          </template>
+        </div>
+      </div>
+
       <!-- 个性化设置 -->
       <van-cell-group inset :title="$t('settings.personalization')">
         <van-cell :title="$t('settings.themeCustomization')" is-link @click="showThemePopup = true" />
@@ -126,11 +174,13 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { showToast } from 'vant';
 import { useThemeStore } from '../store/theme';
 import { useModelStore } from '../store/model';
 import { useI18n } from 'vue-i18n';
+import http from '../services/http';
+import { apiConfig } from '../config/api';
 
 const themeStore = useThemeStore();
 const modelStore = useModelStore();
@@ -197,6 +247,82 @@ function resetConfig() {
   showToast('已重置为默认配置')
 }
 
+// ===== 检索参数（运行时热更新） =====
+const retrievalParams = ref([]);
+const retrievalParamsLoading = ref(false);
+const savingParams = ref(false);
+const resettingParams = ref(false);
+
+const hasParamChanges = computed(() =>
+  retrievalParams.value.some((p) => p.editValue !== p.value)
+);
+
+async function loadRetrievalParams() {
+  retrievalParamsLoading.value = true;
+  try {
+    // skipAuthRedirect：未登录/测试环境下静默失败，不触发 401 跳转登录页
+    const res = await http.get(apiConfig.endpoints.runtimeConfig, { skipAuthRedirect: true });
+    if (res.data?.code === 200 && res.data?.data?.params) {
+      retrievalParams.value = res.data.data.params.map((p) => ({
+        ...p,
+        editValue: p.value,
+      }));
+    }
+  } catch (e) {
+    // 静默降级：参数区显示为空（不影响页面其他功能）
+    console.debug('检索参数加载失败（可能未登录）:', e?.response?.status || e?.message);
+  } finally {
+    retrievalParamsLoading.value = false;
+  }
+}
+
+async function saveRetrievalParams() {
+  const changed = {};
+  for (const p of retrievalParams.value) {
+    if (p.editValue !== p.value) {
+      changed[p.key] = p.editValue;
+    }
+  }
+  if (Object.keys(changed).length === 0) return;
+
+  savingParams.value = true;
+  try {
+    const res = await http.put(apiConfig.endpoints.runtimeConfig, { values: changed });
+    if (res.data?.code === 200) {
+      showToast('检索参数已生效');
+      await loadRetrievalParams();
+    } else {
+      showToast(res.data?.message || '保存失败');
+    }
+  } catch (e) {
+    const detail = e.response?.data?.detail;
+    showToast(detail || '保存失败');
+  } finally {
+    savingParams.value = false;
+  }
+}
+
+async function resetRetrievalParams() {
+  resettingParams.value = true;
+  try {
+    const res = await http.post(apiConfig.endpoints.runtimeConfigReset, { keys: [] });
+    if (res.data?.code === 200) {
+      showToast('已恢复默认值');
+      await loadRetrievalParams();
+    } else {
+      showToast(res.data?.message || '重置失败');
+    }
+  } catch (e) {
+    showToast('重置失败');
+  } finally {
+    resettingParams.value = false;
+  }
+}
+
+onMounted(() => {
+  loadRetrievalParams();
+});
+
 // ===== 主题 =====
 const showThemePopup = ref(false);
 const themeList = computed(() => themeStore.getAllThemes);
@@ -210,6 +336,51 @@ const changeTheme = (themeId) => {
 </script>
 
 <style scoped>
+/* ===== 检索参数卡片 ===== */
+.retrieval-params-hint {
+  font-size: 12px;
+  color: var(--color-text-lighter);
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+
+.retrieval-params-loading {
+  padding: 16px 0;
+  text-align: center;
+  color: var(--color-text-lighter);
+  font-size: 13px;
+}
+
+.param-description {
+  font-size: 11px;
+  color: var(--color-text-lightest);
+  margin: 2px 0 6px;
+  line-height: 1.4;
+}
+
+.param-range {
+  font-size: 11px;
+  color: var(--color-text-lightest);
+  margin: 4px 0 0;
+}
+
+.param-overridden-badge {
+  display: inline-block;
+  font-size: 10px;
+  color: var(--color-primary);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-full);
+  padding: 0 6px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.param-bool-row {
+  display: flex;
+  align-items: center;
+  padding: 4px 0;
+}
+
 .settings-container {
   min-height: 100vh;
   background-color: var(--color-bg);
@@ -236,10 +407,13 @@ const changeTheme = (themeId) => {
 }
 
 .model-card {
-  background: var(--color-card);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
   border-radius: var(--radius-lg);
   padding: 16px;
-  border: 1px solid var(--color-border-light);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
 }
 
 .model-header {

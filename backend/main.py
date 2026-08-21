@@ -29,6 +29,7 @@ from app.router.org_router import org_router
 from app.router.space_router import space_router
 from app.router.audit_router import audit_router
 from app.router.agent_router import agent_router
+from app.router.runtime_config_router import runtime_config_router
 
 from app.services.database_session_manager import init_database_session_manager
 
@@ -69,6 +70,11 @@ async def lifespan(app: FastAPI):
 
     # Redis：延迟初始化，首次请求时连接（避免阻塞启动）
     logger.info("Redis 将在首次请求时连接")
+
+    # 运行时配置：从 DB 加载覆盖值（失败时使用默认值，不阻断启动）
+    from app.core.runtime_config import refresh_cache
+    await refresh_cache()
+    logger.info("运行时配置加载完成")
 
     logger.info("应用启动完成")
 
@@ -113,6 +119,7 @@ app.include_router(org_router, prefix=API_V1_PREFIX)
 app.include_router(space_router, prefix=API_V1_PREFIX)
 app.include_router(audit_router, prefix=API_V1_PREFIX)
 app.include_router(agent_router, prefix=API_V1_PREFIX)
+app.include_router(runtime_config_router, prefix=API_V1_PREFIX)
 
 app.add_middleware(
     CORSMiddleware,

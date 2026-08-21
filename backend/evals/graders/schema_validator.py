@@ -50,4 +50,18 @@ def validate_case(case: dict) -> dict:
     if "requires_human_review" in case and not isinstance(case["requires_human_review"], bool):
         errors.append("requires_human_review must be a bool")
 
+    # IR 评测扩展字段（可选，用于 Recall@K / MRR / 分主题得分）
+    if "expected_sources" in case:
+        if not isinstance(case["expected_sources"], list) or not all(
+            isinstance(s, str) and s.strip() for s in case["expected_sources"]
+        ):
+            errors.append("expected_sources must be a list of non-empty strings (标准出处文件名)")
+        elif not case["expected_sources"]:
+            errors.append("expected_sources must not be empty when present")
+    if "topic" in case and not isinstance(case["topic"], str):
+        errors.append("topic must be a string")
+    if "ir_top_k" in case:
+        if not isinstance(case["ir_top_k"], int) or isinstance(case["ir_top_k"], bool) or case["ir_top_k"] <= 0:
+            errors.append("ir_top_k must be a positive int")
+
     return {"valid": len(errors) == 0, "errors": errors}
