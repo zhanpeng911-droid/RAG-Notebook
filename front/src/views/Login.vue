@@ -120,19 +120,6 @@
         <div class="form-footer">
           还没有账号？<span class="link" @click="goToRegister">去注册</span>
         </div>
-
-        <!-- 演示账号快捷填充 -->
-        <div class="demo-accounts">
-          <div class="demo-title">演示账号 · 一键填入</div>
-          <button type="button" class="demo-item" @click="fillDemoAccount">
-            <span class="demo-tag">User</span>
-            <span class="demo-user">demo</span>
-            <span class="demo-hint">点击填充账号密码</span>
-            <span class="demo-arrow">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></svg>
-            </span>
-          </button>
-        </div>
       </div>
     </div>
   </div>
@@ -200,14 +187,6 @@ const onSubmit = async () => {
   }
 };
 
-const fillDemoAccount = () => {
-  username.value = 'demo';
-  password.value = 'Demo12345!';
-  errors.value.username = '';
-  errors.value.password = '';
-  showToast('已填入演示账号');
-};
-
 const onForgot = () => {
   showToast('请联系管理员重置密码');
 };
@@ -243,14 +222,14 @@ const goToRegister = () => {
   box-shadow: 0 20px 60px rgba(20, 20, 19, 0.14), 0 4px 16px rgba(20, 20, 19, 0.06);
 }
 
-/* ===== 左侧品牌区：深蓝流体渐变 ===== */
+/* ===== 左侧品牌区：浅蓝流体渐变 ===== */
 .brand-pane {
   flex: 1;
   display: flex;
   flex-direction: column;
   padding: 44px 40px 32px;
-  color: #fff;
-  background: linear-gradient(135deg, #1e40af 0%, #2563eb 45%, #0284c7 100%);
+  color: #1e3a8a;
+  background: linear-gradient(135deg, #e8f1fe 0%, #d3e5fc 45%, #c7e6fb 100%);
   position: relative;
   overflow: hidden;
 }
@@ -264,7 +243,7 @@ const goToRegister = () => {
   width: 260px;
   height: 260px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.16), transparent 70%);
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.55), transparent 70%);
 }
 
 .brand-pane::after {
@@ -275,7 +254,7 @@ const goToRegister = () => {
   width: 200px;
   height: 200px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.10), transparent 70%);
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.35), transparent 70%);
 }
 
 .brand-logo {
@@ -294,9 +273,10 @@ const goToRegister = () => {
   align-items: center;
   justify-content: center;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.65);
   backdrop-filter: blur(4px);
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  border: 1px solid rgba(30, 58, 138, 0.14);
+  color: #1e40af;
 }
 
 .brand-name {
@@ -312,6 +292,7 @@ const goToRegister = () => {
   font-weight: 700;
   margin: 0 0 10px;
   line-height: 1.25;
+  color: #1e3a8a;
   position: relative;
   z-index: 1;
 }
@@ -320,7 +301,7 @@ const goToRegister = () => {
   font-size: 15px;
   font-weight: 500;
   margin: 0 0 6px;
-  opacity: 0.95;
+  color: #35507f;
   position: relative;
   z-index: 1;
 }
@@ -329,7 +310,7 @@ const goToRegister = () => {
   font-size: 13px;
   line-height: 1.7;
   margin: 0 0 28px;
-  opacity: 0.78;
+  color: #46609b;
   position: relative;
   z-index: 1;
 }
@@ -350,32 +331,33 @@ const goToRegister = () => {
   gap: 10px;
   padding: 13px 14px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.10);
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(30, 58, 138, 0.10);
   backdrop-filter: blur(6px);
   transition: background 0.2s ease, transform 0.2s ease;
 }
 
 .feature-card:hover {
-  background: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.8);
   transform: translateY(-1px);
 }
 
 .feature-icon {
   flex-shrink: 0;
   margin-top: 1px;
-  opacity: 0.95;
+  color: #1e40af;
 }
 
 .feature-name {
   font-size: 13px;
   font-weight: 600;
   margin-bottom: 2px;
+  color: #1e3a8a;
 }
 
 .feature-desc {
   font-size: 11px;
-  opacity: 0.75;
+  color: #46609b;
   line-height: 1.4;
 }
 
@@ -393,8 +375,9 @@ const goToRegister = () => {
   font-size: 11px;
   padding: 3px 12px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
-  border: 1px solid rgba(255, 255, 255, 0.22);
+  color: #1e40af;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(30, 58, 138, 0.14);
 }
 
 /* ===== 右侧表单区 ===== */
@@ -577,68 +560,6 @@ const goToRegister = () => {
 
 .form-footer .link:hover {
   text-decoration: underline;
-}
-
-/* 演示账号快捷填充 */
-.demo-accounts {
-  margin-top: auto;
-  padding-top: 24px;
-}
-
-.demo-title {
-  font-size: 11px;
-  color: var(--color-text-lightest);
-  margin-bottom: 8px;
-  letter-spacing: 0.5px;
-}
-
-.demo-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px dashed var(--color-border);
-  border-radius: 10px;
-  background: var(--color-surface);
-  cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
-  font-family: var(--font-body);
-}
-
-.demo-item:hover {
-  border-color: var(--color-primary);
-  background: var(--color-primary-softer);
-}
-
-.demo-tag {
-  flex-shrink: 0;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--color-primary);
-  background: var(--color-primary-light);
-  border-radius: 999px;
-  padding: 1px 8px;
-}
-
-.demo-user {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-text);
-}
-
-.demo-hint {
-  flex: 1;
-  text-align: left;
-  font-size: 11px;
-  color: var(--color-text-lightest);
-}
-
-.demo-arrow {
-  flex-shrink: 0;
-  color: var(--color-primary);
-  display: flex;
-  align-items: center;
 }
 
 /* ===== 响应式 ===== */

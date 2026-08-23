@@ -134,7 +134,11 @@ Notebook 已从传统的"检索后直接回答"升级为**受控 Agentic RAG**�
 - **IR 标准指标**：Recall@K / Precision@K / MRR / 拒答正确率；
 - **四阶段归因**：向量单路 / BM25 单路 / 混合 / 混合+重排 分别评测，回答"融合与精排是否真的带来增益"；
 - **分主题得分**：定位哪类知识检索质量偏低；
-- **标注守护**：评测集（30 条量级）schema、出处存在性、覆盖结构由 CI 测试自动校验；
+- **108 条结构化评测集**：96 可答 / 12 不可答 / 10 大主题各≥5 条 / 跨文档 / 边界用例，
+  规模按统计置信度确定（p≈0.95 时 95% CI 半宽约 ±4.4pp），不靠数量硬凑；
+- **标注守护**：schema、出处存在性、关键词⊆出处内容、禁答词∉语料、覆盖结构由 CI 测试自动校验；
+- **评测驱动修复**：108 条评测第一轮即定位出 BM25 中文分词失效（recall 0.60），
+  jieba 分词修复后 BM25 0.94、hybrid 由负增益转正增益（详见 `backend/evals/README.md`）；
 - 评测语料与业务数据隔离，结论可复现。
 
 ### 模型与部署
@@ -180,8 +184,8 @@ front/ (Vue 3 + Vite + Vant · 深蓝玻璃拟态 UI)
 | UI 风格 | 深蓝科技风、玻璃拟态（Blueprint Grid + Glassmorphism）、浅色/深色双主题 |
 | API 与编排 | FastAPI、Pydantic、LangChain、SSE、统一 `/api/v1` 版本管理 |
 | Agentic RAG | Adaptive-RAG 查询路由、统一检索（向量+BM25+HyDE）、Evidence Grader（置信度分级）、CRAG 纠错回路、Answer Generator（一次性生成+LLM-as-judge）、Citation Manager、Guardrails |
-| 评测 | Recall@K / Precision@K / MRR / 拒答正确率、四阶段归因、分主题得分、标注集 CI 守护 |
-| 数据与检索 | MySQL、SQLAlchemy（ORM 参数化查询）、aiomysql、Redis、ChromaDB |
+| 评测 | Recall@K / Precision@K / MRR / 拒答正确率、四阶段归因、分主题得分、108 条标注集 CI 守护 |
+| 数据与检索 | MySQL、SQLAlchemy（ORM 参数化查询）、aiomysql、Redis、ChromaDB、BM25（jieba 中文分词） |
 | 异步任务 | Celery、Redis、Celery Beat（文档索引补偿 + 笔记自动标签） |
 | 用户服务 | Django、Django REST Framework、drf-yasg、JWT（Redis 黑名单） |
 | 模型接入 | OpenAI-compatible（DeepSeek 等）、DashScope、Ollama、Anthropic |
@@ -432,7 +436,7 @@ cd backend
 uv run pytest tests
 ```
 
-覆盖：Agentic RAG 回归、检索权限隔离、评测 grader、IR 指标纯函数、运行时配置校验与读取点、SSE 事件字段、限流、JWT 契约等（285+ 用例）。
+覆盖：Agentic RAG 回归、检索权限隔离、评测 grader、IR 指标纯函数、评测集标注质量守护（108 条）、BM25 中文分词守护、运行时配置校验与读取点、SSE 事件字段、限流、JWT 契约等（287+ 用例）。
 
 ### Agentic RAG 定向回归测试
 

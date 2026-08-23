@@ -293,7 +293,7 @@ def create_chat_model_from_settings(custom_model: Optional[str] = None) -> BaseC
 
     elif llm_type == "ALIYUN":
         model_name = custom_model or settings.ALIYUN_MODEL_NAME or settings.CHAT_MODEL_NAME or "qwen3-max"
-        api_key = settings.ALIYUN_ACCESS_KEY_SECRET
+        api_key = settings.DASHSCOPE_API_KEY or settings.ALIYUN_ACCESS_KEY_SECRET
         base_url = settings.ALIYUN_BASE_URL
 
         logger.info(f"📦 ChatModel 使用阿里云百炼模型: {model_name}")

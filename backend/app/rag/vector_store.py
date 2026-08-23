@@ -177,9 +177,18 @@ class VectorStoreService:
         """获取所有文档 —— 透传给混合检索器"""
         return await self.hybrid_retriever._get_all_documents()
 
-    async def get_retriever(self, query: str = None, user_id: str = None):
-        """获取混合检索器（向量 + BM25）—— 透传给混合检索器"""
-        return await self.hybrid_retriever.get_retriever(query, user_id)
+    async def get_retriever(
+        self,
+        query: str = None,
+        user_id: str = None,
+        space_id: str = None,
+        candidate_k: int | None = None,
+    ):
+        """获取混合检索器（向量 + BM25）——透传租户/空间过滤与候选数量。"""
+        return await self.hybrid_retriever.get_retriever(
+            query, user_id, space_id=space_id, candidate_k=candidate_k
+        )
+
 
     @staticmethod
     async def get_dynamic_weights(query: str = None):
@@ -339,11 +348,18 @@ class VectorStoreService:
         :return: 文档信息列表
         """
         try:
-            where_clause = {"user_id": user_id} if user_id else None
+            if user_id and space_id:
+                where_clause = {"$and": [{"user_id": user_id}, {"space_id": space_id}]}
+            elif user_id:
+                where_clause = {"user_id": user_id}
+            elif space_id:
+                where_clause = {"space_id": space_id}
+            else:
+                where_clause = None
             all_docs = await asyncio.to_thread(
                 self.vectors_store.get,
                 include=['documents', 'metadatas'],
-                where=where_clause
+                where=where_clause,
             )
 
             docs_info = {}

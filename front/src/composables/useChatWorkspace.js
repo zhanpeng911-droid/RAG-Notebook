@@ -236,6 +236,7 @@ export function useChatWorkspace() {
   }
 
   function loadSessionHistory(session) {
+    sessionId.value = session.session_id || sessionId.value
     if (session.history && session.history.length > 0) {
       messages.value = []
       session.history.forEach(([userMsg, aiMsg]) => {
@@ -248,7 +249,6 @@ export function useChatWorkspace() {
           thinkingAutoCollapsed: true,
         })
       })
-      sessionId.value = session.session_id
     }
   }
 
@@ -290,7 +290,7 @@ export function useChatWorkspace() {
     isLoading.value = true
     let aiResponse = ''
     let completedCitations = []
-    fetchRelatedNotes(userMessage)
+    const relatedNotesPromise = fetchRelatedNotes(userMessage)
 
     try {
       abortStream = chatApi.queryStream(
@@ -315,9 +315,10 @@ export function useChatWorkspace() {
               nextTick(() => scrollToBottom())
             }
           },
-          onCompleted(json) {
-            // Agent 完成事件：捕获引用，入栈右栏问答记录
+          async onCompleted(json) {
+            // Agent 完成事件：等待相关笔记请求后再入栈，避免快照丢失异步结果
             completedCitations = Array.isArray(json.citations) ? json.citations : []
+            await relatedNotesPromise
             const lastMsg = messages.value[messages.value.length - 1]
             if (lastMsg?.role === 'assistant') {
               pushQaSnapshot({
@@ -362,6 +363,11 @@ export function useChatWorkspace() {
               err.message || '请检查网络连接和API设置'
             }`
           },
+          async onFinally() {
+            isLoading.value = false
+            await nextTick()
+            scrollToBottom()
+          },
         }
       )
     } catch (error) {
@@ -369,7 +375,6 @@ export function useChatWorkspace() {
       messages.value[messages.value.length - 1].content = `发生错误: ${
         error.message || '请检查网络连接'
       }`
-    } finally {
       isLoading.value = false
       await nextTick()
       scrollToBottom()

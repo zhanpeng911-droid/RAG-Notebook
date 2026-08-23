@@ -20,9 +20,21 @@ from app.core.rate_limit import rate_limit
 from app.core.success_response import success_response
 from app.db.db_config import get_db
 from app.utils.auth_utils import get_current_user_id
+from app.config.validator import get_settings
 from sqlalchemy.ext.asyncio import AsyncSession
 
 runtime_config_router = APIRouter(prefix="/admin/runtime-config", tags=["admin"])
+
+
+def _require_runtime_config_admin(user_id: str) -> None:
+    """Restrict process-wide retrieval tuning to explicitly configured operators."""
+    admin_ids = {
+        value.strip()
+        for value in get_settings().RUNTIME_CONFIG_ADMIN_USER_IDS.split(",")
+        if value.strip()
+    }
+    if user_id not in admin_ids:
+        raise HTTPException(status_code=403, detail="没有修改全局检索参数的权限")
 
 
 class RuntimeConfigUpdateRequest(BaseModel):
@@ -55,6 +67,7 @@ async def update_runtime_configs(
     if not request.values:
         raise HTTPException(status_code=400, detail="values 不能为空")
 
+    _require_runtime_config_admin(user_id)
     try:
         result = await runtime_config.set_values(request.values, updated_by=user_id)
     except ValueError as e:
@@ -83,6 +96,7 @@ async def reset_runtime_configs(
     """重置运行时配置为默认值（keys 为空时重置全部）"""
     keys = request.keys or []
 
+    _require_runtime_config_admin(user_id)
     try:
         result = await runtime_config.reset_values(keys, updated_by=user_id)
     except ValueError as e:

@@ -169,10 +169,14 @@ class ModeRetrievers:
     """按模式构建检索器（与生产 HybridRetriever 同构）。"""
 
     def __init__(self, store: Chroma, chunks: list[Document], top_k: int):
+        from app.rag.retrievers.bm25_tokenizer import tokenize_for_bm25
+
         self.store = store
         self.top_k = top_k
-        # BM25 索引基于全量切片（与生产一致：按用户语料建 BM25）
-        self.bm25 = BM25Retriever.from_documents(chunks, k=top_k)
+        # BM25 索引基于全量切片（与生产一致：按用户语料建 BM25 + jieba 中文分词）
+        self.bm25 = BM25Retriever.from_documents(
+            chunks, k=top_k, preprocess_func=tokenize_for_bm25
+        )
         self.vector = store.as_retriever(
             search_type="similarity",
             search_kwargs={"k": top_k},
@@ -183,7 +187,7 @@ class ModeRetrievers:
             weights=[0.5, 0.5],
         )
 
-    def retrieve(self, mode: str, query: str, rerank_fn=None) -> list[dict]:
+    async def retrieve(self, mode: str, query: str, rerank_fn=None) -> list[dict]:
         """按模式检索，返回 eval dict 列表（保持排名顺序）。"""
         if mode == "vector":
             docs = self.vector.invoke(query)
@@ -195,7 +199,7 @@ class ModeRetrievers:
             if rerank_fn is None:
                 raise ValueError("rerank mode requires rerank_fn")
             candidates = self.hybrid.invoke(query)
-            return rerank_fn(query, candidates, self.top_k)
+            return await rerank_fn(query, candidates, self.top_k)
         else:
             raise ValueError(f"unknown mode: {mode}")
         return _docs_to_eval_dicts(docs)
@@ -209,9 +213,10 @@ def _make_rerank_fn():
         if not reranker.api_key:
             return None
 
-        def rerank_fn(query: str, candidates: list[Document], top_k: int) -> list[dict]:
+        async def rerank_fn(query: str, candidates: list[Document], top_k: int) -> list[dict]:
             texts = [d.page_content[:1000] for d in candidates]
-            results = asyncio.run(reranker.rerank(query=query, documents=texts, top_n=top_k))
+            # 直接 await（run_eval 本身运行在事件循环中，禁止嵌套 asyncio.run）
+            results = await reranker.rerank(query=query, documents=texts, top_n=top_k)
             return [
                 _docs_to_eval_dicts([candidates[r.index]])[0]
                 for r in sorted(results, key=lambda r: r.score, reverse=True)[:top_k]
@@ -253,7 +258,7 @@ async def run_eval(top_k: int, modes: list[str], rebuild: bool) -> dict:
 
         for case in answerable:
             relevant = case.get("expected_sources", [])
-            docs = retrievers.retrieve(mode, case["user_input"], rerank_fn=rerank_fn)
+            docs = await retrievers.retrieve(mode, case["user_input"], rerank_fn=rerank_fn)
             metrics = grade_case_ir(docs, relevant, k=top_k)
             per_case.append(metrics)
             topics.append(case.get("topic", "unknown"))
@@ -262,7 +267,7 @@ async def run_eval(top_k: int, modes: list[str], rebuild: bool) -> dict:
         # 不可答 case：Top-K 内容不含 forbidden_keywords 即为正确拒答
         refusal_flags = []
         for case in unanswerable:
-            docs = retrievers.retrieve(mode, case["user_input"], rerank_fn=rerank_fn)
+            docs = await retrievers.retrieve(mode, case["user_input"], rerank_fn=rerank_fn)
             forbidden = case.get("forbidden_keywords", [])
             combined = " ".join(d.get("content", "") for d in docs)
             ok = not any(kw in combined for kw in forbidden)

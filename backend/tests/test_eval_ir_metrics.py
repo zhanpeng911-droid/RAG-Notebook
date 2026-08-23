@@ -219,19 +219,44 @@ def test_schema_rejects_bad_ir_fields():
 
 # ==================== ir_eval_cases.jsonl 标注守护 ====================
 
+# 主要主题的最少用例数（保证分主题得分的排序意义）
+MAIN_TOPICS = ["mysql", "redis", "python", "network", "mq", "linux", "docker", "k8s", "go", "algo"]
+
+
+def _load_ir_cases():
+    with open(IR_CASES_FILE, encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+def _seed_corpus_text():
+    """拼接全部评测语料文本（用于禁答词语料级排除校验）。"""
+    seed_dir = BACKEND_DIR / "evals" / "seed_docs"
+    return "\n".join(p.read_text(encoding="utf-8") for p in seed_dir.glob("*.txt"))
+
+
+def _contains(text: str, keyword: str) -> bool:
+    """关键词包含判定：ASCII 关键词大小写不敏感，中文子串。"""
+    if keyword.isascii():
+        return keyword.lower() in text.lower()
+    return keyword in text
+
 
 def test_ir_eval_cases_file_schema_and_coverage():
-    """IR 评测集全量 schema 校验 + 规模与结构守护"""
+    """IR 评测集全量 schema 校验 + 规模与结构守护
+
+    规模依据：p≈0.9 时 n≈100 的 95% CI 半宽约 ±5.9pp（可对外引用门槛）；
+    配对对比要分辨 10pp 增益需 n≥80-100。低于 95 视为退化，高于 120 视为冗余。
+    """
     assert IR_CASES_FILE.exists(), "ir_eval_cases.jsonl 必须存在"
 
-    cases = []
-    with open(IR_CASES_FILE, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                cases.append(json.loads(line))
+    cases = _load_ir_cases()
+    assert 95 <= len(cases) <= 120, (
+        f"评测集规模应在 95-120 条（统计置信度要求），当前 {len(cases)}"
+    )
 
-    assert 24 <= len(cases) <= 30, f"评测集规模应在 24-30 条，当前 {len(cases)}"
+    # ID 唯一性
+    ids = [c["id"] for c in cases]
+    assert len(ids) == len(set(ids)), "case id 存在重复"
 
     for case in cases:
         result = validate_case(case)
@@ -251,12 +276,85 @@ def test_ir_eval_cases_file_schema_and_coverage():
         for source in case.get("expected_sources", []):
             assert (seed_dir / source).exists(), f"{case['id']} 标注出处不存在: {source}"
 
-    # 结构守护：覆盖可答/不可答/跨文档三类
+    # 结构守护：主题/跨文档/边界/不可答的配额
     answerable = [c for c in cases if not c.get("expected_no_answer")]
     unanswerable = [c for c in cases if c.get("expected_no_answer")]
     cross_doc = [c for c in answerable if len(c.get("expected_sources", [])) > 1]
+    edge = [c for c in answerable if c.get("topic") == "edge"]
 
-    assert len(unanswerable) >= 3, "不可答 case 至少 3 条"
-    assert len(cross_doc) >= 2, "跨文档 case 至少 2 条"
-    topics = {c.get("topic") for c in answerable}
-    assert len(topics) >= 8, f"主题覆盖应 >= 8 个，当前 {len(topics)}"
+    assert len(unanswerable) >= 10, "不可答 case 至少 10 条（覆盖 10 类域外问题）"
+    assert len(cross_doc) >= 6, "跨文档 case 至少 6 条"
+    assert len(edge) >= 5, "边界 case 至少 5 条"
+
+    # 每个主要主题至少 5 条，保证分主题得分可用于定位薄弱环节
+    topic_counts = {}
+    for c in answerable:
+        topic_counts[c.get("topic")] = topic_counts.get(c.get("topic"), 0) + 1
+    for topic in MAIN_TOPICS:
+        assert topic_counts.get(topic, 0) >= 5, (
+            f"主题 {topic} 用例不足 5 条（当前 {topic_counts.get(topic, 0)}），分主题得分无排序意义"
+        )
+
+
+def test_ir_eval_case_keywords_exist_in_sources():
+    """标注质量守护：每个可答 case 的关键词必须真实出现在其标注出处的内容中。
+
+    防止"关键词凭印象写"导致评测永远失败的标注错误。
+    """
+    cases = _load_ir_cases()
+    seed_dir = BACKEND_DIR / "evals" / "seed_docs"
+
+    for case in cases:
+        if case.get("expected_no_answer"):
+            continue
+        sources_text = "\n".join(
+            (seed_dir / s).read_text(encoding="utf-8") for s in case.get("expected_sources", [])
+        )
+        for kw in case.get("expected_keywords", []):
+            assert _contains(sources_text, kw), (
+                f"{case['id']} 关键词 {kw!r} 未出现在标注出处 {case['expected_sources']} 中（标注错误）"
+            )
+
+
+def test_ir_eval_forbidden_keywords_absent_from_corpus():
+    """不可答判定有效性守护：禁答词不得出现在评测语料的任何位置。
+
+    若禁答词本身就在语料里，"Top-K 不含禁答词"的判定会把正确命中误判为失败。
+    """
+    cases = _load_ir_cases()
+    corpus = _seed_corpus_text()
+
+    for case in cases:
+        for kw in case.get("forbidden_keywords", []):
+            assert not _contains(corpus, kw), (
+                f"{case['id']} 禁答词 {kw!r} 出现在评测语料中，该 case 的拒答判定无效（应换词）"
+            )
+
+
+def _load_bm25_tokenizer():
+    """从文件路径直接加载分词模块（绕过包 __init__ 的 langchain 依赖链）。"""
+    import importlib.util
+
+    path = BACKEND_DIR / "app" / "rag" / "retrievers" / "bm25_tokenizer.py"
+    spec = importlib.util.spec_from_file_location("bm25_tokenizer_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_bm25_tokenizer_handles_chinese():
+    """BM25 中文分词守护：修复前 BM25Retriever 默认按空格分词，
+    中文查询切不出 token，BM25 一路在中文场景近乎失效（IR 评测 recall 仅 0.60）。
+    """
+    tokenizer = _load_bm25_tokenizer()
+
+    tokens = tokenizer.tokenize_for_bm25("MySQL 索引失效的场景有哪些？")
+    # 中文应被切出（而非整句一个 token），且无空白 token
+    assert len(tokens) > 2, f"中文分词失效: {tokens}"
+    assert all(t.strip() for t in tokens)
+    # 英文应小写化（BM25 匹配大小写不敏感）
+    assert "mysql" in tokens
+    assert any("索引" in t or t == "索引" for t in tokens)
+    # 空串容错
+    assert tokenizer.tokenize_for_bm25("") == []

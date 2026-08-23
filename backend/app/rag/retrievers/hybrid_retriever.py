@@ -16,6 +16,7 @@ from langchain_classic.retrievers import EnsembleRetriever
 from app.utils.config import chroma_config
 from app.core.runtime_config import get as get_runtime_config
 
+from .bm25_tokenizer import tokenize_for_bm25
 from .empty_retriever import EmptyRetriever
 
 
@@ -25,7 +26,9 @@ class HybridRetriever:
     def __init__(self, vectors_store: Chroma):
         self.vectors_store = vectors_store
 
-    async def get_bm25_retriever(self, user_id: str = None):
+    async def get_bm25_retriever(
+        self, user_id: str = None, space_id: str = None, k: int | None = None
+    ):
         """
         获取BM25检索器
         :param user_id: 用户ID，必须提供，否则返回None
@@ -34,10 +37,14 @@ class HybridRetriever:
         if not user_id:
             return None
 
+        where = {"user_id": user_id}
+        if space_id is not None:
+            where = {"$and": [{"user_id": user_id}, {"space_id": space_id}]}
+
         all_docs_result = await asyncio.to_thread(
             self.vectors_store.get,
             include=['documents', 'metadatas'],
-            where={'user_id': user_id}
+            where=where,
         )
         documents = []
         for i, doc_content in enumerate(all_docs_result['documents']):
@@ -47,7 +54,8 @@ class HybridRetriever:
         if documents:
             bm25_retriever = BM25Retriever.from_documents(
                 documents=documents,
-                k=get_runtime_config("retrieval.chroma_k")
+                k=k if k is not None else get_runtime_config("retrieval.chroma_k"),
+                preprocess_func=tokenize_for_bm25,
             )
             return bm25_retriever
         else:
@@ -68,7 +76,13 @@ class HybridRetriever:
             documents.append(Document(page_content=doc, metadata=metadata))
         return documents
 
-    async def get_retriever(self, query: str = None, user_id: str = None) -> BaseRetriever:
+    async def get_retriever(
+        self,
+        query: str = None,
+        user_id: str = None,
+        space_id: str = None,
+        candidate_k: int | None = None,
+    ) -> BaseRetriever:
         """
         获取混合检索器（BM25 + 向量检索）
         :param query: 查询语句，用于动态调整权重
@@ -79,14 +93,19 @@ class HybridRetriever:
             return EmptyRetriever()
 
         filter_dict = {'user_id': user_id}
+        if space_id is not None:
+            filter_dict = {'$and': [{'user_id': user_id}, {'space_id': space_id}]}
+        retrieve_k = candidate_k or get_runtime_config("retrieval.chroma_k")
         vector_retriever = self.vectors_store.as_retriever(
             search_type='similarity',
             search_kwargs={
-                'k': get_runtime_config("retrieval.chroma_k"),
+                'k': retrieve_k,
                 'filter': filter_dict,
             },
         )
-        bm25_retriever = await self.get_bm25_retriever(user_id)
+        bm25_retriever = await self.get_bm25_retriever(
+            user_id, space_id=space_id, k=retrieve_k
+        )
 
         if bm25_retriever:
             weights = await self.get_dynamic_weights(query)

@@ -159,7 +159,8 @@ class AgentGraph:
                 }
 
                 if grading.is_sufficient:
-                    # 证据充分，生成答案
+                    # 仅将通过质量门槛的证据交给生成器，避免低相关结果污染答案。
+                    state.evidences = grading.relevant_evidences
                     break
                 else:
                     # 证据不足，判断是否触发 CRAG 纠错回路

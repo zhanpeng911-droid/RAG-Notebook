@@ -46,7 +46,7 @@ class Planner:
     # 关键词模式
     FACTUAL_KEYWORDS = ["什么是", "是什么", "定义", "含义", "概念", "意思"]
     EXPLANATORY_KEYWORDS = ["为什么", "原因", "原理", "解释", "为何"]
-    COMPARATIVE_KEYWORDS = ["区别", "比较", "对比", "差异", "vs", "和", "与"]
+    COMPARATIVE_KEYWORDS = ["区别", "比较", "对比", "差异", "vs"]
     PROCEDURAL_KEYWORDS = ["如何", "怎么", "步骤", "方法", "教程", "操作"]
 
     # Adaptive-RAG: 简单查询判定阈值

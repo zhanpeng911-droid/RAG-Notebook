@@ -149,7 +149,12 @@ async def refresh_cache() -> None:
         logger.warning(f"【运行时配置】加载失败，使用当前缓存/默认值: {e}")
 
 
-def _validate_and_coerce(key: str, raw_value: Any, current_effective: dict) -> Any:
+def _validate_and_coerce(
+    key: str,
+    raw_value: Any,
+    current_effective: dict,
+    validate_relationship: bool = True,
+) -> Any:
     """校验并转换单个参数值，非法时抛 ValueError。"""
     definition = PARAM_DEFS.get(key)
     if definition is None:
@@ -175,9 +180,9 @@ def _validate_and_coerce(key: str, raw_value: Any, current_effective: dict) -> A
         if not (definition.min_value <= value <= definition.max_value):
             raise ValueError(f"{key} 超出范围 [{definition.min_value}, {definition.max_value}]: {value}")
 
-    # 组合校验：置信度阈值必须保持 high > medium > low
+    # 单项调用也校验当前阈值关系；批量调用会传入已经合并的临时值。
     conf_keys = ("grader.confidence_high", "grader.confidence_medium", "grader.confidence_low")
-    if key in conf_keys:
+    if validate_relationship and key in conf_keys:
         merged = {**current_effective, key: value}
         high, medium, low = (merged[k] for k in conf_keys)
         if not (high > medium > low):
@@ -208,7 +213,20 @@ async def set_values(values: dict, updated_by: str = None) -> dict:
     # 先整体校验（任何一项失败都不落库）
     coerced = {}
     for key, raw in values.items():
-        coerced[key] = _validate_and_coerce(key, raw, current_effective)
+        coerced[key] = _validate_and_coerce(
+            key, raw, current_effective, validate_relationship=False
+        )
+
+    # 批量更新必须按最终合并结果校验阈值关系，避免同一请求内
+    # 先改 high、再改 medium 时使用旧值导致非法组合落库。
+    merged_effective = {**current_effective, **coerced}
+    high = merged_effective["grader.confidence_high"]
+    medium = merged_effective["grader.confidence_medium"]
+    low = merged_effective["grader.confidence_low"]
+    if not (high > medium > low):
+        raise ValueError(
+            f"置信度阈值必须满足 high > medium > low（当前: {high} / {medium} / {low}）"
+        )
 
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(RuntimeConfig))

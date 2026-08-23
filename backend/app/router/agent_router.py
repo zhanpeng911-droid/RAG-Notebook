@@ -24,6 +24,16 @@ from app.core.success_response import success_response
 from app.core.logger_handler import logger
 
 
+def _redact_llm_config(config: Optional[dict]) -> Optional[dict]:
+    """Remove secrets before writing request configuration to logs or MySQL."""
+    if not isinstance(config, dict):
+        return None
+    redacted = dict(config)
+    if "api_key" in redacted:
+        redacted["api_key"] = "[REDACTED]"
+    return redacted
+
+
 agent_router = APIRouter(prefix="/chat/agent", tags=["agent"])
 
 
@@ -46,7 +56,6 @@ class AgentFeedbackRequest(BaseModel):
 async def agent_query_stream(
         request: AgentQueryRequest,
         user_id: str = Depends(get_current_user_id),
-        db: AsyncSession = Depends(get_db),
         _: None = Depends(rate_limit(limit=10, window=60))
 ):
     """
@@ -66,28 +75,36 @@ async def agent_query_stream(
     """
     from app.agentic.graph import run_agent_stream
     from app.repositories.agent_run_repository import AgentRunRepository
+    from app.db.db_config import AsyncSessionLocal
+    from app.models.chat_history import ChatSession
 
-    logger.info(f"【Agent流式】user_id={user_id}, query={request.query[:50]}, llm_config={request.llm_config}")
-
-    # 如果没有 session_id，自动创建会话
-    session_id = request.session_id
-    if not session_id:
-        import uuid as _uuid
-        from app.models.chat_history import ChatSession
-        session_id = str(_uuid.uuid4())
-        new_session = ChatSession(id=session_id, user_id=user_id, title=request.query[:30])
-        db.add(new_session)
-        await db.commit()
-
-    repo = AgentRunRepository(db)
-    run = await repo.create_run(
-        user_id=user_id,
-        query=request.query,
-        session_id=session_id,
-        space_id=request.space_id,
-        model_config=request.llm_config,
+    logger.info(
+        f"【Agent流式】user_id={user_id}, query={request.query[:50]}, "
+        f"llm_config={_redact_llm_config(request.llm_config)}"
     )
-    await db.commit()
+
+    # 在返回 StreamingResponse 前完成会话和 run 创建，释放初始化会话。
+    session_id = request.session_id or str(uuid.uuid4())
+    async with AsyncSessionLocal() as setup_db:
+        if request.session_id:
+            existing = await setup_db.get(ChatSession, session_id)
+            if existing is None:
+                raise HTTPException(status_code=404, detail="会话不存在")
+            if existing.user_id != user_id:
+                raise HTTPException(status_code=403, detail="当前会话不属于你")
+        else:
+            setup_db.add(ChatSession(id=session_id, user_id=user_id, title=request.query[:30]))
+            await setup_db.flush()
+
+        repo = AgentRunRepository(setup_db)
+        run = await repo.create_run(
+            user_id=user_id,
+            query=request.query,
+            session_id=session_id,
+            space_id=request.space_id,
+            model_config=_redact_llm_config(request.llm_config),
+        )
+        await setup_db.commit()
 
     async def event_generator():
         import json
@@ -104,29 +121,33 @@ async def agent_query_stream(
             event_type = event.get("type")
             if event_type == "completed":
                 total_ms = int((time.time() - start_time) * 1000)
-                await repo.update_run(
-                    run.id,
-                    status="completed",
-                    answer=event.get("answer"),
-                    total_time_ms=total_ms,
-                    citation_count=len(event.get("citations", [])),
-                )
+                async with AsyncSessionLocal() as event_db:
+                    event_repo = AgentRunRepository(event_db)
+                    await event_repo.update_run(
+                        run.id,
+                        status="completed",
+                        answer=event.get("answer"),
+                        total_time_ms=total_ms,
+                        citation_count=len(event.get("citations", [])),
+                    )
+                    await event_db.commit()
                 # 把问答写入会话历史
                 try:
                     from app.services import session_manager as sm
                     await sm.session_manager.add_message(session_id, user_id, request.query, event.get("answer", ""))
                 except Exception as msg_err:
                     logger.warning(f"写入会话历史失败: {msg_err}")
-                await db.commit()
             elif event_type == "error":
                 total_ms = int((time.time() - start_time) * 1000)
-                await repo.update_run(
-                    run.id,
-                    status="failed",
-                    error_message=event.get("error"),
-                    total_time_ms=total_ms,
-                )
-                await db.commit()
+                async with AsyncSessionLocal() as event_db:
+                    event_repo = AgentRunRepository(event_db)
+                    await event_repo.update_run(
+                        run.id,
+                        status="failed",
+                        error_message=event.get("error"),
+                        total_time_ms=total_ms,
+                    )
+                    await event_db.commit()
 
             # 添加 run_id 和 session_id 到事件
             event["run_id"] = run.id
@@ -139,7 +160,6 @@ async def agent_query_stream(
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
         }
     )
 
@@ -156,26 +176,35 @@ async def agent_query(
     """
     from app.agentic.graph import run_agent
     from app.repositories.agent_run_repository import AgentRunRepository
+    from app.models.chat_history import ChatSession
+
+    session_id = request.session_id or str(uuid.uuid4())
+    if request.session_id:
+        existing = await db.get(ChatSession, session_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        if existing.user_id != user_id:
+            raise HTTPException(status_code=403, detail="当前会话不属于你")
+    else:
+        db.add(ChatSession(id=session_id, user_id=user_id, title=request.query[:30]))
+        await db.flush()
 
     repo = AgentRunRepository(db)
     run = await repo.create_run(
         user_id=user_id,
         query=request.query,
-        session_id=request.session_id,
+        session_id=session_id,
         space_id=request.space_id,
-        model_config=request.llm_config,
+        model_config=_redact_llm_config(request.llm_config),
     )
     await db.commit()
 
     start_time = time.time()
-    from app.config.validator import get_settings
-    _s = get_settings()
-    logger.info(f"【Agent非流式】OPENAI_API_KEY={str(_s.OPENAI_API_KEY)[:12]}... CHAT_MODEL={_s.CHAT_MODEL_NAME} LLM_TYPE={_s.LLM_TYPE}")
     result = await run_agent(
         query=request.query,
         user_id=user_id,
         space_id=request.space_id,
-        session_id=request.session_id,
+        session_id=session_id,
         llm_config=request.llm_config,
     )
 
@@ -191,7 +220,20 @@ async def agent_query(
     )
     await db.commit()
 
+    if not result.get("error"):
+        try:
+            from app.services import session_manager as sm
+            await sm.session_manager.add_message(
+                session_id,
+                user_id,
+                request.query,
+                result.get("answer", ""),
+            )
+        except Exception as msg_err:
+            logger.warning(f"写入会话历史失败: {msg_err}")
+
     result["run_id"] = run.id
+    result["session_id"] = session_id
     return success_response(data=result)
 
 

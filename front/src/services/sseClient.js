@@ -2,7 +2,7 @@
  * SSE stream client.
  * @param {string} url
  * @param {object|FormData} body - JSON object or FormData for file uploads
- * @param {object} handlers - { onThinking, onResponse, onDone, onError, onStep }
+ * @param {object} handlers - { onThinking, onResponse, onDone, onError, onStep, onFinally }
  * @returns {function} abort
  */
 
@@ -108,7 +108,7 @@ export function createSSEStream(url, body, handlers) {
               case 'completed':
                 // Agentic 完成事件，提取 answer 和 citations
                 handlers.onResponse?.({ content: json.answer || '' })
-                handlers.onCompleted?.(json)
+                await handlers.onCompleted?.(json)
                 handlers.onDone?.({ session_id: json.session_id })
                 break
             }
@@ -121,6 +121,8 @@ export function createSSEStream(url, body, handlers) {
       if (error.name !== 'AbortError') {
         handlers.onError?.(error)
       }
+    } finally {
+      handlers.onFinally?.()
     }
   })()
 

@@ -67,7 +67,9 @@ class AppSettings(BaseSettings):
     ALLOW_CLIENT_LLM_KEY: bool | None = None
     """是否允许前端传明文 API Key。None 时按 ENV 自动判断（prod 禁止，dev 允许）。"""
 
-    # 企业 Org/Space/审计 API 开关（默认关闭）
+    RUNTIME_CONFIG_ADMIN_USER_IDS: str = ""
+    """允许修改进程级检索参数的用户 ID，逗号分隔；为空时禁止修改。"""
+
     FEATURE_ORG: bool = True
     """企业功能（组织/空间/审计）开关。true 时启用 /org、/space、/audit 路由。"""
 

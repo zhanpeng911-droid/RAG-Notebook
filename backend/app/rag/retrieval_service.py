@@ -147,8 +147,9 @@ class RetrievalService:
         # 相邻片段合并
         all_evidences = self._merge_adjacent(all_evidences)
 
-        # 重排序（如果启用且候选数足够）
-        if use_rerank and rerank_enabled and len(all_evidences) > top_k:
+        # 重排序。即使候选数不超过 top_k，也要写入真实的 cross-encoder 分数；
+        # API 不可用时保留向量相似度分数作为降级。
+        if use_rerank and rerank_enabled and all_evidences:
             reranked = await self._rerank_evidences(query, all_evidences)
             if reranked:
                 all_evidences = reranked
@@ -216,13 +217,14 @@ class RetrievalService:
                 logger.warning("【统一检索】embedding 不可用，降级为关键词检索")
                 return await self._keyword_search_knowledge(query, top_k, space_id)
 
-            # 构建过滤条件
-            filter_dict = {"user_id": self.user_id}
-            if space_id:
-                filter_dict["space_id"] = space_id
-
-            # 获取检索器
-            retriever = await store.get_retriever(query, self.user_id)
+            # 获取检索器。空间过滤与候选数量必须在向量/BM25 查询阶段生效，
+            # 不能先取全用户 top-k 再在内存中过滤，否则空间内的结果可能被挤掉。
+            retriever = await store.get_retriever(
+                query,
+                self.user_id,
+                space_id=space_id,
+                candidate_k=candidate_k,
+            )
 
             # 使用 HyDE 生成假设性文档
             search_query = query
@@ -241,14 +243,22 @@ class RetrievalService:
 
             # 转换为 Evidence
             evidences = []
+            # Chroma similarity retriever 默认只返回 Document，没有距离；
+            # 若候选带有真实分数则优先使用，否则使用保守的排名下界，
+            # 避免把任意返回结果当成固定高置信证据。
             for i, doc in enumerate(documents[:top_k]):
+                raw_score = doc.metadata.get("rerank_score")
+                if raw_score is None:
+                    raw_score = doc.metadata.get("score")
+                if raw_score is None:
+                    raw_score = max(0.0, 1.0 - (i / max(len(documents), 1)))
                 evidence = Evidence(
                     source_type=SourceType.KNOWLEDGE,
                     source_id=doc.metadata.get("md5", ""),
                     chunk_id=doc.metadata.get("chunk_id", f"kb_{i}"),
                     title=doc.metadata.get("original_filename", "未知文件"),
                     content=doc.page_content,
-                    score=doc.metadata.get("rerank_score", 0.8 - i * 0.05),
+                    score=float(raw_score),
                     metadata={
                         "user_id": doc.metadata.get("user_id"),
                         "space_id": doc.metadata.get("space_id", ""),
@@ -274,23 +284,26 @@ class RetrievalService:
                 logger.warning("【统一检索】embedding 不可用，降级为关键词检索笔记")
                 return await self._keyword_search_notes(query, top_k)
 
-            # 向量检索笔记
+            # 笔记向量检索同时取得 Chroma 距离（距离越小越相似）。
             note_docs = await asyncio.to_thread(
-                note_service.notes_store.similarity_search,
+                note_service.notes_store.similarity_search_with_score,
                 query, k=top_k,
-                filter={"user_id": self.user_id}
+                filter={"$and": [
+                    {"user_id": self.user_id},
+                    {"doc_type": "note"},
+                ]},
             )
 
             # 转换为 Evidence
             evidences = []
-            for i, doc in enumerate(note_docs):
+            for i, (doc, distance) in enumerate(note_docs):
                 evidence = Evidence(
                     source_type=SourceType.NOTE,
                     source_id=doc.metadata.get("note_id", ""),
                     chunk_id=f"note_{i}",
                     title=doc.metadata.get("title", "无标题笔记"),
                     content=doc.page_content,
-                    score=0.8 - i * 0.05,
+                    score=1.0 / (1.0 + max(float(distance), 0.0)),
                     metadata={
                         "user_id": doc.metadata.get("user_id"),
                         "note_id": doc.metadata.get("note_id"),

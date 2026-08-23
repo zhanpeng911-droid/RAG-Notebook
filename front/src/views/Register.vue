@@ -236,14 +236,14 @@ const goToLogin = () => {
   box-shadow: 0 20px 60px rgba(15, 30, 61, 0.14), 0 4px 16px rgba(15, 30, 61, 0.06);
 }
 
-/* ===== 左侧品牌区 ===== */
+/* ===== 左侧品牌区：浅蓝流体渐变 ===== */
 .brand-pane {
   flex: 1;
   display: flex;
   flex-direction: column;
   padding: 44px 40px 32px;
-  color: #fff;
-  background: linear-gradient(135deg, #1e40af 0%, #2563eb 45%, #0284c7 100%);
+  color: #1e3a8a;
+  background: linear-gradient(135deg, #e8f1fe 0%, #d3e5fc 45%, #c7e6fb 100%);
   position: relative;
   overflow: hidden;
 }
@@ -256,7 +256,7 @@ const goToLogin = () => {
   width: 260px;
   height: 260px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.16), transparent 70%);
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.55), transparent 70%);
 }
 
 .brand-pane::after {
@@ -267,7 +267,7 @@ const goToLogin = () => {
   width: 200px;
   height: 200px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.10), transparent 70%);
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.35), transparent 70%);
 }
 
 .brand-logo {
@@ -286,9 +286,10 @@ const goToLogin = () => {
   align-items: center;
   justify-content: center;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.65);
   backdrop-filter: blur(4px);
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  border: 1px solid rgba(30, 58, 138, 0.14);
+  color: #1e40af;
 }
 
 .brand-name {
@@ -304,6 +305,7 @@ const goToLogin = () => {
   font-weight: 700;
   margin: 0 0 10px;
   line-height: 1.25;
+  color: #1e3a8a;
   position: relative;
   z-index: 1;
 }
@@ -312,7 +314,7 @@ const goToLogin = () => {
   font-size: 15px;
   font-weight: 500;
   margin: 0 0 6px;
-  opacity: 0.95;
+  color: #35507f;
   position: relative;
   z-index: 1;
 }
@@ -321,7 +323,7 @@ const goToLogin = () => {
   font-size: 13px;
   line-height: 1.7;
   margin: 0 0 28px;
-  opacity: 0.78;
+  color: #46609b;
   position: relative;
   z-index: 1;
 }
@@ -341,32 +343,33 @@ const goToLogin = () => {
   gap: 10px;
   padding: 13px 14px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.10);
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(30, 58, 138, 0.10);
   backdrop-filter: blur(6px);
   transition: background 0.2s ease, transform 0.2s ease;
 }
 
 .feature-card:hover {
-  background: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.8);
   transform: translateY(-1px);
 }
 
 .feature-icon {
   flex-shrink: 0;
   margin-top: 1px;
-  opacity: 0.95;
+  color: #1e40af;
 }
 
 .feature-name {
   font-size: 13px;
   font-weight: 600;
   margin-bottom: 2px;
+  color: #1e3a8a;
 }
 
 .feature-desc {
   font-size: 11px;
-  opacity: 0.75;
+  color: #46609b;
   line-height: 1.4;
 }
 
@@ -383,8 +386,9 @@ const goToLogin = () => {
   font-size: 11px;
   padding: 3px 12px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
-  border: 1px solid rgba(255, 255, 255, 0.22);
+  color: #1e40af;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(30, 58, 138, 0.14);
 }
 
 /* ===== 右侧表单区 ===== */

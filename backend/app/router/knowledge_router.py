@@ -126,12 +126,19 @@ async def clean_user_vectors(
     - document_index 记录
     - knowledge_files 下的物理文件
     """
-    # 清理 v1 旧路径
+    # 带空间参数时必须只清理该空间，不能调用按用户全量删除的旧 v1 路径。
+    if space_id:
+        from app.services.document_index_service import clean_user_index_records
+        result = await clean_user_index_records(user_id, space_id=space_id)
+        return success_response(
+            message=f"已成功清除空间内文档（v2 删除 {result['deleted_count']} 条记录）"
+        )
+
+    # 未指定空间时才执行用户级全量清理。
     await knowledge_service.clean_user_upload(user_id)
 
-    # 清理 v2 document_index
     from app.services.document_index_service import clean_user_index_records
-    result = await clean_user_index_records(user_id, space_id=space_id)
+    result = await clean_user_index_records(user_id)
 
     return success_response(
         message=f"已成功清除用户上传的所有向量（v2 删除 {result['deleted_count']} 条记录）"

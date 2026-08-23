@@ -59,31 +59,22 @@ class DatabaseSessionManager:
                         i += 1
                 return {"history": history}
             else:
-                # 检查会话id是否存在
                 existing_session = await db.run_sync(
                     lambda session: session.query(ChatSession).filter(ChatSession.id == session_id).first()
                 )
-                
+                from fastapi import HTTPException, status
                 if existing_session:
-                    # 会话存在但不属于当前用户
                     logger.warning(f"【数据库会话管理】会话 {session_id} 不属于用户 {user_id}")
-                    from fastapi import HTTPException, status
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
-                        detail="当前会话不属于你"
+                        detail="当前会话不属于你",
                     )
-                else:
-                    # 会话不存在，创建一个新的
-                    new_session = ChatSession(
-                        id=session_id,
-                        user_id=user_id,
-                        title="新的对话"
-                    )
-                    db.add(new_session)
-                    await db.commit()
-                    await db.refresh(new_session)
-                    logger.info(f"【数据库会话管理】创建新会话: {session_id} 属于用户: {user_id}")
-                    return {"history": []}
+                # GET 只负责读取；不存在的会话不能被读取请求静默创建。
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="会话不存在",
+                )
+
 
     async def add_message(self, session_id: str, user_id: str, user_message: str, assistant_message: str):
         """添加消息并保存到数据库"""

@@ -543,9 +543,8 @@ async function loadSpaces() {
       return
     }
     const res = await orgApi.listSpaces(currentOrgId.value)
-    const result = res.data || res
-    if (result.code === 200) {
-      spaces.value = result.data?.spaces || result.data || []
+    if (res.code === 200) {
+      spaces.value = res.data?.spaces || []
     }
   } catch (e) {
     spaces.value = []

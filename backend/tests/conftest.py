@@ -23,13 +23,16 @@ for mod_name in [
     "langchain_core.language_models",
     "langchain_core.tools",
     "langchain_core.prompts",
+    "langchain_core.retrievers",
     "langchain_openai",
     "langchain_community",
     "langchain_community.chat_models",
     "langchain_community.chat_models.tongyi",
     "langchain_community.document_loaders",
+    "langchain_community.retrievers",
     "langchain_classic",
     "langchain_classic.agents",
+    "langchain_classic.retrievers",
     "langchain_anthropic",
 ]:
     if mod_name not in sys.modules:
