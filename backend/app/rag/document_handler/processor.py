@@ -160,7 +160,7 @@ class DocumentProcessor:
                 if files:
                     try:
                         os.unlink(file_path)
-                    except:
+                    except Exception:
                         pass
                 continue
 
@@ -187,7 +187,7 @@ class DocumentProcessor:
                     if files:
                         try:
                             os.unlink(file_path)
-                        except Exception as e:
+                        except Exception:
                             pass
                     continue
 
@@ -212,7 +212,7 @@ class DocumentProcessor:
                     if files:
                         try:
                             os.unlink(file_path)
-                        except:
+                        except Exception:
                             pass
                     continue
 
@@ -249,7 +249,7 @@ class DocumentProcessor:
                 if files:
                     try:
                         os.unlink(file_path)
-                    except:
+                    except Exception:
                         pass
 
             except Exception as e:
@@ -264,6 +264,6 @@ class DocumentProcessor:
                 if files:
                     try:
                         os.unlink(file_path)
-                    except:
+                    except Exception:
                         pass
                 continue

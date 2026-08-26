@@ -1,6 +1,6 @@
 """Regression tests for Agentic RAG tenant isolation and Markdown upload paths."""
 from pathlib import Path
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch
 import os
 import tempfile
 
@@ -14,7 +14,6 @@ from app.services.document_index_service import (
     _check_embedding_available,
     _safe_delete_physical_file,
     _get_storage_dir,
-    get_embedding_health_status,
 )
 
 

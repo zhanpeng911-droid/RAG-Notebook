@@ -7,7 +7,7 @@
 - 生成改写查询（当证据不足时）
 """
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Optional
 from enum import Enum
 
 from app.core.logger_handler import logger

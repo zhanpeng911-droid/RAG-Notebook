@@ -18,7 +18,7 @@ REDIS_DB = os.getenv("REDIS_DB") or _settings.REDIS_DB or "0"
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD") or _settings.REDIS_PASSWORD or ""
 
 # Redis 带认证时 URL 形如 redis://:password@host:port/db（密码需要 URL 编码）
-from urllib.parse import quote
+from urllib.parse import quote  # noqa: E402 -- 需先读取 REDIS_PASSWORD 环境变量
 _redis_auth = f":{quote(REDIS_PASSWORD, safe='')}@" if REDIS_PASSWORD else ""
 _redis_base = f"redis://{_redis_auth}{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
 

@@ -15,7 +15,7 @@
 import re
 import logging
 import traceback
-from typing import List, Dict
+from typing import List, Dict, TYPE_CHECKING
 
 from fastapi import HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -23,6 +23,10 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from starlette import status
 from pydantic_settings import BaseSettings
+
+if TYPE_CHECKING:
+    # 运行时延迟导入以避免循环依赖，仅供类型检查器解析注解
+    from app.core.exceptions import RAGException
 
 
 class Settings(BaseSettings):
@@ -233,7 +237,7 @@ async def sqlalchemy_error_handler(request: Request, exc: SQLAlchemyError):
         }
 
     logger.error(
-        f"数据库操作异常",
+        "数据库操作异常",
         extra={"path": str(request.url), "method": request.method},
         exc_info=exc
     )
@@ -246,7 +250,6 @@ async def sqlalchemy_error_handler(request: Request, exc: SQLAlchemyError):
 
 async def rag_exception_handler(request: Request, exc: "RAGException"):
     """处理 RAG 统一业务异常（LLMException / VectorStoreException / NoteException / KnowledgeException）"""
-    from app.core.exceptions import RAGException
 
     logger.warning(
         f"RAG异常: {exc.code} - {exc.message}",
@@ -271,7 +274,7 @@ async def general_exception_handler(request: Request, exc: Exception):
         }
 
     logger.critical(
-        f"未捕获系统异常",
+        "未捕获系统异常",
         extra={"path": str(request.url), "method": request.method},
         exc_info=exc  # 这个参数会把完整堆栈打到日志里，生产环境排错全靠它
     )

@@ -192,7 +192,8 @@ class AgentFactory:
 
         prompt = self._create_prompt()
         tools = custom_tools or self.default_tools
-        system_prompt = custom_system_prompt or self.default_system_prompt
+        # TODO(bug): system_prompt 计算后未传入 AgentExecutor，疑似业务遗漏，另行跟踪
+        _system_prompt = custom_system_prompt or self.default_system_prompt
 
         # 2. 创建 Agent（支持工具调用的智能代理）
         agent = create_tool_calling_agent(chat_model, tools, prompt)
@@ -417,7 +418,7 @@ async def get_agent_stream_response(
         
         # 添加到会话历史
         await sm.session_manager.add_message(session_id, user_id, query, response)
-        logger.info(f"【Agent流式响应】添加到会话历史成功")
+        logger.info("【Agent流式响应】添加到会话历史成功")
         
         # 发送回答内容
         for char in response:

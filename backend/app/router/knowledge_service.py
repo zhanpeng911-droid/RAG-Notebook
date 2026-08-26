@@ -18,7 +18,7 @@ from app.utils.file_handler import get_file_md5_hex_sync
 from app.services.knowledge_file_validator import (
     safe_filename, detect_file_type, validate_file_type,
     validate_single_file_size, validate_total_size,
-    ALLOWED_EXTENSIONS, ALLOWED_MIME_TYPES, MAX_FILE_SIZE, MAX_FOLDER_SIZE,
+    ALLOWED_EXTENSIONS, ALLOWED_MIME_TYPES, MAX_FOLDER_SIZE,
 )
 from app.services import knowledge_sse_events as sse
 from app.services.knowledge_record_service import KnowledgeRecordService
@@ -476,7 +476,7 @@ class KnowledgeService:
             yield event
 
         if not valid_files:
-            logger.info(f"【SSE上传】无有效文件可处理")
+            logger.info("【SSE上传】无有效文件可处理")
             return
 
         start_time = time.time()
@@ -490,8 +490,8 @@ class KnowledgeService:
 
         # 串行消费 + 写入
         store = VectorStoreService()
-        async for sse in self._process_slice_results(queue, len(valid_files), store, state, user_id):
-            yield sse
+        async for event in self._process_slice_results(queue, len(valid_files), store, state, user_id):
+            yield event
 
         executor.shutdown(wait=True)
 

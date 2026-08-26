@@ -79,7 +79,7 @@ class MD5Store:
                             data = json.loads(line)
                             if data.get('md5') == md5_for_check:
                                 return True
-                        except:
+                        except Exception:
                             if line == md5_for_check:
                                 return True
                     else:
@@ -169,7 +169,7 @@ class MD5Store:
                 if line.startswith('{'):
                     try:
                         records.append(json.loads(line))
-                    except:
+                    except Exception:
                         records.append({
                             'md5': line, 'filename': None,
                             'original_filename': None, 'upload_time': None

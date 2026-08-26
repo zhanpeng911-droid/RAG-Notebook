@@ -5,7 +5,6 @@
 uploaded → parsed → pending_index → indexing → indexed
                                          → index_failed（可重试）
 """
-from datetime import datetime
 from enum import Enum as PyEnum
 
 from sqlalchemy import Column, String, DateTime, Text, Integer, Enum, func, UniqueConstraint

@@ -16,10 +16,10 @@ from unittest.mock import MagicMock
 
 _skip_magic = sys.platform == "win32"
 
-from app.services.knowledge_file_validator import (
+from app.services.knowledge_file_validator import (  # noqa: E402 -- 需先按平台决定 _skip_magic
     safe_filename, detect_file_type, is_allowed_file, validate_file_type,
     validate_single_file_size, validate_total_size,
-    ALLOWED_EXTENSIONS, ALLOWED_MIME_TYPES, MAX_FILE_SIZE, MAX_FOLDER_SIZE,
+    ALLOWED_EXTENSIONS, MAX_FILE_SIZE, MAX_FOLDER_SIZE,
 )
 
 

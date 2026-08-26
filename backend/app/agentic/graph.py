@@ -7,16 +7,14 @@ Agent 状态图 —— 编排 Agentic RAG 的完整工作流。
          → (不足) 改写查询并补检索（最多 1~2 次）
          → SSE 流式输出答案、引用和摘要
 """
-import asyncio
-from typing import AsyncGenerator, Dict, Any, Optional
+from typing import AsyncGenerator, Dict, Any
 
 from app.core.logger_handler import logger
-from app.rag.retrieval_service import RetrievalService, Evidence
+from app.rag.retrieval_service import RetrievalService
 from app.agentic.state import AgentState, AgentPhase
 from app.agentic.planner import planner
 from app.agentic.retrieval_grader import evidence_grader
 from app.agentic.answer_generator import create_answer_generator
-from app.agentic.citation import citation_manager
 from app.agentic.guardrails import Guardrails
 
 

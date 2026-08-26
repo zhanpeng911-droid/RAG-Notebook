@@ -8,7 +8,6 @@ Chat 路由 -- 处理会话管理的 API 接口。
 
 注意：Agent 对话和 RAG 检索已迁移至 agent_router（/chat/agent/query）。
 """
-import uuid
 
 from fastapi.routing import APIRouter
 from fastapi import Depends

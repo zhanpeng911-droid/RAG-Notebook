@@ -10,8 +10,7 @@ Chat 会话权限测试 —— 验证用户 A 不能访问用户 B 的会话。
   - handle_delete_session: 跨用户删除（应静默忽略或报错）
 """
 import pytest
-import pytest_asyncio
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch, AsyncMock
 from fastapi import HTTPException
 
 

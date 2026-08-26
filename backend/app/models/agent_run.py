@@ -6,10 +6,9 @@ Agent 运行记录模型 —— 记录 Agent 的执行过程和结果。
 - agent_steps: Agent 执行步骤
 - agent_feedback: 用户反馈
 """
-from datetime import datetime
 from enum import Enum as PyEnum
 
-from sqlalchemy import Column, String, DateTime, Text, Integer, JSON, Float, func
+from sqlalchemy import Column, String, DateTime, Text, Integer, JSON, func
 from app.models.chat_history import Base
 
 

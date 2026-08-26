@@ -14,7 +14,6 @@
 - 标记笔记已回顾（自动计算下次回顾时间）
 - 创建回顾记录
 """
-import uuid
 from datetime import datetime, timedelta
 from typing import List
 

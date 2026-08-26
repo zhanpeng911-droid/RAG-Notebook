@@ -10,7 +10,6 @@
 import logging
 import os
 from datetime import datetime
-import sys
 
 # 获取项目根目录
 project_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))

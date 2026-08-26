@@ -1,7 +1,7 @@
 """
 组织管理 API 路由 —— 创建/更新/删除组织、邀请/移除成员、修改角色。
 """
-from fastapi import APIRouter, Depends, Path, Query, HTTPException
+from fastapi import APIRouter, Depends, Path, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy import select, delete, text, func

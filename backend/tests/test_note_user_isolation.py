@@ -14,7 +14,7 @@
 import uuid
 import pytest
 import pytest_asyncio
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from app.models.note import Note
@@ -176,7 +176,6 @@ async def test_search_notes_delegates_to_note_index(db_session):
 async def test_create_note_writes_review_without_inline_vector_index(db_session):
     """create_note：MySQL + 复习队列同事务；向量索引由路由异步投递，服务层不内联调用。"""
     from app.schemas.models import NoteCreate
-    from app.models.review_record import ReviewRecord
     from sqlalchemy import select
 
     service = _get_note_service()

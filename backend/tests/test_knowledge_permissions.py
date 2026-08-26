@@ -11,8 +11,7 @@
   - add_note_to_space: 只允许加入自己的笔记
 """
 import pytest
-import pytest_asyncio
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock
 from fastapi import HTTPException
 
 

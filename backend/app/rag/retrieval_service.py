@@ -10,10 +10,9 @@ M1 阶段核心组件：
 """
 import asyncio
 from dataclasses import dataclass, field, asdict
-from typing import List, Optional, Literal
+from typing import List
 from enum import Enum
 
-from langchain_core.documents import Document
 
 from app.core.logger_handler import logger
 from app.core.runtime_config import get as get_runtime_config
@@ -223,7 +222,7 @@ class RetrievalService:
                 query,
                 self.user_id,
                 space_id=space_id,
-                candidate_k=candidate_k,
+                candidate_k=top_k,
             )
 
             # 使用 HyDE 生成假设性文档

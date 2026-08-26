@@ -9,7 +9,6 @@
 """
 import asyncio
 import os
-import tempfile
 
 from app.tasks.celery_app import celery_app
 from app.core.logger_handler import logger

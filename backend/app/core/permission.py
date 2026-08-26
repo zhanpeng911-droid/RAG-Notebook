@@ -14,7 +14,7 @@
     ):
         ...
 """
-from fastapi import Depends, Query, Path, HTTPException
+from fastapi import Depends, Path, HTTPException
 
 from app.utils.auth_utils import get_current_user_id
 from app.db.db_config import get_db

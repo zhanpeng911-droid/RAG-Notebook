@@ -44,7 +44,7 @@ def _make_service():
 def test_init_does_not_call_factory():
     """创建实例时不应该调用 store_factory"""
     factory_mock = MagicMock()
-    svc = KnowledgeRecordService(store_factory=factory_mock)
+    _svc = KnowledgeRecordService(store_factory=factory_mock)
     factory_mock.assert_not_called()
 
 

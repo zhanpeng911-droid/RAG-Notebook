@@ -2,7 +2,6 @@ from fastapi import HTTPException
 from fastapi.routing import APIRouter
 from fastapi.responses import JSONResponse
 import asyncio
-import os
 
 from app.core.success_response import success_response
 from app.db.db_config import check_mysql_connection

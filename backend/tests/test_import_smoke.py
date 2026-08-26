@@ -6,10 +6,8 @@ Import smoke tests —— 验证关键模块能真实导入，不是 MagicMock�
 - 确保阶段 5A/5B/6A 的拆分在真实 import 层面可验证
 - 不连接真实 ChromaDB / LLM / MySQL
 """
-import sys
 from unittest.mock import MagicMock
 
-import pytest
 
 
 def _is_real_module(mod) -> bool:

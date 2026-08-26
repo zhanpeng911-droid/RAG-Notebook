@@ -13,7 +13,6 @@ from langchain_core.retrievers import BaseRetriever
 from langchain_community.retrievers import BM25Retriever
 from langchain_classic.retrievers import EnsembleRetriever
 
-from app.utils.config import chroma_config
 from app.core.runtime_config import get as get_runtime_config
 
 from .bm25_tokenizer import tokenize_for_bm25

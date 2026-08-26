@@ -4,14 +4,13 @@ import os
 import sys
 from pathlib import Path
 
-import pytest
 
 # Add backend to path
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from evals.runners.run_eval import load_cases, dry_run, mock_run, llm_smoke_run
+from evals.runners.run_eval import load_cases, dry_run, mock_run, llm_smoke_run  # noqa: E402 -- 测试需先注入 backend 到 sys.path
 
 
 class TestLlmSmokeDisabled:

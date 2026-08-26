@@ -13,7 +13,6 @@ class SessionManagerProxy:
     """会话管理器代理 —— 延迟加载，确保 database_session_manager 已初始化"""
     @property
     def session_manager(self):
-        from app.services.database_session_manager import database_session_manager
         return database_session_manager
 
 

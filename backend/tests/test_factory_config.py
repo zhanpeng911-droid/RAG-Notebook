@@ -10,7 +10,7 @@ LLM Factory 配置读取 + 安全校验测试。
 - agent.py 中 LLM 创建相关 os.getenv 已移除
 """
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 # ==================== _normalize_base_url ====================

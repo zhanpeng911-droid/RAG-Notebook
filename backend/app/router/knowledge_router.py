@@ -34,7 +34,6 @@ from app.db.db_config import get_db
 from app.models.space import Space
 from app.core.permission import _get_user_role
 from app.utils.image_extractor import get_image_storage_dir
-from app.utils.path_tool import get_data_path
 from app.core.success_response import success_response
 from app.core.rate_limit import rate_limit
 from app.core.logger_handler import logger
@@ -474,7 +473,6 @@ async def test_embedding(
                 "error": "模型对象为空，检查配置"
             })
 
-        model_type = type(embed).__name__
         model_name = getattr(embed, 'model_name', 'unknown')
 
         # 执行真实调用

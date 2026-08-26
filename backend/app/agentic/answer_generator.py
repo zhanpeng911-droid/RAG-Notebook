@@ -14,7 +14,7 @@ import re
 
 from app.core.logger_handler import logger
 from app.rag.retrieval_service import Evidence
-from app.agentic.citation import Citation, citation_manager
+from app.agentic.citation import citation_manager
 
 
 class AnswerGenerator:

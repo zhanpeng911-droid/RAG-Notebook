@@ -2,7 +2,7 @@
 R4 回归：feature flag、request-id、企业路由默认关闭。
 """
 from pathlib import Path
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -82,7 +82,6 @@ def test_dev_script_exists():
 @pytest.mark.asyncio
 async def test_middleware_sets_request_id_header():
     """轻量测 middleware 逻辑：mock call_next 返回带 headers 的 response。"""
-    from starlette.requests import Request
     from starlette.responses import Response
 
     # 直接复用 main 中的函数需要加载 app；改为内联验证契约源码 + request_context

@@ -18,7 +18,6 @@ Repository 层禁止使用 text() 拼接用户可控参数。
 """
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy import text
-from app.models.chat_history import Base
 from app.models.note import Note  # noqa: F401
 from app.models.review_record import ReviewRecord  # noqa: F401
 from app.models.organization import Organization, OrganizationMember  # noqa: F401

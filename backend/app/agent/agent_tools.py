@@ -126,7 +126,7 @@ async def get_note_stats_tool() -> str:
     async with AsyncSessionLocal() as db:
         try:
             stats = await note_service.get_category_stats(db, user_id)
-            lines = [f"📊 笔记统计\n", f"总笔记数: {stats['total']}\n", "各分类:"]
+            lines = ["📊 笔记统计\n", f"总笔记数: {stats['total']}\n", "各分类:"]
             for cat in stats['categories']:
                 emoji = {'work': '💼', 'study': '📖', 'life': '🏠', 'project': '🚀'}.get(cat['category'], '📄')
                 lines.append(f"  {emoji} {cat['category']}: {cat['count']} 篇")

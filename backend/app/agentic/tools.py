@@ -7,7 +7,7 @@ import asyncio
 from typing import List, Optional, Dict, Any
 
 from app.core.logger_handler import logger
-from app.rag.retrieval_service import RetrievalService, Evidence
+from app.rag.retrieval_service import RetrievalService
 
 
 async def search_knowledge(
@@ -145,8 +145,6 @@ async def list_user_documents(
     try:
         from app.db.db_config import AsyncSessionLocal
         from app.repositories.document_index_repository import DocumentIndexRepository
-        from sqlalchemy import select
-        from app.models.document_index import DocumentIndex
 
         async with AsyncSessionLocal() as session:
             repo = DocumentIndexRepository(session)

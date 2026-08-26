@@ -1,5 +1,4 @@
-from typing import List, Optional, Tuple, Dict
-import uuid
+from typing import List, Tuple, Dict
 
 from fastapi import HTTPException
 

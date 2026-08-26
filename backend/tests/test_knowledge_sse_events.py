@@ -8,7 +8,6 @@ SSE 事件构造测试 —— 验证所有 SSE 事件的字段完整性和格式
 """
 import time
 import json
-import pytest
 from unittest.mock import patch, MagicMock
 
 

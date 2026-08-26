@@ -6,10 +6,9 @@ R3 回归：
 - 到期待回顾计数
 - 用户隔离硬断言（仓库层）
 """
-import ast
 import inspect
 from pathlib import Path
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -30,7 +29,6 @@ def test_chroma_chunk_defaults_for_chinese():
 
 def test_document_processor_resolve_chunk_params():
     # 绕过 conftest mock：直接读源码 + 用真实 chroma yaml 数值测逻辑
-    from app.utils.config import chroma_config
 
     # 若被 mock，至少校验 yaml 文件
     path = BACKEND_ROOT / "app" / "config" / "chroma.yaml"

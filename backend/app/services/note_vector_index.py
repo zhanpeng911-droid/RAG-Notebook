@@ -9,8 +9,7 @@
 过滤规则：
     filter={"$and": [{"user_id": user_id}, {"doc_type": "note"}]}
 """
-import asyncio
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
