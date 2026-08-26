@@ -73,6 +73,31 @@ jobs:
             python manage.py test apps.user apps.file --settings=DjangoUserService.test_settings -v1
           fi
 
+  mypy:
+    name: Backend type check (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv
+      - name: Sync deps (dev)
+        run: |
+          uv sync --extra dev || pip install -e ".[dev]"
+      - name: Mypy (core modules first)
+        run: |
+          if command -v uv >/dev/null 2>&1; then
+            uv run mypy app/core app/schemas app/utils app/config
+          else
+            python -m mypy app/core app/schemas app/utils app/config
+          fi
+
   frontend:
     name: Frontend build
     runs-on: ubuntu-latest
