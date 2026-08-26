@@ -23,6 +23,13 @@ jobs:
       - name: Sync deps (dev)
         run: |
           uv sync --extra dev || pip install -e ".[dev]" aiosqlite pytest pytest-asyncio alembic
+      - name: Ruff
+        run: |
+          if command -v uv >/dev/null 2>&1; then
+            uv run ruff check app tests
+          else
+            python -m ruff check app tests
+          fi
       - name: Pytest
         env:
           SECRET_KEY: ci-test-secret

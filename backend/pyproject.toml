@@ -73,6 +73,14 @@ full = [
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"
 default = true
 
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# 初期只用默认规则集（E4/E7/E9/F），不一次开全量规则。
+# E402：celery/测试文件存在"先读环境变量/sys.path 再导入"的刻意模式，按行 noqa 标注。
+
+[tool.isort]
+profile = "black"
 
 [build-system]
 requires = ["setuptools>=61", "wheel"]
