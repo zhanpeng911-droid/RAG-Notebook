@@ -495,6 +495,14 @@ CI（`.github/workflows/ci.yml`）包含以下 job：
 | mypy | 类型检查（首批 core/schemas/utils/config） | advisory |
 | security | pip-audit + npm audit(critical) | advisory |
 
+本地提交钩子（推荐启用，提交时自动跑 backend ruff 与 front eslint）：
+
+```powershell
+cd backend
+uv sync --extra dev
+uv run pre-commit install
+```
+
 长效规范（对所有贡献者生效）：
 
 1. **修 bug 必附回归测试**：每个 bug 修复的 PR 必须包含一个能复现该 bug 的失败用例及其修复后通过的断言，防止问题回归。
@@ -502,6 +510,8 @@ CI（`.github/workflows/ci.yml`）包含以下 job：
 3. **覆盖率只升不降**：后端当前行覆盖基线约 31%（详见 `QUALITY_ASSURANCE_PLAN.md` 第五章）。不设硬性百分比门禁，但新功能必须带测试，review 时不得让覆盖率显著回退。
 4. **advisory job 的收紧路径**：mypy 与 security 审计目前不阻塞合并，作为基线暴露问题；存量类型错误与漏洞告警消化完毕后，应移除 `continue-on-error` 升级为门禁。
 5. **分支保护建议**：仓库开启 branch protection，要求 `backend`、`django`、`frontend`、`frontend-e2e` 四个门禁 job 通过后方可合并 main。
+6. **覆盖率底线递推规则**：每轮质量保障结束实测一次总覆盖率，新底线 = 实测值 − 3，只升不降，同步更新 CI `--cov-fail-under` 与方案附录。
+7. **环境版本三元组同步规则**：任何运行时版本变更（Node / Python / 关键依赖）必须同时更新 CI 版本声明、engines/requires-python 声明与本文档，三者不一致视为 broken main。当前约定：Node ≥22（CI 三处 + `front/package.json` engines + `front/.npmrc` engine-strict）、Python ≥3.12。
 
 ## 项目结构
 

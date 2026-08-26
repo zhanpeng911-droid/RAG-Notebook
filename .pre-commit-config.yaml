@@ -1,0 +1,17 @@
+# 本地提交钩子：后端改动触发 ruff，前端改动触发 eslint。
+# 启用方式见 README「CI 质量门禁与长效规范」。
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-backend
+        name: ruff (backend)
+        entry: bash -c 'cd backend && uv run ruff check app tests'
+        language: system
+        files: ^backend/(app|tests)/.*\.py$
+        pass_filenames: false
+      - id: eslint-front
+        name: eslint (front)
+        entry: bash -c 'cd front && npm run lint'
+        language: system
+        files: ^front/(src|tests)/.*\.(js|mjs|cjs|vue|ts)$
+        pass_filenames: false
