@@ -141,6 +141,31 @@ jobs:
           path: front/test-results/
           retention-days: 7
 
+  security:
+    name: Dependency audit (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: front/package-lock.json
+      - name: Install uv
+        run: pip install uv
+      - name: Backend audit (pip-audit)
+        working-directory: backend
+        run: |
+          uv sync --extra dev || pip install -e ".[dev]"
+          uv run pip-audit
+      - name: Frontend audit (npm audit)
+        working-directory: front
+        run: npm audit --audit-level=critical
+
   compose:
     name: Docker compose config
     runs-on: ubuntu-latest
