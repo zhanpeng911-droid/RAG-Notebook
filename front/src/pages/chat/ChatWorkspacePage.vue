@@ -4,10 +4,10 @@
     <aside class="session-panel" :class="{ collapsed: sessionPanelCollapsed }">
       <div class="session-panel-header">
         <h3 v-if="!sessionPanelCollapsed">会话</h3>
-        <button class="btn-icon" @click="createNewSession" title="新建对话">
+        <button class="btn-icon" title="新建对话" @click="createNewSession">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19"/>
-            <line x1="5" y1="12" x2="19" y2="12"/>
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
           </svg>
         </button>
       </div>
@@ -21,7 +21,7 @@
         />
       </div>
 
-      <div class="session-list" v-if="!sessionPanelCollapsed">
+      <div v-if="!sessionPanelCollapsed" class="session-list">
         <div v-if="isSessionsLoading" class="session-loading">
           <div class="spinner"></div>
         </div>
@@ -40,10 +40,10 @@
             <div class="session-title ellipsis">{{ session.title || '新会话' }}</div>
             <div class="session-time">{{ formatSessionTime(session.updated_at || session.created_at) }}</div>
           </div>
-          <button class="session-delete" @click.stop="deleteSession(session.session_id)" title="删除会话">
+          <button class="session-delete" title="删除会话" @click.stop="deleteSession(session.session_id)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="3 6 5 6 21 6"/>
-              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+              <polyline points="3 6 5 6 21 6" />
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
             </svg>
           </button>
         </div>
@@ -52,18 +52,18 @@
 
     <!-- 中栏：聊天区 -->
     <main class="chat-main">
-      <div class="messages-container" ref="messagesContainer">
+      <div ref="messagesContainer" class="messages-container">
         <!-- 欢迎状态 -->
         <div v-if="showWelcome" class="welcome-card">
           <div class="welcome-icon">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M3 15a7 7 0 0 1 7-7h.5"/>
-              <path d="M21 9a7 7 0 0 1-7 7h-.5"/>
-              <circle cx="8" cy="12" r="1" fill="currentColor" stroke="none"/>
-              <circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/>
-              <circle cx="16" cy="12" r="1" fill="currentColor" stroke="none"/>
-              <path d="M3 5l2.5 2L3 9" opacity="0.5"/>
-              <path d="M21 15l-2.5 2L21 19" opacity="0.5"/>
+              <path d="M3 15a7 7 0 0 1 7-7h.5" />
+              <path d="M21 9a7 7 0 0 1-7 7h-.5" />
+              <circle cx="8" cy="12" r="1" fill="currentColor" stroke="none" />
+              <circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" />
+              <circle cx="16" cy="12" r="1" fill="currentColor" stroke="none" />
+              <path d="M3 5l2.5 2L3 9" opacity="0.5" />
+              <path d="M21 15l-2.5 2L21 19" opacity="0.5" />
             </svg>
           </div>
           <h3 class="welcome-title">智能笔记助手</h3>
@@ -94,13 +94,13 @@
           <div class="message-avatar">
             <template v-if="message.role === 'user'">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-                <circle cx="12" cy="7" r="4"/>
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                <circle cx="12" cy="7" r="4" />
               </svg>
             </template>
             <template v-else>
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 2l1 4.5L17.5 8l-4.5 1.5L12 14l-1-4.5L6.5 8 11 6.5z"/>
+                <path d="M12 2l1 4.5L17.5 8l-4.5 1.5L12 14l-1-4.5L6.5 8 11 6.5z" />
               </svg>
             </template>
           </div>
@@ -169,8 +169,8 @@
             rows="1"
             class="chat-input"
             placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
-            @keydown="handleKeydown"
             :disabled="isLoading"
+            @keydown="handleKeydown"
           ></textarea>
           <button
             class="send-button"
@@ -178,8 +178,8 @@
             @click="sendMessage"
           >
             <svg v-if="!isLoading" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="22" y1="2" x2="11" y2="13"/>
-              <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+              <line x1="22" y1="2" x2="11" y2="13" />
+              <polygon points="22 2 15 22 11 13 2 9 22 2" />
             </svg>
             <div v-else class="spinner-small"></div>
           </button>
@@ -189,9 +189,9 @@
 
     <!-- 右栏：问答记录（引用/检索过程/相关笔记手风琴）(320px, 可折叠) -->
     <aside class="reference-panel" :class="{ collapsed: referencePanelCollapsed }">
-      <button class="panel-toggle" @click="referencePanelCollapsed = !referencePanelCollapsed" :title="referencePanelCollapsed ? '展开面板' : '折叠面板'">
+      <button class="panel-toggle" :title="referencePanelCollapsed ? '展开面板' : '折叠面板'" @click="referencePanelCollapsed = !referencePanelCollapsed">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline :points="referencePanelCollapsed ? '9 18 15 12 9 6' : '15 18 9 12 15 6'"/>
+          <polyline :points="referencePanelCollapsed ? '9 18 15 12 9 6' : '15 18 9 12 15 6'" />
         </svg>
       </button>
 
@@ -241,21 +241,15 @@ const {
   sessionPanelCollapsed,
   referencePanelCollapsed,
   sessionSearchQuery,
-  activeReferenceTab,
-  relatedNotes,
-  relatedLoading,
   showWelcome,
   currentSessionId,
   filteredSessions,
-  currentThinkingSteps,
-  referenceDocuments,
   qaHistory,
   expandedQaId,
   QA_HISTORY_LIMIT,
   toggleQaExpand,
   clearQaHistory,
   quickQuestions,
-  referenceTabs,
   getStageLabel,
   getStageColor,
   truncateText,
@@ -268,8 +262,6 @@ const {
   sendQuickQuestion,
   handleKeydown,
   sendMessage,
-  truncatePreview,
-  goToNote,
 } = useChatWorkspace()
 </script>
 <style scoped>

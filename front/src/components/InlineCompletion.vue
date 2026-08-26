@@ -12,7 +12,6 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import http from '../services/http'
-import { useUserStore } from '../store/user'
 import { useModelStore } from '../store/model'
 
 const props = defineProps({
@@ -22,7 +21,6 @@ const props = defineProps({
 
 const emit = defineEmits(['accept'])
 
-const userStore = useUserStore()
 const modelStore = useModelStore()
 const visible = ref(false)
 const completion = ref('')
@@ -35,13 +33,6 @@ const wrapperStyle = computed(() => ({
   top: `${props.position.top}px`,
   left: `${props.position.left}px`,
 }))
-
-function getHeaders() {
-  return {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${userStore.token}`,
-  }
-}
 
 function acceptCompletion() {
   if (!completion.value) return

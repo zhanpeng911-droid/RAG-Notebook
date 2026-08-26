@@ -7,7 +7,7 @@
         <div class="toolbar-left">
           <button class="btn-back" @click="goBack">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="15 18 9 12 15 6"/>
+              <polyline points="15 18 9 12 15 6" />
             </svg>
             返回
           </button>
@@ -43,8 +43,8 @@
               {{ tag }}
               <button class="tag-remove" @click="removeTag(index)">
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <line x1="18" y1="6" x2="6" y2="18"/>
-                  <line x1="6" y1="6" x2="18" y2="18"/>
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
                 </svg>
               </button>
             </span>
@@ -63,7 +63,7 @@
       <QuickToolbar :editor-ref="markdownEditorRef" />
 
       <!-- 编辑器主体 -->
-      <div class="editor-body" ref="editorBodyRef">
+      <div ref="editorBodyRef" class="editor-body">
         <MarkdownEditor ref="markdownEditorRef" v-model="content" />
         <InlineCompletion
           :context="completionContext"
@@ -74,12 +74,12 @@
     </div>
 
     <!-- 右侧：相关笔记侧边栏 -->
-    <div class="sidebar-zone" v-if="!isNew">
+    <div v-if="!isNew" class="sidebar-zone">
       <!-- 折叠态 -->
       <div v-if="!sidebarVisible" class="sidebar-collapsed" @click="toggleSidebar">
         <div class="sidebar-toggle-btn">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="15 18 9 12 15 6"/>
+            <polyline points="15 18 9 12 15 6" />
           </svg>
         </div>
         <div class="sidebar-toggle-hint">相关</div>
@@ -92,13 +92,13 @@
           <div class="related-header">
             <button class="btn-sidebar-back" @click="expandedNote = null">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="15 18 9 12 15 6"/>
+                <polyline points="15 18 9 12 15 6" />
               </svg>
               返回列表
             </button>
             <button class="btn-sidebar-close" @click="toggleSidebar">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="9 18 15 12 9 6"/>
+                <polyline points="9 18 15 12 9 6" />
               </svg>
             </button>
           </div>
@@ -121,7 +121,7 @@
             <span class="related-title">相关笔记</span>
             <button class="btn-sidebar-close" @click="toggleSidebar">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="9 18 15 12 9 6"/>
+                <polyline points="9 18 15 12 9 6" />
               </svg>
             </button>
           </div>
@@ -162,7 +162,7 @@
  * NoteEditorPage — 笔记编辑器
  * 双栏布局：左侧编辑器 + 右侧相关笔记侧边栏
  */
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
 import { marked } from 'marked'

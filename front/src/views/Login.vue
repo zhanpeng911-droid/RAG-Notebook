@@ -74,7 +74,7 @@
           <p>登录后继续你的知识工作流</p>
         </div>
 
-        <form class="auth-form" @submit.prevent="onSubmit" novalidate>
+        <form class="auth-form" novalidate @submit.prevent="onSubmit">
           <div class="field" :class="{ 'field-error-box': errors.username }">
             <span class="field-icon">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
@@ -105,7 +105,7 @@
 
           <div class="form-aux">
             <label class="remember-me">
-              <input type="checkbox" v-model="remember" />
+              <input v-model="remember" type="checkbox" />
               <span>记住我</span>
             </label>
             <span class="forgot-link" @click="onForgot">忘记密码?</span>

@@ -83,7 +83,7 @@ describe('sseClient.createSSEStream', () => {
 
   it('completed 事件：onResponse 携带 answer，等待 onCompleted 后触发 onDone', async () => {
     const order = []
-    const onResponse = vi.fn((json) => order.push('response'))
+    const onResponse = vi.fn(() => order.push('response'))
     const onCompleted = vi.fn(async () => {
       await new Promise((r) => setTimeout(r, 5))
       order.push('completed')
@@ -171,15 +171,19 @@ describe('sseClient.createSSEStream', () => {
 
   it('abort 后不触发 onError', async () => {
     const onError = vi.fn()
-    let holdReject
+    // 模拟真实 fetch：abort 后以 AbortError reject
+    let rejectFetch
     global.fetch = vi.fn().mockReturnValue(
       new Promise((_, reject) => {
-        holdReject = reject
+        rejectFetch = reject
       })
     )
 
     const abort = createSSEStream('/api/v1/x', {}, { onError })
-    abort() // AbortError → 静默
+    abort()
+    const abortErr = new Error('aborted')
+    abortErr.name = 'AbortError'
+    rejectFetch(abortErr)
     await flush()
 
     expect(onError).not.toHaveBeenCalled()

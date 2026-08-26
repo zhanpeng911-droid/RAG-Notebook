@@ -8,9 +8,9 @@
           <circle cx="12" cy="12" r="9" />
         </svg>
         <span>问答记录</span>
-        <span class="qa-count-badge" v-if="qaHistory.length">{{ qaHistory.length }}</span>
+        <span v-if="qaHistory.length" class="qa-count-badge">{{ qaHistory.length }}</span>
       </div>
-      <button v-if="qaHistory.length" class="qa-clear-btn" @click="clearQaHistory" title="清空记录">
+      <button v-if="qaHistory.length" class="qa-clear-btn" title="清空记录" @click="clearQaHistory">
         清空
       </button>
     </div>
@@ -52,16 +52,16 @@
         <div v-show="expandedQaId === item.id" class="qa-item-body">
           <!-- 统计摘要条 -->
           <div class="qa-stats">
-            <span class="qa-stat-chip" v-if="item.citations.length">
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            <span v-if="item.citations.length" class="qa-stat-chip">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
               引用 {{ item.citations.length }}
             </span>
-            <span class="qa-stat-chip" v-if="item.thinking.length">
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+            <span v-if="item.thinking.length" class="qa-stat-chip">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3" /></svg>
               步骤 {{ item.thinking.length }}
             </span>
-            <span class="qa-stat-chip" v-if="item.relatedNotes.length">
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+            <span v-if="item.relatedNotes.length" class="qa-stat-chip">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></svg>
               笔记 {{ item.relatedNotes.length }}
             </span>
           </div>

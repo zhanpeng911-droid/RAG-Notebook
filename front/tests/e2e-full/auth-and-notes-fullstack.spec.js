@@ -33,7 +33,6 @@ const UNIQUE_ID = `${TS}-${RAND}`;
 const NOTE_TITLE = `E2E-PW-${UNIQUE_ID}`;
 const NOTE_CONTENT = `Playwright full-stack content ${UNIQUE_ID}`;
 const NOTE_TITLE_UPDATED = `E2E-PW-UPDATED-${UNIQUE_ID}`;
-const NOTE_CONTENT_UPDATED = `Updated by Playwright full-stack ${UNIQUE_ID}`;
 
 // ==================== 后端健康检查 ====================
 
@@ -132,7 +131,7 @@ test.describe('Full-stack: 登录 + 笔记 CRUD', () => {
   });
 
   test('创建、读取、编辑、删除笔记', async ({ page }) => {
-    let createdNoteId = null;
+    let createdNoteId;
 
     // --- 登录 ---
     await login(page);

@@ -33,7 +33,7 @@
           <div class="config-field">
             <label class="config-label">模型名称</label>
             <div v-if="modelStore.modelList.length > 0" class="model-select">
-              <select v-model="selectedModel" @change="onModelChange" class="config-select">
+              <select v-model="selectedModel" class="config-select" @change="onModelChange">
                 <option v-for="m in modelStore.modelList" :key="m.id" :value="m.id">{{ m.name }}</option>
               </select>
             </div>
@@ -58,7 +58,7 @@
                 :placeholder="apiKeyPlaceholder"
                 @blur="onApiKeyBlur"
               />
-              <button class="toggle-visibility" @click="showApiKey = !showApiKey" type="button">
+              <button class="toggle-visibility" type="button" @click="showApiKey = !showApiKey">
                 {{ showApiKey ? '隐藏' : '显示' }}
               </button>
             </div>
@@ -169,8 +169,7 @@
         </div>
       </div>
     </van-popup>
-
-  </div>
+</div>
 </template>
 
 <script setup>
@@ -194,7 +193,7 @@ const customBaseUrl = ref(modelStore.baseUrl)
 const selectedModel = ref(modelStore.modelName)
 
 // 提供商切换时同步模型名
-watch(() => modelStore.provider, (newProvider) => {
+watch(() => modelStore.provider, () => {
   selectedModel.value = modelStore.modelName
   customModelName.value = modelStore.modelName
 })

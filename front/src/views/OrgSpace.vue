@@ -8,7 +8,7 @@
     </div>
 
     <!-- 组织信息卡片 -->
-    <div class="org-card" v-if="currentOrg">
+    <div v-if="currentOrg" class="org-card">
       <div class="org-card-header">
         <h2 class="org-name">{{ currentOrg.name }}</h2>
         <div class="org-actions">
@@ -84,7 +84,7 @@
               <span class="member-role-tag" :class="'role-' + (m.role || 'member')">{{ roleLabel(m.role) }}</span>
             </div>
           </div>
-          <div class="member-actions" v-if="canManageOrg && m.role !== 'owner'">
+          <div v-if="canManageOrg && m.role !== 'owner'" class="member-actions">
             <select v-if="isOwner" class="role-select" :value="m.role" @change="handleRoleChange(m, $event.target.value)">
               <option value="admin">管理员</option>
               <option value="member">成员</option>

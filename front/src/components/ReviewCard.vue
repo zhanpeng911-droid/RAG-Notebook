@@ -6,14 +6,14 @@
     </div>
     <h3 class="review-title">{{ title }}</h3>
     <p class="review-question">{{ question }}</p>
-    <div class="review-tags" v-if="tags && tags.length > 0">
+    <div v-if="tags && tags.length > 0" class="review-tags">
       <TagBadge v-for="t in tags" :key="t" :tag="t" />
     </div>
-    <div class="review-actions" v-if="!done">
+    <div v-if="!done" class="review-actions">
       <van-button size="small" plain type="primary" @click.stop="$emit('done')">已回顾</van-button>
       <van-button size="small" plain type="default" @click.stop="$emit('skip')">跳过</van-button>
     </div>
-    <div class="review-done-badge" v-else>已完成 ✓</div>
+    <div v-else class="review-done-badge">已完成 ✓</div>
   </div>
 </template>
 

@@ -4,8 +4,8 @@
     <router-view v-slot="{ Component, route }">
       <!-- 认证布局（全屏，无导航） -->
       <component
-        v-if="route.meta.layout === 'auth'"
         :is="Component"
+        v-if="route.meta.layout === 'auth'"
       />
       <!-- 默认 AppShell 布局：将 Component 传递给 AppShell 的 slot -->
       <AppShell v-else>

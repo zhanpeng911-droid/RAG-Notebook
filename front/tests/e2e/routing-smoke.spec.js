@@ -1,13 +1,10 @@
 // @ts-check
 import { test, expect } from '@playwright/test';
 
-const PUBLIC_ROUTES = [
-  { path: '/login', titleContains: '登录' },
-  { path: '/register', titleContains: '注册' },
-];
+const PUBLIC_ROUTES = [{ path: '/login' }, { path: '/register' }];
 
 test.describe('路由 smoke test', () => {
-  for (const { path, titleContains } of PUBLIC_ROUTES) {
+  for (const { path } of PUBLIC_ROUTES) {
     test(`${path} 不白屏、不抛前端 runtime error`, async ({ page }) => {
       const errors = [];
       page.on('pageerror', (err) => errors.push(err.message));

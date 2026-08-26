@@ -41,7 +41,7 @@ const PROVIDERS = {
 
 export const useModelStore = defineStore('model', {
   state: () => {
-    let saved = {}
+    let saved
     try { saved = JSON.parse(localStorage.getItem('model-config') || '{}') } catch { saved = {} }
     return {
       provider: saved.provider || 'deepseek',

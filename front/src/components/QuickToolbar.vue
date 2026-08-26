@@ -18,7 +18,7 @@
  * 选中文字后点击按钮 → 自动用对应 Markdown 语法包裹。
  * 无选中文字时 → 插入语法 + 占位文字。
  */
-import { ref, onMounted } from 'vue'
+import { onMounted } from 'vue'
 
 const props = defineProps({
   /** 父组件传入的 MarkdownEditor 组件 ref */

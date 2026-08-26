@@ -29,7 +29,7 @@ import 'bytemd/dist/index.css'
 import 'highlight.js/styles/github.css'
 import 'katex/dist/katex.css'
 
-const props = defineProps({
+defineProps({
   modelValue: { type: String, default: '' },
 })
 

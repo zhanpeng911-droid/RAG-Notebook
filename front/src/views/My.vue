@@ -1,6 +1,6 @@
 <template>
   <div class="my-container">
-    <div class="user-info" @click="goToProfile" v-if="isLogin">
+    <div v-if="isLogin" class="user-info" @click="goToProfile">
       <div class="avatar">
         <div v-if="userInfo && userInfo.avatar" class="avatar-img">
           <van-image round width="72" height="72" :src="userInfo.avatar" />
@@ -15,14 +15,14 @@
       </div>
       <van-icon name="arrow" class="arrow-icon" />
     </div>
-    <div class="user-info" v-else>
+    <div v-else class="user-info">
       <div class="avatar">
         <div class="avatar-letter">?</div>
       </div>
       <div class="info">
         <div class="username">{{ $t('my.notLoggedIn') }}</div>
         <div class="desc">
-          <van-button type="primary" size="small" @click="goToLogin" style="margin-right: 10px">{{ $t('my.goToLogin') }}</van-button>
+          <van-button type="primary" size="small" style="margin-right: 10px" @click="goToLogin">{{ $t('my.goToLogin') }}</van-button>
           <van-button size="small" plain @click="goToRegister">{{ $t('my.goToRegister') }}</van-button>
         </div>
       </div>
@@ -40,11 +40,10 @@
 </template>
 
 <script setup>
-import { onMounted } from 'vue';
+import { onMounted, computed } from 'vue';
 import { useUserStore } from '../store/user';
 import { useRouter } from 'vue-router';
-import { computed } from 'vue';
-import { showDialog, showToast } from 'vant';
+import { showDialog } from 'vant';
 import { useI18n } from 'vue-i18n';
 
 const userStore = useUserStore();
