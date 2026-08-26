@@ -466,6 +466,8 @@ uv run pytest tests/test_eval_ir_metrics.py -q                # CI 纯函数测�
 
 ```powershell
 cd front
+npm run lint        # ESLint（src + tests，零 error 门禁）
+npm run test:unit   # Vitest 单元测试
 npm run build
 npm run test:e2e
 ```
@@ -479,6 +481,27 @@ $env:E2E_USERNAME="your-local-user"
 $env:E2E_PASSWORD="your-local-password"
 npm run test:e2e:full -- --project=chromium
 ```
+
+### CI 质量门禁与长效规范
+
+CI（`.github/workflows/ci.yml`）包含以下 job：
+
+| Job | 内容 | 性质 |
+|---|---|---|
+| backend | Ruff lint + pytest（含覆盖率报表） | 门禁 |
+| django | Django 用户/文件模块测试 | 门禁 |
+| frontend | ESLint + Vitest + build | 门禁 |
+| frontend-e2e | Playwright mock E2E（chromium） | 门禁 |
+| mypy | 类型检查（首批 core/schemas/utils/config） | advisory |
+| security | pip-audit + npm audit(critical) | advisory |
+
+长效规范（对所有贡献者生效）：
+
+1. **修 bug 必附回归测试**：每个 bug 修复的 PR 必须包含一个能复现该 bug 的失败用例及其修复后通过的断言，防止问题回归。
+2. **`skip` 必须注明原因**：任何 `pytest.skip` / `test.skip` 都要写明跳过原因（缺依赖/环境限制/已知问题跟踪号），无理由的 skip 会在 review 中被拒绝。
+3. **覆盖率只升不降**：后端当前行覆盖基线约 31%（详见 `QUALITY_ASSURANCE_PLAN.md` 第五章）。不设硬性百分比门禁，但新功能必须带测试，review 时不得让覆盖率显著回退。
+4. **advisory job 的收紧路径**：mypy 与 security 审计目前不阻塞合并，作为基线暴露问题；存量类型错误与漏洞告警消化完毕后，应移除 `continue-on-error` 升级为门禁。
+5. **分支保护建议**：仓库开启 branch protection，要求 `backend`、`django`、`frontend`、`frontend-e2e` 四个门禁 job 通过后方可合并 main。
 
 ## 项目结构
 
