@@ -12,7 +12,7 @@ export default defineConfig({
   retries: 0,
   reporter: 'list',
   use: {
-    baseURL: 'http://127.0.0.1:3000',
+    baseURL: 'http://127.0.0.1:3076',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
@@ -30,8 +30,8 @@ export default defineConfig({
   ],
   webServer: {
     command: 'npm run dev',
-    url: 'http://127.0.0.1:3000',
-    reuseExistingServer: true,
-    timeout: 30000,
+    url: 'http://127.0.0.1:3076',
+    reuseExistingServer: !process.env.CI,
+    timeout: 60000,
   },
 });
