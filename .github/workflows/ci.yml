@@ -22,7 +22,7 @@ jobs:
         run: pip install uv
       - name: Sync deps (dev)
         run: |
-          uv sync --extra dev || pip install -e ".[dev]" aiosqlite pytest pytest-asyncio alembic
+          uv sync --locked --extra dev
       - name: Ruff
         run: |
           if command -v uv >/dev/null 2>&1; then
@@ -60,7 +60,7 @@ jobs:
         run: pip install uv
       - name: Sync deps
         run: |
-          uv sync || pip install -e .
+          uv sync --locked
       - name: Tests
         env:
           JWT_SECRET_KEY: ci-test-secret
@@ -89,7 +89,7 @@ jobs:
         run: pip install uv
       - name: Sync deps (dev)
         run: |
-          uv sync --extra dev || pip install -e ".[dev]"
+          uv sync --locked --extra dev
       - name: Mypy (core modules first)
         run: |
           if command -v uv >/dev/null 2>&1; then
@@ -160,7 +160,7 @@ jobs:
       - name: Backend audit (pip-audit)
         working-directory: backend
         run: |
-          uv sync --extra dev || pip install -e ".[dev]"
+          uv sync --locked --extra dev
           uv run pip-audit
       - name: Frontend audit (npm audit)
         working-directory: front
