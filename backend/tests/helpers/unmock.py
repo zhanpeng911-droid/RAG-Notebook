@@ -7,7 +7,23 @@ BM25Retriever、RecursiveCharacterTextSplitter 等）时，先用本模块删除
 旧引用的模块不受影响。
 """
 import sys
+import types
 from unittest.mock import MagicMock
+
+
+# conftest 把顶层 "langchain" 替换为无 __path__ 的 MagicMock，
+# 形如 from langchain.embeddings.base import X 的子模块导入会直接
+# ModuleNotFoundError。这里补齐缺失的假子模块条目，属性访问照常生效。
+_ensure_entries = {
+    "langchain.embeddings": {},
+    "langchain.embeddings.base": {"Embeddings": MagicMock},
+}
+for _name, _attrs in _ensure_entries.items():
+    if _name not in sys.modules or isinstance(sys.modules.get(_name), MagicMock):
+        _mod = types.ModuleType(_name)
+        for _k, _v in _attrs.items():
+            setattr(_mod, _k, _v)
+        sys.modules[_name] = _mod
 
 
 def restore_real(*names):
