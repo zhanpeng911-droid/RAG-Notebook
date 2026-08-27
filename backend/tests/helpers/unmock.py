@@ -34,25 +34,9 @@ def restore_real(*names):
             del sys.modules[name]
 
 
-# 注意：不得包含 langchain_chroma——别的文件（vector_store 测试）
-# 依赖它保持 mock，删除会让真 chromadb 在全量套件里被连带加载。
-LANGCHAIN_STACK = [
-    "langchain_core",
-    "langchain_core.documents",
-    "langchain_core.retrievers",
-    "langchain_core.callbacks",
-    "langchain_core.embeddings",
-    "langchain_core.language_models",
-    "langchain_community",
-    "langchain_community.retrievers",
-    "langchain_classic",
-    "langchain_classic.retrievers",
-    "langchain_text_splitters",
-]
-
 # 检索链路（Document/BM25/Ensemble/自定义 BaseRetriever 子类）需要的
-# 完整真实栈：langchain_core 各子模块必须一起还原，否则真实 retrievers
-# 拿到 mock 的 BaseMessage 会让 pydantic 建模失败。
+# 完整真实栈：langchain_core 各子模块必须一起还原——漏掉任何一个，
+# 真实子包通过仍为 mock 的兄弟包导入时都会报 “xxx is not a package”。
 _RETRIEVAL_CORE = [
     "langchain_core",
     "langchain_core.documents",
@@ -63,6 +47,17 @@ _RETRIEVAL_CORE = [
     "langchain_core.prompts",
     "langchain_core.retrievers",
     "langchain_core.callbacks",
+]
+
+# 注意：不得包含 langchain_chroma——别的文件（vector_store 测试）
+# 依赖它保持 mock，删除会让真 chromadb 在全量套件里被连带加载。
+LANGCHAIN_STACK = [
+    *_RETRIEVAL_CORE,
+    "langchain_community",
+    "langchain_community.retrievers",
+    "langchain_classic",
+    "langchain_classic.retrievers",
+    "langchain_text_splitters",
 ]
 RETRIEVAL_STACK = _RETRIEVAL_CORE + [
     "langchain_community",
