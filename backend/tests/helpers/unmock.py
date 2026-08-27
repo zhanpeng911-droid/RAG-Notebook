@@ -49,6 +49,27 @@ LANGCHAIN_STACK = [
     "langchain_text_splitters",
 ]
 
+# 检索链路（Document/BM25/Ensemble/自定义 BaseRetriever 子类）需要的
+# 完整真实栈：langchain_core 各子模块必须一起还原，否则真实 retrievers
+# 拿到 mock 的 BaseMessage 会让 pydantic 建模失败。
+_RETRIEVAL_CORE = [
+    "langchain_core",
+    "langchain_core.documents",
+    "langchain_core.messages",
+    "langchain_core.embeddings",
+    "langchain_core.language_models",
+    "langchain_core.tools",
+    "langchain_core.prompts",
+    "langchain_core.retrievers",
+    "langchain_core.callbacks",
+]
+RETRIEVAL_STACK = _RETRIEVAL_CORE + [
+    "langchain_community",
+    "langchain_community.retrievers",
+    "langchain_classic",
+    "langchain_classic.retrievers",
+]
+
 
 def install_config_stub(separators=None):
     """用兼容的配置桩替换 conftest 的 app.utils.config mock。
