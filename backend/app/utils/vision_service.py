@@ -1,5 +1,7 @@
 import os
 import base64
+
+from typing import Any
 import asyncio
 import re
 
@@ -226,10 +228,11 @@ class VisionService:
             构造好的 LangChain HumanMessage 对象。
         """
         prompt = self._build_prompt(existing_text)
-        return HumanMessage(content=[
+        content: list[Any] = [
             {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{img_b64}"}}
-        ])
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{img_b64}"}},
+        ]
+        return HumanMessage(content=content)
 
     def _build_batch_message_from_b64(
         self,
@@ -254,13 +257,13 @@ class VisionService:
             {"page": pn, "text": txt}
             for pn, (_, _, txt) in zip(page_numbers, images_info)
         ])
-        content = [{"type": "text", "text": prompt}]
+        content_b: list[Any] = [{"type": "text", "text": prompt}]
         for img_b64, mime, _ in images_info:
-            content.append({
+            content_b.append({
                 "type": "image_url",
                 "image_url": {"url": f"data:{mime};base64,{img_b64}"}
             })
-        return HumanMessage(content=content)
+        return HumanMessage(content=content_b)
 
     def _dashscope_describe(self, img_b64: str, mime: str, existing_text: str) -> str:
         """
@@ -282,7 +285,7 @@ class VisionService:
         import dashscope
 
         api_key = getattr(self.model, 'api_key', None) or os.getenv("ALIYUN_ACCESS_KEY_SECRET")
-        model_name = self.model.model_name
+        model_name = str(getattr(self.model, "model_name", ""))
 
         messages = [{
             "role": "user",
@@ -335,7 +338,7 @@ class VisionService:
         import dashscope
 
         api_key = getattr(self.model, 'api_key', None) or os.getenv("ALIYUN_ACCESS_KEY_SECRET")
-        model_name = self.model.model_name
+        model_name = str(getattr(self.model, "model_name", ""))
 
         prompt = self._build_batch_prompt([
             {"page": pn, "text": txt}

@@ -117,7 +117,7 @@ async def listdir_allowed_type(path: str, allowed_types: tuple[str]) -> tuple:
 
 
 
-async def pdf_loader(file_path: str, password: str = None) -> list[Document]:
+async def pdf_loader(file_path: str, password: str | None = None) -> list[Document]:
     """
     异步加载 PDF 文件内容，返回 LangChain Document 对象列表。
 
@@ -141,15 +141,15 @@ async def pdf_loader(file_path: str, password: str = None) -> list[Document]:
         return await asyncio.to_thread(loader.load)
     
     try:
-        loader = UnstructuredPDFLoader(abs_file_path)
-        docs = await asyncio.to_thread(loader.load)
+        unstructured_loader = UnstructuredPDFLoader(abs_file_path)
+        docs = await asyncio.to_thread(unstructured_loader.load)
         if docs and any(len(doc.page_content.strip()) > 0 for doc in docs):
             return docs
     except Exception as e:
         logger.warning(f"【PDF加载】UnstructuredPDFLoader失败，尝试PyPDFLoader: {e}")
     
-    loader = PyPDFLoader(abs_file_path)
-    return await asyncio.to_thread(loader.load)
+    pypdf_loader = PyPDFLoader(abs_file_path)
+    return await asyncio.to_thread(pypdf_loader.load)
 
 
 async def txt_loader(file_path: str) -> list[Document]:
@@ -294,7 +294,7 @@ def get_file_md5_hex_sync(file_path: str) -> str:
     return md5_object.hexdigest()
 
 
-def pdf_loader_sync(file_path: str, password: str = None) -> list[Document]:
+def pdf_loader_sync(file_path: str, password: str | None = None) -> list[Document]:
     """
     同步加载 PDF 文件内容，用于多线程（ThreadPoolExecutor）环境。
 
@@ -318,15 +318,15 @@ def pdf_loader_sync(file_path: str, password: str = None) -> list[Document]:
         return loader.load()
     
     try:
-        loader = UnstructuredPDFLoader(abs_file_path)
-        docs = loader.load()
+        unstructured_loader = UnstructuredPDFLoader(abs_file_path)
+        docs = unstructured_loader.load()
         if docs and any(len(doc.page_content.strip()) > 0 for doc in docs):
             return docs
     except Exception as e:
         logger.warning(f"【PDF加载】UnstructuredPDFLoader失败，尝试PyPDFLoader: {e}")
     
-    loader = PyPDFLoader(abs_file_path)
-    return loader.load()
+    pypdf_loader = PyPDFLoader(abs_file_path)
+    return pypdf_loader.load()
 
 
 def txt_loader_sync(file_path: str) -> list[Document]:

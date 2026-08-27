@@ -2,6 +2,7 @@ import os
 import tempfile
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 from dataclasses import dataclass
 
 from langchain_core.documents import Document
@@ -208,7 +209,7 @@ async def pdf_multimodal_loader(file_path: str, md5: str, user_id: str) -> list[
         return documents
 
     try:
-        groups = []
+        groups: list[tuple[int, list[int]]] = []
         unique_data_indices = list(range(len(vision_data)))
 
         # 第3步（可选）：感知哈希去重——对视觉相似的页面只调用一次视觉模型
@@ -218,7 +219,6 @@ async def pdf_multimodal_loader(file_path: str, md5: str, user_id: str) -> list[
                 for vd in vision_data:
                     vd.phash = vision.compute_image_hash(vd.temp_path)
 
-                groups = []
                 for i, vd in enumerate(vision_data):
                     matched = False
                     for rep_idx, indices in groups:
@@ -246,7 +246,7 @@ async def pdf_multimodal_loader(file_path: str, md5: str, user_id: str) -> list[
             groups = [(i, [i]) for i in range(len(vision_data))]
 
         # 第4步：拆分批次
-        batches = []
+        batches: list[dict[str, Any]] = []
         for i in range(0, len(unique_data_indices), _BATCH_SIZE):
             batch_indices = unique_data_indices[i:i + _BATCH_SIZE]
             batches.append({
@@ -258,7 +258,7 @@ async def pdf_multimodal_loader(file_path: str, md5: str, user_id: str) -> list[
 
         # 第5步：并发调用视觉模型，所有批次并行执行
         if batches:
-            tasks = [
+            tasks: list[Any] = [
                 vision.describe_pages_batch(
                     b["image_paths"], b["page_numbers"], b["texts"]
                 )
@@ -406,7 +406,7 @@ def pdf_multimodal_loader_sync(file_path: str, md5: str, user_id: str) -> list[D
         return documents
 
     try:
-        groups = []
+        groups: list[tuple[int, list[int]]] = []
         unique_data_indices = list(range(len(vision_data)))
 
         if _DEDUP_ENABLED:
@@ -414,7 +414,6 @@ def pdf_multimodal_loader_sync(file_path: str, md5: str, user_id: str) -> list[D
                 for vd in vision_data:
                     vd.phash = vision.compute_image_hash(vd.temp_path)
 
-                groups = []
                 for i, vd in enumerate(vision_data):
                     matched = False
                     for rep_idx, indices in groups:
@@ -435,7 +434,7 @@ def pdf_multimodal_loader_sync(file_path: str, md5: str, user_id: str) -> list[D
         else:
             groups = [(i, [i]) for i in range(len(vision_data))]
 
-        batches = []
+        batches: list[dict[str, Any]] = []
         for i in range(0, len(unique_data_indices), _BATCH_SIZE):
             batch_indices = unique_data_indices[i:i + _BATCH_SIZE]
             batches.append({
@@ -455,7 +454,7 @@ def pdf_multimodal_loader_sync(file_path: str, md5: str, user_id: str) -> list[D
                     )
                     for b in batches
                 ]
-                all_results = [f.result() for f in futures]
+                all_results: list[Any] = [f.result() for f in futures]
 
             for batch, result in zip(batches, all_results):
                 for data_idx in batch["data_indices"]:
