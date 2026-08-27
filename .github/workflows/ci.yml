@@ -74,9 +74,8 @@ jobs:
           fi
 
   mypy:
-    name: Backend type check (advisory)
+    name: Backend type check
     runs-on: ubuntu-latest
-    continue-on-error: true
     defaults:
       run:
         working-directory: backend
