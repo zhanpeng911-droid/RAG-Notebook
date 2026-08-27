@@ -39,7 +39,7 @@ def get_logger(
         name: str = "agent",
         console_level: int = logging.INFO,
         file_level: int = logging.DEBUG,
-        log_file: str = None,
+        log_file: str | None = None,
 ) -> logging.Logger:
     """
     获取或创建 logger 实例。

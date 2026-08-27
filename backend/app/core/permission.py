@@ -36,7 +36,7 @@ async def _get_user_role(db: AsyncSession, org_id: str, user_id: str) -> str | N
     )
     result = await db.execute(stmt)
     member = result.scalar_one_or_none()
-    return member.role if member else None
+    return str(member.role) if member else None
 
 
 def require_role(allowed_roles: list[str]):

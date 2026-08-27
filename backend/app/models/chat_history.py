@@ -14,7 +14,7 @@ from sqlalchemy.sql import func
 Base = declarative_base()
 
 
-class ChatSession(Base):
+class ChatSession(Base):  # type: ignore[misc,valid-type]  # 同上
     """会话表 —— 记录用户的一次对话"""
     __tablename__ = "chat_sessions"
 
@@ -29,7 +29,7 @@ class ChatSession(Base):
     messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan")
 
 
-class ChatMessage(Base):
+class ChatMessage(Base):  # type: ignore[misc,valid-type]  # 同上
     """消息表 —— 记录单条对话消息"""
     __tablename__ = "chat_messages"
 

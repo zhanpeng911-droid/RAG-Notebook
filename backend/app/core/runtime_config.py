@@ -171,14 +171,18 @@ def _validate_and_coerce(
     elif definition.value_type == "int":
         if isinstance(value, bool) or not isinstance(value, int):
             raise ValueError(f"{key} 需要 int 类型")
-        if not (definition.min_value <= value <= definition.max_value):
-            raise ValueError(f"{key} 超出范围 [{definition.min_value}, {definition.max_value}]: {value}")
+        min_v = definition.min_value if definition.min_value is not None else -(2**63)
+        max_v = definition.max_value if definition.max_value is not None else 2**63
+        if not (min_v <= value <= max_v):
+            raise ValueError(f"{key} 超出范围 [{min_v}, {max_v}]: {value}")
     elif definition.value_type == "float":
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError(f"{key} 需要 float 类型")
         value = float(value)
-        if not (definition.min_value <= value <= definition.max_value):
-            raise ValueError(f"{key} 超出范围 [{definition.min_value}, {definition.max_value}]: {value}")
+        min_v = definition.min_value if definition.min_value is not None else -(2**63)
+        max_v = definition.max_value if definition.max_value is not None else 2**63
+        if not (min_v <= value <= max_v):
+            raise ValueError(f"{key} 超出范围 [{min_v}, {max_v}]: {value}")
 
     # 单项调用也校验当前阈值关系；批量调用会传入已经合并的临时值。
     conf_keys = ("grader.confidence_high", "grader.confidence_medium", "grader.confidence_low")
@@ -193,7 +197,7 @@ def _validate_and_coerce(
     return value
 
 
-async def set_values(values: dict, updated_by: str = None) -> dict:
+async def set_values(values: dict, updated_by: str | None = None) -> dict:
     """
     批量设置参数（校验 + 持久化 + 刷新缓存）。
 
@@ -253,7 +257,7 @@ async def set_values(values: dict, updated_by: str = None) -> dict:
     }
 
 
-async def reset_values(keys: list[str], updated_by: str = None) -> dict:
+async def reset_values(keys: list[str], updated_by: str | None = None) -> dict:
     """
     重置参数为默认值（删除 DB 覆盖行 + 刷新缓存）。
 

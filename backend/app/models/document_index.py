@@ -39,7 +39,7 @@ class DocumentIndex(Base):
     file_type = Column(String(50), nullable=True, comment="文件类型（扩展名）")
     md5 = Column(String(32), nullable=False, index=True, comment="文件MD5摘要")
 
-    status = Column(
+    status: object = Column(
         Enum(DocumentIndexStatus, values_callable=lambda enum_class: [item.value for item in enum_class], name="document_index_status"),
         nullable=False,
         default=DocumentIndexStatus.UPLOADED,

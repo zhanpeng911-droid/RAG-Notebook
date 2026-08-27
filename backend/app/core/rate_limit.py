@@ -54,7 +54,7 @@ def _is_rate_limit_enabled() -> bool:
     global _env_file_flag_cache
     if _env_file_flag_cache is _UNSET:
         _env_file_flag_cache = _read_rate_limit_flag_from_env_file()
-    return _env_file_flag_cache
+    return bool(_env_file_flag_cache)
 
 
 def _build_rate_limit_key(request: Request) -> str:

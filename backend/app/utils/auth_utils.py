@@ -140,7 +140,7 @@ async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depend
     await _reject_if_blacklisted(payload)
 
     # 从Django JWT中提取user_id（uuid）
-    user_id: str = payload.get("user_id")
+    user_id = payload.get("user_id")
 
     if user_id is None:
         raise HTTPException(

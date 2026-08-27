@@ -15,7 +15,7 @@
 import re
 import logging
 import traceback
-from typing import List, Dict, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from fastapi import HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -150,7 +150,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """处理 FastAPI 参数校验异常（最常见的异常之一）"""
     # 把FastAPI的原始校验错误转换成用户友好的提示
-    error_details: List[Dict] = exc.errors()
+    error_details = list(exc.errors())
     friendly_msg_parts = []
 
     for err in error_details:

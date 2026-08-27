@@ -367,6 +367,15 @@ dev = [
 docs-heavy = [
     { name = "unstructured", extra = ["all-docs"] },
 ]
+full = [
+    { name = "accelerate" },
+    { name = "modelscope" },
+    { name = "sentence-transformers" },
+    { name = "torch" },
+    { name = "torchaudio" },
+    { name = "torchvision" },
+    { name = "unstructured", extra = ["all-docs"] },
+]
 local-embed = [
     { name = "accelerate" },
     { name = "modelscope" },
@@ -383,6 +392,7 @@ requires-dist = [
     { name = "aiomysql", specifier = ">=0.3.2" },
     { name = "aiosqlite", marker = "extra == 'dev'", specifier = ">=0.20.0" },
     { name = "alembic", specifier = ">=1.13.0" },
+    { name = "backend", extras = ["local-embed", "docs-heavy"], marker = "extra == 'full'" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=24.0.0" },
     { name = "celery", extras = ["redis"], specifier = ">=5.4.0" },
     { name = "dashscope", specifier = ">=1.25.14" },
@@ -431,7 +441,7 @@ requires-dist = [
     { name = "unstructured", extras = ["all-docs"], marker = "extra == 'docs-heavy'", specifier = ">=0.22.20" },
     { name = "uvicorn", specifier = "==0.21.1" },
 ]
-provides-extras = ["local-embed", "docs-heavy", "dev"]
+provides-extras = ["local-embed", "docs-heavy", "dev", "full"]
 
 [[package]]
 name = "bcrypt"

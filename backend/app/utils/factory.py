@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Optional, List, Callable
+from typing import Any, Callable, List, Optional
 import ipaddress
 from urllib.parse import urlparse
 
@@ -8,13 +8,16 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
 try:
     from langchain_ollama import OllamaEmbeddings, ChatOllama
-except ImportError:
-    OllamaEmbeddings = None
-    ChatOllama = None
+except ImportError:  # 可选依赖：缺省时置空并在调用处报错
+    OllamaEmbeddings = Any  # type: ignore[misc,assignment]
+    ChatOllama = Any  # type: ignore[misc,assignment]
 
 from app.core.logger_handler import logger
 from app.config.validator import get_settings
 
+
+def _new(model_cls: Any, **kwargs: Any) -> Any:
+    return model_cls(**kwargs)
 
 class LazyModelProxy:
     """
@@ -33,9 +36,11 @@ class LazyModelProxy:
 
     def resolve(self):
         """解析并缓存真实模型实例。"""
-        if self._resolved is None:
-            self._resolved = self._resolver()
-        return self._resolved
+        resolved: Any = self._resolved
+        if resolved is None:
+            resolved = self._resolver()
+            self._resolved = resolved
+        return resolved
 
     def __getattr__(self, item):
         return getattr(self.resolve(), item)
@@ -56,7 +61,7 @@ class DashScopeEmbeddingsWrapper(Embeddings):
     - 错误处理：API 调用失败时抛出异常
     """
 
-    def __init__(self, model_name: str = "qwen3-embedding", api_key: str = None):
+    def __init__(self, model_name: str = "qwen3-embedding", api_key: str | None = None):
         """
         初始化 DashScope 嵌入模型。
 
@@ -217,7 +222,7 @@ class VisionModelFactory(BaseModelFactory):
 
             logger.info(f"🎨 VisionModel 使用Ollama多模态模型: {model_name}, 地址: {base_url}")
 
-            return ChatOllama(
+            return _new(ChatOllama, 
                 model=model_name,
                 base_url=base_url,
                 # 视觉模型禁用 streaming，因为图片理解需要在完整的上下文上做推理
@@ -232,7 +237,7 @@ class VisionModelFactory(BaseModelFactory):
 
             logger.info(f"🎨 VisionModel 使用阿里云百炼多模态模型: {model_name}")
 
-            return ChatTongyi(
+            return _new(ChatTongyi, 
                 model=model_name,
                 api_key=api_key,
                 base_url=base_url,
@@ -248,7 +253,7 @@ class VisionModelFactory(BaseModelFactory):
 
             logger.info(f"🎨 VisionModel 使用 OpenAI 兼容模型: {model_name}")
 
-            return ChatOpenAI(
+            return _new(ChatOpenAI, 
                 model=model_name,
                 api_key=api_key,
                 base_url=base_url,
@@ -284,7 +289,7 @@ def create_chat_model_from_settings(custom_model: Optional[str] = None) -> BaseC
 
         logger.info(f"📦 ChatModel 使用Ollama模型: {model_name}, 地址: {base_url}")
 
-        return ChatOllama(
+        return _new(ChatOllama, 
             model=model_name,
             base_url=base_url,
             streaming=True,
@@ -298,7 +303,7 @@ def create_chat_model_from_settings(custom_model: Optional[str] = None) -> BaseC
 
         logger.info(f"📦 ChatModel 使用阿里云百炼模型: {model_name}")
 
-        return ChatTongyi(
+        return _new(ChatTongyi, 
             model=model_name,
             api_key=api_key,
             base_url=base_url,
@@ -313,7 +318,7 @@ def create_chat_model_from_settings(custom_model: Optional[str] = None) -> BaseC
         base_url = settings.OPENAI_API_BASE
 
         logger.info(f"📦 ChatModel 使用 OpenAI 兼容模型: {model_name}, base_url: {base_url}")
-        return ChatOpenAI(
+        return _new(ChatOpenAI, 
             model=model_name,
             api_key=api_key,
             base_url=base_url,
@@ -531,7 +536,7 @@ def create_chat_model_from_config(config: dict) -> BaseChatModel:
 
     # 所有 OpenAI 兼容协议（deepseek / openai / ollama / custom）
     from langchain_openai import ChatOpenAI
-    return ChatOpenAI(
+    return _new(ChatOpenAI, 
         model=model_name,
         api_key=api_key or "no-key",
         base_url=base_url,

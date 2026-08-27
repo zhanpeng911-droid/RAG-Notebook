@@ -70,15 +70,16 @@ dev = [
     "pre-commit>=3.0",
 ]
 
+full = [
+    "backend[local-embed,docs-heavy]",
+]
+
 [tool.mypy]
 python_version = "3.12"
 # 首批只覆盖 app/core、app/schemas、app/utils、app/config（见 CI mypy job），
 # 其余目录类型标注尚不完整，逐步纳入。
 ignore_missing_imports = true
 check_untyped_defs = true
-full = [
-    "backend[local-embed,docs-heavy]",
-]
 
 [[tool.uv.index]]
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"
