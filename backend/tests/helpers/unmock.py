@@ -34,6 +34,8 @@ def restore_real(*names):
             del sys.modules[name]
 
 
+# 注意：不得包含 langchain_chroma——别的文件（vector_store 测试）
+# 依赖它保持 mock，删除会让真 chromadb 在全量套件里被连带加载。
 LANGCHAIN_STACK = [
     "langchain_core",
     "langchain_core.documents",
@@ -41,7 +43,6 @@ LANGCHAIN_STACK = [
     "langchain_core.callbacks",
     "langchain_core.embeddings",
     "langchain_core.language_models",
-    "langchain_chroma",
     "langchain_community",
     "langchain_community.retrievers",
     "langchain_classic",
