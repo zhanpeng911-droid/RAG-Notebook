@@ -13,7 +13,7 @@
 2. 跑一次全量基线确认环境正常：
    ```bash
    cd backend && uv sync --extra dev && uv run pytest tests -q --no-header
-   # 预期：898 passed / 6 skipped，总覆盖率 86%
+   # 预期：943 passed / 6 skipped，总覆盖率 88%
    ```
 3. 读 `QUALITY_ASSURANCE_PLAN_R3.md` 全文（任务清单在第二节）。
 
@@ -36,22 +36,22 @@ force_push: false   deletions: false   （均已禁用，R2 配置正确）
 | P1-B1 | `app/router/note_router.py`（鉴权负路径+CRUD+隔离 404+stub 端点） | cd4dcdb（已推） | 0%→73% |
 | P1-B1 | `app/router/org_router.py`（owner 正路径+外部成员越权 403） | 1940081 | 0%→37% |
 | P1-B1 | **12 个 router 全部 ≥70%**（org/space/agent/knowledge_router/knowledge_service/health/audit/chat/review/runtime_config/user，note 73% 已达标）；org 37%→87% | e4ac388（**待推**） | 70–100% |
-| P1-B2 | **services/tasks 四个文件 ≥80%**：note_service 90%、database_session_manager 91%、note_vector_index 98%、celery_app 100% | 新提交（**待推**） | 90–100% |
-| 新基线 | `--cov-fail-under` 57→**83**（86%−3），ci.yml/README/R2 方案/R3 方案同步 | 新提交（**待推**） | — |
+| P1-B2 | **services/tasks 四个文件 ≥80%**：note_service 90%、database_session_manager 91%、note_vector_index 98%、celery_app 100% | 2a81243 | 90–100% |
+| 新基线 | `--cov-fail-under` 57→**83**（86%−3），ci.yml/README/R2 方案/R3 方案同步 | 134aa8e | — |
+| P1-B4 | **杂项五文件 ≥70%**：core/audit 100%、utils/auth_utils 95%、db/db_config 100%、db/redis_config 84%、core/runtime_config 94% | acc29f8（已推） | 84–100% |
+| 基线递推 | `--cov-fail-under` 83→**85**（88%−3） | 待推 | — |
 
-全量测试：**898 passed / 6 skipped** 常绿，总覆盖率 **60% → 86%**。
+全量测试：**943 passed / 6 skipped** 常绿，总覆盖率 **60% → 88%**。
 
 ## 四、未完成清单（接手顺序）
 
 按方案执行顺序，从下一步接着做：
 
-1. **~~P1-B1 已完成~~**（12 个 router ≥70%）
-2. **~~P1-B2 已完成~~**（services/tasks 四文件 ≥80%，总覆盖 86%）
-3. **~~新基线落盘 已完成~~**（`--cov-fail-under` 57→83，ci.yml/README/方案同步）
-4. **P1-B4**：`core/audit`(45%)、`db/redis_config`(25%)、`db/db_config`(48%)、`core/runtime_config`(51%)、`utils/auth_utils`(58%)
-5. **P2 前端**：Vitest 16→~50，coverage 报表进 CI
-6. **P3 security**：依赖 triage（starlette 预计连带 fastapi 大版本→豁免登记）、pip/npm audit 门禁化、Django ruff
-7. **P4 功能验收**：`tests/functional/` 真实 LLM 套件 → `docs/functional-report.md`
+1. **~~P1-B1 / P1-B2 / P1-B4 已完成~~**（12 router ≥70%、services/tasks ≥80%、杂项 ≥70%）
+2. **~~新基线落盘 已完成~~**（`--cov-fail-under` 85，总覆盖 88%）
+3. **P2 前端**：Vitest 16→~50，coverage 报表进 CI
+4. **P3 security**：依赖 triage（starlette 预计连带 fastapi 大版本→豁免登记）、pip/npm audit 门禁化、Django ruff
+5. **P4 功能验收**：`tests/functional/` 真实 LLM 套件 → `docs/functional-report.md`
 
 ## 五、可复用测试模式（router）
 
@@ -95,9 +95,9 @@ async with httpx.AsyncClient(transport=transport, base_url="http://test") as c: 
 
 ## 七、待推送
 
-- `1940081` org_router、`8f44d1f` 交接文档、`e4ac388` P1-B1、P1-B2 与基线落盘各提交（网络恢复即 `git push origin main`）
+- 基线递推提交（83→85，ci.yml/README/方案同步，网络恢复即 `git push origin main`）
 
 ## 八、当前分支与保护
 
 - main，5 个必需检查（Backend/Django/Frontend build/Frontend E2E/Backend type check）+ force-push/deletions 禁用
-- CI `--cov-fail-under=83`（R3 实测 86%−3；P1-B4 落地后如需再递推）
+- CI `--cov-fail-under=85`（R3 实测 88%−3；只升不降）

@@ -507,7 +507,7 @@ uv run pre-commit install
 
 1. **修 bug 必附回归测试**：每个 bug 修复的 PR 必须包含一个能复现该 bug 的失败用例及其修复后通过的断言，防止问题回归。
 2. **`skip` 必须注明原因**：任何 `pytest.skip` / `test.skip` 都要写明跳过原因（缺依赖/环境限制/已知问题跟踪号），无理由的 skip 会在 review 中被拒绝。
-3. **覆盖率只升不降**：后端当前行覆盖基线 **86%**（R3 实测，CI `--cov-fail-under=83`，详见 `QUALITY_ASSURANCE_PLAN_R3.md`）。不设硬性百分比门禁，但新功能必须带测试，review 时不得让覆盖率显著回退。
+3. **覆盖率只升不降**：后端当前行覆盖基线 **88%**（R3 实测，CI `--cov-fail-under=85`，详见 `QUALITY_ASSURANCE_PLAN_R3.md`）。不设硬性百分比门禁，但新功能必须带测试，review 时不得让覆盖率显著回退。
 4. **advisory job 的收紧路径**：mypy 与 security 审计目前不阻塞合并，作为基线暴露问题；存量类型错误与漏洞告警消化完毕后，应移除 `continue-on-error` 升级为门禁。
 5. **分支保护建议**：仓库开启 branch protection，要求 `backend`、`django`、`frontend`、`frontend-e2e` 四个门禁 job 通过后方可合并 main。
 6. **覆盖率底线递推规则**：每轮质量保障结束实测一次总覆盖率，新底线 = 实测值 − 3，只升不降，同步更新 CI `--cov-fail-under` 与方案附录。
