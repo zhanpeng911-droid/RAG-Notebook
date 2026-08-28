@@ -6,14 +6,14 @@
 
 ## 一、接手时第一件事
 
-1. 推送待推提交（当前 `main` 领先 `origin/main` 1 个提交）：
+1. 推送待推提交（当前 `main` 领先 `origin/main` 3 个提交）：
    ```bash
    git push origin main
    ```
 2. 跑一次全量基线确认环境正常：
    ```bash
    cd backend && uv sync --extra dev && uv run pytest tests -q --no-header
-   # 预期：593 passed / 6 skipped
+   # 预期：836 passed / 6 skipped，总覆盖率 82%
    ```
 3. 读 `QUALITY_ASSURANCE_PLAN_R3.md` 全文（任务清单在第二节）。
 
@@ -34,20 +34,19 @@ force_push: false   deletions: false   （均已禁用，R2 配置正确）
 | P1-B3 | `app/agent/agent.py`（工厂/非流式/SSE 流式/异常降级） | c18fda5 | 24%→74% |
 | P1-B3 | `app/agent/agent_tools.py`（ContextVar 生命周期/无身份拒绝/JWT 解析/富结果格式化） | 300ea65 | 25%→74% |
 | P1-B1 | `app/router/note_router.py`（鉴权负路径+CRUD+隔离 404+stub 端点） | cd4dcdb（已推） | 0%→73% |
-| P1-B1 | `app/router/org_router.py`（owner 正路径+外部成员越权 403） | 1940081（**待推**） | 0%→37% |
+| P1-B1 | `app/router/org_router.py`（owner 正路径+外部成员越权 403） | 1940081 | 0%→37% |
+| P1-B1 | **12 个 router 全部 ≥70%**（org/space/agent/knowledge_router/knowledge_service/health/audit/chat/review/runtime_config/user，note 73% 已达标）；org 37%→87% | e4ac388（**待推**） | 70–100% |
 
-全量测试：**593 passed / 6 skipped** 常绿。
+全量测试：**836 passed / 6 skipped** 常绿，总覆盖率 **60% → 82%**。
 
 ## 四、未完成清单（接手顺序）
 
 按方案执行顺序，从下一步接着做：
 
-1. **P1-B1 剩余 10 个 router**（各 ≥70%）：
-   `space_router`(31%)、`agent_router`(0%)、`knowledge_router`(32%)、`knowledge_service`(26%)、`health`(0%)、`audit`(0%)、`chat`(0%)、`review`(0%)、`runtime_config_router`(0%)、`user`(0%)
-   - 优先高风险：agent_router（会话隔离）、space_router、knowledge_router
+1. **~~P1-B1~~ 已完成**（12 个 router ≥70%，总覆盖 82%）
 2. **P1-B2**：`note_service`(35%)、`database_session_manager`(21%)、`note_vector_index`(45%)、`celery_app`(37%)
 3. **P1-B4**：`core/audit`(45%)、`db/redis_config`(25%)、`db/db_config`(48%)、`core/runtime_config`(51%)、`utils/auth_utils`(58%)
-4. **新基线落盘**：实测总覆盖，`--cov-fail-under`=实测−3，更新 README/附录
+4. **新基线落盘**：实测总覆盖 82%，`--cov-fail-under`=82−3=79（现为 57，待更新），README/附录同步
 5. **P2 前端**：Vitest 16→~50，coverage 报表进 CI
 6. **P3 security**：依赖 triage（starlette 预计连带 fastapi 大版本→豁免登记）、pip/npm audit 门禁化、Django ruff
 7. **P4 功能验收**：`tests/functional/` 真实 LLM 套件 → `docs/functional-report.md`
@@ -89,12 +88,12 @@ async with httpx.AsyncClient(transport=transport, base_url="http://test") as c: 
 5. **StructuredTool 不可直接调用**：真实 `@tool` 装饰后须 `await tool.ainvoke({...})`。
 6. **FastAPI dependency override 函数不能带多余参数**：`async def fake_user_info(credentials=...)` 会被当 query 参数→422；应无参。
 7. **validation_exception_handler 把 422 规范化为 400**（已注册 handler 时断言 400）。
+8. **coverage + aiosqlite 测量缺陷（本会话最大坑，P1-B1 全程受此影响）**：经 `httpx.ASGITransport` 调用 FastAPI 端点时，端点 body 中**首个 `await`（涉及 aiosqlite）之后的代码行不会被 coverage 计入**（aiosqlite 内部线程跳转破坏主线程追踪）。影响：note/org/space/knowledge 等长 body 端点的 after-await 行怎么测都算"未覆盖"。实证：`asyncio.sleep` 的 await 后正常计数、aiosqlite 的 await 后不计数；直接调用端点函数（绕过 ASGI）则正常计数。**解法**：router 测试用「ASGI 测鉴权负路径 + 直接调用端点函数测 body」双轨制，`success_response` 返回的 JSONResponse 无 `.json()`，用 `json.loads(resp.body)`。注意 `conftest` mock 掉 `app.rag.sse_models` 等，SSE 事件串是 MagicMock，别断言字符串内容（断言事件数/计数器）。
+9. **monkeypatch 点路径陷阱**：`monkeypatch.setattr("a.b.C", ...)` 在 `a.b` 是 sys.modules mock 时失败（`a` 包无属性 `b`）。应 `import a.b as m; monkeypatch.setattr(m, "C", ...)`；且 `import a.b` 与 `from a import b` 行为不同，mock 场景后者更稳。函数体内 `from X import f` 的符号要 patch `X.f`（模块），不是 patch 导入方模块。
 
 ## 七、待推送
 
-- `1940081` org_router（网络恢复即 `git push origin main`）
-- `QUALITY_ASSURANCE_PLAN_R3.md`（untracked，方案文档，建议随下一次提交入库）
-- 本文件 `HANDOFF_R3.md` 建议入库
+- `1940081` org_router、`8f44d1f` 交接文档、`e4ac388` P1-B1 完成（网络恢复即 `git push origin main`）
 
 ## 八、当前分支与保护
 
