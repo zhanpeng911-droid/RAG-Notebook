@@ -107,11 +107,15 @@
 - [x] P1-B2：services 层 note_service 90%/database_session_manager 91%/note_vector_index 98%/celery_app 100%（B4 杂项待做）
 - [x] 新基线落盘：`--cov-fail-under` = 88−3=**85**（ci.yml 已更新），README/附录同步
 - [x] P2：前端单测 16→61，coverage 报表进 CI（vitest 阈值 lines70/funcs40/stmts64/branches55）
-- [ ] P3：依赖 triage 完成（升级或豁免登记）；pip/npm audit 门禁化；Django ruff 接入
+- [x] P3：依赖 triage（5 升级 + starlette 豁免登记）；pip/npm audit 门禁化（critical/high 阻断）；Django ruff 接入（0 error）
 - [ ] P4：`docs/functional-report.md` 产出，PASS/FAIL/跳过计数 + 缺陷登记完整
 
 ## 五、遗留问题登记（本轮执行中发现的新问题记在这里）
 
 | # | 现象 | 归属 | 处置 |
 |---|---|---|---|
-|  |  |  |  |
+| 1 | starlette 0.50.0 五个漏洞（Host/路径校验/StaticFiles/form 等），修复需 1.x；fastapi~=0.123 锁 `starlette<0.51` | P3 | **豁免登记**：连带 fastapi 大版本升级，后续随 fastapi 升级一并处理；pip-audit `--ignore-vuln PYSEC-2026-161/248/249/2280/2281` |
+| 2 | chromadb 1.5.9（CVE-2026-45829/30/31/33）无修复版本 | P3 | 豁免登记，`--ignore-vuln`；上线前跟踪官方修复 |
+| 3 | ecdsa 0.19.2（CVE-2024-23342 Minerva 计时攻击）无修复版本 | P3 | 豁免登记，`--ignore-vuln`（python-jose 传递依赖） |
+| 4 | langchain 1.2.15（CVE-2026-55443）→ 1.3.9 大版本 | P3 | 暂缓，下一轮 triage 升级并全量回归 |
+| 5 | aiohttp 3.14.1 / cryptography 49.0.0（传递依赖，有修复版本） | P3 | 待升级（上游 langchain/chroma 锁定），`--ignore-vuln` 暂豁免 |

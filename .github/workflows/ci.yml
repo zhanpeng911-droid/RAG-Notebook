@@ -60,7 +60,10 @@ jobs:
         run: pip install uv
       - name: Sync deps
         run: |
-          uv sync --locked
+          uv sync --locked --extra dev
+      - name: Ruff lint
+        run: |
+          uv run ruff check .
       - name: Tests
         env:
           JWT_SECRET_KEY: ci-test-secret
@@ -140,28 +143,41 @@ jobs:
           path: front/test-results/
           retention-days: 7
 
-  security:
-    name: Dependency audit (advisory)
+  security-backend:
+    name: Security audit (backend)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install uv
+        run: pip install uv
+      - name: Backend audit (pip-audit, high/critical blocks)
+        working-directory: backend
+        # 门禁化：high/critical 阻断；medium 仅报告。
+        # 豁免登记（理由见 QUALITY_ASSURANCE_PLAN_R3.md 遗留登记）：
+        # - starlette：fastapi~=0.123 锁 starlette<0.51，修复需 1.x → 连带 fastapi 大版本
+        # - aiohttp/chromadb/cryptography/ecdsa/langchain：传递依赖，升级被上游锁定或无修复版本
+        run: |
+          uv sync --locked --extra dev
+          uv run pip-audit --fail-level=high \
+            --ignore-vuln PYSEC-2026-161 PYSEC-2026-248 PYSEC-2026-249 PYSEC-2026-2280 PYSEC-2026-2281 \
+            --ignore-vuln PYSEC-2026-3545 PYSEC-2026-3546 PYSEC-2026-3547 \
+            --ignore-vuln PYSEC-2026-311 CVE-2026-45830 CVE-2026-45831 CVE-2026-45833 \
+            --ignore-vuln PYSEC-2026-3552 PYSEC-2026-1325 PYSEC-2026-2192
+
+  security-frontend:
+    name: Security audit (frontend)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: front/package-lock.json
-      - name: Install uv
-        run: pip install uv
-      - name: Backend audit (pip-audit)
-        working-directory: backend
-        run: |
-          uv sync --locked --extra dev
-          uv run pip-audit
-      - name: Frontend audit (npm audit)
+      - name: Frontend audit (npm audit, critical blocks)
         working-directory: front
         run: npm audit --audit-level=critical
 
