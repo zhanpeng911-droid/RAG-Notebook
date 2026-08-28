@@ -117,5 +117,6 @@
 | 1 | starlette 0.50.0 五个漏洞（Host/路径校验/StaticFiles/form 等），修复需 1.x；fastapi~=0.123 锁 `starlette<0.51` | P3 | **豁免登记**：连带 fastapi 大版本升级，后续随 fastapi 升级一并处理；pip-audit `--ignore-vuln PYSEC-2026-161/248/249/2280/2281` |
 | 2 | chromadb 1.5.9（CVE-2026-45829/30/31/33）无修复版本 | P3 | 豁免登记，`--ignore-vuln`；上线前跟踪官方修复 |
 | 3 | ecdsa 0.19.2（CVE-2024-23342 Minerva 计时攻击）无修复版本 | P3 | 豁免登记，`--ignore-vuln`（python-jose 传递依赖） |
-| 4 | langchain 1.2.15（CVE-2026-55443）→ 1.3.9 大版本 | P3 | 暂缓，下一轮 triage 升级并全量回归 |
-| 5 | aiohttp 3.14.1 / cryptography 49.0.0（传递依赖，有修复版本） | P3 | 待升级（上游 langchain/chroma 锁定），`--ignore-vuln` 暂豁免 |
+| 4 | langchain 1.2.15（CVE-2026-55443） | P3 | ✅ 已升级 1.3.18（连带 langchain-core 1.6.1/langgraph 1.2.11），全量回归 943 passed + 功能套件 14 PASS |
+| 5 | aiohttp 3.14.1 / cryptography 49.0.0（传递依赖） | P3 | ✅ 已升级 aiohttp 3.14.3 / cryptography 50.0.1，pip-audit 清零 |
+| 6 | chromadb/ecdsa 无修复版本，持续跟踪 | P3 | 保持 `--ignore-vuln` 豁免，发布前跟踪官方修复 |

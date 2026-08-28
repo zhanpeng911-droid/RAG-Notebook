@@ -158,14 +158,14 @@ jobs:
         # 门禁化：high/critical 阻断；medium 仅报告。
         # 豁免登记（理由见 QUALITY_ASSURANCE_PLAN_R3.md 遗留登记）：
         # - starlette：fastapi~=0.123 锁 starlette<0.51，修复需 1.x → 连带 fastapi 大版本
-        # - aiohttp/chromadb/cryptography/ecdsa/langchain：传递依赖，升级被上游锁定或无修复版本
+        # - chromadb / ecdsa：无修复版本（CVE-2026-45829/30/31/33、CVE-2024-23342）
+        # 已升级修复：aiohttp 3.14.3、cryptography 50.0.1、langchain 1.3.18、pyasn1/pypdf/requests/pydantic-settings
         run: |
           uv sync --locked --extra dev
           uv run pip-audit --fail-level=high \
             --ignore-vuln PYSEC-2026-161 PYSEC-2026-248 PYSEC-2026-249 PYSEC-2026-2280 PYSEC-2026-2281 \
-            --ignore-vuln PYSEC-2026-3545 PYSEC-2026-3546 PYSEC-2026-3547 \
             --ignore-vuln PYSEC-2026-311 CVE-2026-45830 CVE-2026-45831 CVE-2026-45833 \
-            --ignore-vuln PYSEC-2026-3552 PYSEC-2026-1325 PYSEC-2026-2192
+            --ignore-vuln PYSEC-2026-1325
 
   security-frontend:
     name: Security audit (frontend)
