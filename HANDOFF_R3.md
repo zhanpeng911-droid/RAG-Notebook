@@ -51,7 +51,7 @@ force_push: false   deletions: false   （均已禁用，R2 配置正确）
 2. **~~新基线落盘 已完成~~**（`--cov-fail-under` 85，总覆盖 88%）
 3. **~~P2 前端 已完成~~**：Vitest 16→61（5 store + config），coverage 阈值进 CI（`npm run test:unit:coverage`）
 4. **~~P3 security 已完成~~**：5 依赖升级（pyasn1/pypdf/requests/pydantic-settings/langchain-classic）；starlette 等豁免登记；pip/npm audit 门禁化（security-backend/frontend job）；Django ruff 接入（0 error）
-5. **P4 功能验收**：`tests/functional/` 真实 LLM 套件 → `docs/functional-report.md`
+5. **~~P4 功能验收 已完成~~**：`tests/functional/` 套件 14 PASS / 0 FAIL（含 2 个真实 LLM），`docs/functional-report.md` 产出；CI `--ignore=tests/functional`
 
 ## 五、可复用测试模式（router）
 

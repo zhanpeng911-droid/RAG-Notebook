@@ -108,7 +108,7 @@
 - [x] 新基线落盘：`--cov-fail-under` = 88−3=**85**（ci.yml 已更新），README/附录同步
 - [x] P2：前端单测 16→61，coverage 报表进 CI（vitest 阈值 lines70/funcs40/stmts64/branches55）
 - [x] P3：依赖 triage（5 升级 + starlette 豁免登记）；pip/npm audit 门禁化（critical/high 阻断）；Django ruff 接入（0 error）
-- [ ] P4：`docs/functional-report.md` 产出，PASS/FAIL/跳过计数 + 缺陷登记完整
+- [x] P4：`docs/functional-report.md` 产出，14 PASS / 0 FAIL / 0 跳过，缺陷登记完成
 
 ## 五、遗留问题登记（本轮执行中发现的新问题记在这里）
 

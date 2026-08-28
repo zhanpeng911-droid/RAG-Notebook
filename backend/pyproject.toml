@@ -103,3 +103,8 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["app*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "real_api: 真实 LLM 功能验收（需 API Key，缺 key 显式跳过，发布前手动执行）",
+]
