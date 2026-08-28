@@ -1,7 +1,8 @@
-from django.core.cache import cache
 from functools import wraps
-from rest_framework.response import Response
+
+from django.core.cache import cache
 from rest_framework import status
+from rest_framework.response import Response
 
 
 def rate_limit(limit: int = 1, window: int = 60) -> callable:

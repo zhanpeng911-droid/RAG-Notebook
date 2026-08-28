@@ -1,5 +1,4 @@
-from .settings import *  # noqa: F401,F403
-
+from .settings import *
 
 DEBUG = False
 SECRET_KEY = SECRET_KEY or "test-secret-key"

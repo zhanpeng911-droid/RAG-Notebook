@@ -1,6 +1,14 @@
 from django.urls import path
-from .views import LoginView, ResetPasswordView, TokenRefreshView, UserDetailView, RegisterView, UserUpdateView, \
-    UserLogOutView
+
+from .views import (
+    LoginView,
+    RegisterView,
+    ResetPasswordView,
+    TokenRefreshView,
+    UserDetailView,
+    UserLogOutView,
+    UserUpdateView,
+)
 
 app_name = 'user'
 

@@ -11,12 +11,14 @@
 """
 
 import time
-import jwt
 import uuid
+
+import jwt
 from django.conf import settings
 from django.core.cache import cache
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed
+
 from .models import User, UserStatusChoice
 
 # 从jwt模块导入异常类
@@ -198,4 +200,4 @@ class JWTTokenGenerator:
             # 记录异常信息，便于调试
             import logging
             logger = logging.getLogger(__name__)
-            logger.error(f"黑名单Token失败: {str(e)}")
+            logger.error(f"黑名单Token失败: {e!s}")

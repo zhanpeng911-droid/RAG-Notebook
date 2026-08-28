@@ -1,13 +1,14 @@
+import os
+
+from django.conf import settings
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from shortuuid import uuid
+
 from apps.file.serializers import ImgSerializer
-from django.conf import settings
 from apps.user.authentications import JWTAuthentication
-from apps.user.models import User
 from apps.utils.cache_utils import clear_user_cache
 
-import os
 
 class UploadAPIView(APIView):
     """文件上传"""
@@ -35,8 +36,7 @@ class UploadAPIView(APIView):
             os.makedirs(filepath.parent, exist_ok=True)
             try:
                 with open(filepath, 'wb') as f:
-                    for chunk in img.chunks():
-                        f.write(chunk)
+                    f.writelines(img.chunks())
             except Exception as e:
                 print(e)
                 return Response(
@@ -59,7 +59,6 @@ class UploadAPIView(APIView):
             except Exception as e:
                 print(e)
                 # 即使更新用户信息失败，也要返回文件上传成功的响应
-                pass
             
             # 返回文件的URL
             return Response(

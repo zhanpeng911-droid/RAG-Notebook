@@ -1,5 +1,6 @@
-from rest_framework import serializers
 from django.core.validators import FileExtensionValidator
+from rest_framework import serializers
+
 
 class ImgSerializer(serializers.Serializer):
     """图片上传序列化器"""

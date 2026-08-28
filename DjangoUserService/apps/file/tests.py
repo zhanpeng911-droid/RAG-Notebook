@@ -15,7 +15,6 @@ from apps.user.models import User, UserStatusChoice
 def _tiny_png_bytes() -> bytes:
     """生成 Pillow 可识别的 1x1 PNG。"""
     from PIL import Image
-    import io
     buf = io.BytesIO()
     Image.new("RGB", (1, 1), color=(255, 0, 0)).save(buf, format="PNG")
     return buf.getvalue()

@@ -8,9 +8,11 @@
 
 """
 
-from rest_framework import serializers
-from .models import User, UserStatusChoice
 from django.db.models import Q
+from rest_framework import serializers
+
+from .models import User, UserStatusChoice
+
 
 class LoginSerializer(serializers.Serializer):
     """登录序列化器"""

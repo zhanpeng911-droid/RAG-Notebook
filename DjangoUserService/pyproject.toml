@@ -40,3 +40,15 @@ build-backend = "setuptools.build_meta"
 
 [tool.uv]
 index-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+
+[project.optional-dependencies]
+dev = ["ruff"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# Django 惯用法豁免：N999（项目包/模块名遵循 Django 约定）、
+# BLE001（API 错误处理器广泛捕获返回友好 JSON）、RUF012（模型/迁移类属性）
+ignore = ["N999", "BLE001", "RUF012"]

@@ -9,21 +9,25 @@
     - UserDetailView(get): 类视图，返回序列化后的当前用户信息
 
 """
-from rest_framework.exceptions import AuthenticationFailed
-from rest_framework.views import APIView
-
-from .serializers import LoginSerializer, UserSerializer, ResetPasswordSerializer, RegisterSerializer, UserUpdateSerializer
-from datetime import datetime
-from .authentications import JWTAuthentication, JWTTokenGenerator
-from rest_framework.response import Response
-from rest_framework import status
-from .fatherClass import AuthenticatedView
-from drf_yasg.utils import swagger_auto_schema
+from django.utils import timezone
 from drf_yasg import openapi
-from rest_framework import serializers
+from drf_yasg.utils import swagger_auto_schema
+from rest_framework import serializers, status
+from rest_framework.exceptions import AuthenticationFailed
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from ..utils.cache_utils import cache_user_info, clear_user_cache
 from ..utils.rate_limit_utils import rate_limit
+from .authentications import JWTAuthentication, JWTTokenGenerator
+from .fatherClass import AuthenticatedView
+from .serializers import (
+    LoginSerializer,
+    RegisterSerializer,
+    ResetPasswordSerializer,
+    UserSerializer,
+    UserUpdateSerializer,
+)
 
 # Create your views here.
 
@@ -73,7 +77,7 @@ class LoginView(APIView):
             user = serializer.validated_data.get('user')  # 从序列化器中获取用户对象
             # 检查用户是否是临时测试用户（SimpleNamespace类型）
             if hasattr(user, 'save') and callable(user.save):
-                user.last_login = datetime.now()  # 更新用户最后登录时间
+                user.last_login = timezone.now()  # 更新用户最后登录时间
                 user.save()  # 保存用户对象
             # 生成JWT token - 正确处理返回的元组
             token, expire_time = jwttoken.generate_token(user)
@@ -165,7 +169,7 @@ class ResetPasswordView(AuthenticatedView):
             # 清除用户缓存
             clear_user_cache(user.uuid)
             # 生成新token
-            new_token, expire_time = jwttoken.generate_token(user)
+            new_token, _expire_time = jwttoken.generate_token(user)
             return Response({
                 "message": "密码重置成功",
                 "token": new_token
@@ -226,7 +230,7 @@ class TokenRefreshView(APIView):
             return Response({
                 "detail": str(e)
             }, status=status.HTTP_401_UNAUTHORIZED)
-        except Exception as e:
+        except Exception:
             return Response({
                 "detail": "Token刷新失败"
             }, status=status.HTTP_400_BAD_REQUEST)
@@ -324,7 +328,7 @@ class UserUpdateView(AuthenticatedView):
             # 清除用户缓存
             clear_user_cache(user.uuid)
             # 生成新token
-            new_token, expire_time = jwttoken.generate_token(user)
+            new_token, _expire_time = jwttoken.generate_token(user)
             return Response({"message": "用户信息更新成功", "user": UserSerializer(user).data, "token": new_token}, status=status.HTTP_200_OK)
         else:
             return Response({"detail": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
