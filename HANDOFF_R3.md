@@ -95,7 +95,8 @@ async with httpx.AsyncClient(transport=transport, base_url="http://test") as c: 
 
 ## 七、待推送
 
-- 基线递推提交（83→85，ci.yml/README/方案同步，网络恢复即 `git push origin main`）
+- `f40f9d1` P3 遗留清零（langchain 1.3.18/aiohttp 3.14.3/cryptography 50.0.1 + CI 豁免精简）
+  与本文档更新（网络恢复即 `git push origin main`）
 
 ## 八、当前分支与保护
 
