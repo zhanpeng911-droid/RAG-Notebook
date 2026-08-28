@@ -156,6 +156,8 @@ starlette、pyasn1、pypdf、requests、pydantic-settings、langchain-classic �
 - 总覆盖率：**60%**（6560 语句 / 2621 未覆盖）
 - CI 底线：57%（实测−3，只升不降）
 
+> R3 更新：P1-B1（12 个 router ≥70%）与 P1-B2（services/tasks ≥80%）落地后，实测总覆盖 **86%**（898 passed / 6 skipped），CI `--cov-fail-under` 已递推至 **83**（86%−3，只升不降）。
+
 ### 遗留问题登记
 1. `listdir_allowed_type` docstring 称"仅返回文件"，实现未做 isfile 校验（目录名匹配扩展名会混入）——R3 修复并收紧测试断言。
 2. router 层整体低覆盖：`org_router`(0%)、`note_router`(0%)、`agent_router`(0%)、`space_router`(31%) 等鉴权负路径未测（依赖完整 FastAPI 启动栈，成本高，转入 R3）。

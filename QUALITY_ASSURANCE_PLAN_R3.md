@@ -10,6 +10,7 @@
 
 - 后端：`uv sync --extra dev && uv run pytest tests -q --cov=app` → **520 passed / 6 skipped**，约 70 秒。
 - 总覆盖率 **60%**（6560 语句 / 2621 未覆盖），CI 底线 `--cov-fail-under=57`。
+  > 进度更新（2026-08-28）：P0-A + P1-B1（12 router ≥70%）+ P1-B2（services/tasks ≥80%）落地后，实测 **86%**（898 passed / 6 skipped），CI `--cov-fail-under` 已递推至 **83**。
 - mypy 首批四目录（app/core、app/schemas、app/utils、app/config）**0 errors**，已转门禁。
 - 前端：Vitest **16 个单测**；`@vitest/coverage-v8` 已装、`test:unit:coverage` 脚本已存在（R2 预留，尚未用）；ESLint 0 error / 4 warning。
 - CI：4 处 `uv sync --locked` 无回退；branch protection 5 个必需检查（Backend / Django / Frontend build / Frontend E2E / Backend type check），**force-push 与 deletions 未禁用**（需补）。
@@ -100,11 +101,11 @@
 
 建议顺序：P0-A → P1-B3（agent 层最关键）→ P1-B1（router）→ P1-B2/B4 → 新基线落盘 → P2（前端，可与 P1 并行）→ P3 → P4 功能验收。
 
-- [ ] P0-A：force-push/deletions 已禁用（API 复核留档）；告警归零；七个小文件 ≥80%
-- [ ] P1-B1：12 个 router 文件 ≥70%（鉴权负路径 401/403 全覆盖）
-- [ ] P1-B3：agent/agent_tools ≥70%
-- [ ] P1-B2/B4：所列 services/杂项 ≥70%（celery_app ≥80%）
-- [ ] 新基线落盘：`--cov-fail-under` = 实测−3，README/附录同步
+- [x] P0-A：force-push/deletions 已禁用（API 复核留档）；告警归零；七个小文件 ≥80%
+- [x] P1-B1：12 个 router 文件 ≥70%（鉴权负路径 401/403 全覆盖）
+- [x] P1-B3：agent/agent_tools ≥70%
+- [x] P1-B2：services 层 note_service 90%/database_session_manager 91%/note_vector_index 98%/celery_app 100%（B4 杂项待做）
+- [x] 新基线落盘：`--cov-fail-under` = 86−3=**83**（ci.yml 已更新），README/附录同步
 - [ ] P2：前端单测 ~50，coverage 报表进 CI
 - [ ] P3：依赖 triage 完成（升级或豁免登记）；pip/npm audit 门禁化；Django ruff 接入
 - [ ] P4：`docs/functional-report.md` 产出，PASS/FAIL/跳过计数 + 缺陷登记完整
