@@ -4,7 +4,7 @@
 状态机字段的条件写入与时间戳副作用。
 """
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
@@ -41,7 +41,7 @@ def _doc(user_id, md5, original_filename="f.pdf", status=DocumentIndexStatus.UPL
         original_filename=f"{md5}-{original_filename}",
         file_path="/tmp/f.pdf", md5=md5, status=status,
         retry_count=retry_count,
-        created_at=created_at or datetime.utcnow(),
+        created_at=created_at or datetime.now(timezone.utc).replace(tzinfo=None),
     )
 
 
@@ -92,11 +92,11 @@ async def test_get_user_documents_filters_space_and_status(db_session):
     session = db_session
     session.add_all([
         _doc(USER_A, "m1", space_id="s1", status=DocumentIndexStatus.INDEXED,
-             created_at=datetime.utcnow() - timedelta(hours=3)),
+             created_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=3)),
         _doc(USER_A, "m2", space_id="s2",
-             created_at=datetime.utcnow() - timedelta(hours=2)),
+             created_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=2)),
         _doc(USER_A, "m3", space_id="s1", status=DocumentIndexStatus.INDEX_FAILED,
-             created_at=datetime.utcnow() - timedelta(hours=1)),
+             created_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)),
         _doc(USER_B, "mb", space_id="s1"),
     ])
     await session.commit()
@@ -150,7 +150,7 @@ async def test_increment_retry_and_delete(db_session):
 @pytest.mark.asyncio
 async def test_pending_and_failed_queries(db_session):
     s = db_session
-    old = datetime.utcnow() - timedelta(days=1)
+    old = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1)
     s.add_all([
         _doc(USER_A, "p1", status=DocumentIndexStatus.PENDING_INDEX,
              created_at=old),

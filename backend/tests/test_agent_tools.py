@@ -121,20 +121,20 @@ async def fake_db(monkeypatch):
     factory = async_sessionmaker(bind=engine, class_=AsyncSession,
                                  expire_on_commit=False)
     async with factory() as s:
-        from datetime import datetime
+        from datetime import datetime, timezone
         s.add_all([
             DocumentIndex(id="d1", user_id="u1", filename="f1.pdf",
                           original_filename="RAG 指南.pdf",
                           file_path="/p/f1.pdf", file_type=".pdf", md5="M1", status="indexed",
-                          created_at=datetime.utcnow()),
+                          created_at=datetime.now(timezone.utc).replace(tzinfo=None)),
             DocumentIndex(id="d2", user_id="u1", filename="f2.md",
                           original_filename="Docker 手册.md",
                           file_path="/p/f2.md", file_type=".md", md5="M2", status="uploaded",
-                          created_at=datetime.utcnow()),
+                          created_at=datetime.now(timezone.utc).replace(tzinfo=None)),
             DocumentIndex(id="d3", user_id="u2", filename="f3.pdf",
                           original_filename="RAG 他人的.pdf",
                           file_path="/p/f3.pdf", file_type=".pdf", md5="M3", status="indexed",
-                          created_at=datetime.utcnow()),
+                          created_at=datetime.now(timezone.utc).replace(tzinfo=None)),
         ])
         await s.commit()
 

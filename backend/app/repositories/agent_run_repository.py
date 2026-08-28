@@ -4,7 +4,7 @@ Agent 运行记录仓库 -- 封装 agent_runs、agent_steps、agent_feedback 表
 SQL 注入防护：所有查询均通过 SQLAlchemy ORM 参数化执行，禁止拼接原始 SQL。
 """
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 
 from sqlalchemy import select, update, and_
@@ -75,7 +75,7 @@ class AgentRunRepository:
             values["total_time_ms"] = total_time_ms
 
         if status in (AgentRunStatus.COMPLETED, AgentRunStatus.FAILED):
-            values["completed_at"] = datetime.utcnow()
+            values["completed_at"] = datetime.now(timezone.utc).replace(tzinfo=None)
 
         if values:
             await self.session.execute(

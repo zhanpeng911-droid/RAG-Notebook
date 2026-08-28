@@ -4,7 +4,7 @@
 SQL 注入防护：所有查询均通过 SQLAlchemy ORM 参数化执行，禁止拼接原始 SQL。
 """
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 
 from sqlalchemy import select, update, and_
@@ -103,13 +103,13 @@ class DocumentIndexRepository:
         chunk_count: int = None,
     ) -> None:
         """更新文档索引状态"""
-        values = {"status": status, "updated_at": datetime.utcnow()}
+        values = {"status": status, "updated_at": datetime.now(timezone.utc).replace(tzinfo=None)}
         if error_message is not None:
             values["error_message"] = error_message
         if chunk_count is not None:
             values["chunk_count"] = chunk_count
         if status == DocumentIndexStatus.INDEXED:
-            values["indexed_at"] = datetime.utcnow()
+            values["indexed_at"] = datetime.now(timezone.utc).replace(tzinfo=None)
 
         await self.session.execute(
             update(DocumentIndex).where(DocumentIndex.id == doc_id).values(**values)
@@ -125,7 +125,7 @@ class DocumentIndexRepository:
         doc = result.scalar_one_or_none()
         if doc:
             doc.retry_count = (doc.retry_count or 0) + 1
-            doc.updated_at = datetime.utcnow()
+            doc.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
             await self.session.flush()
 
     async def delete_by_id(self, doc_id: str, user_id: str) -> bool:
