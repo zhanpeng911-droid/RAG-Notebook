@@ -212,3 +212,298 @@ async def test_update_member_role_owner_ok(client):
         "/api/v1/org/org-1/member/outsider-not-a-real-uuid/role",
         headers=_auth(OWNER), json={"role": "admin"})
     assert r.status_code in (200, 400, 404)
+
+
+
+
+# ==================== 直接调用端点函数（绕 aiosqlite 追踪缺陷） ====================
+
+import json  # noqa: E402
+from fastapi import HTTPException  # noqa: E402
+
+from app.router.org_router import (  # noqa: E402
+    create_org, list_orgs, get_org, update_org, delete_org, list_members,
+    invite_member, remove_member, update_member_role, _lookup_user_for_invite,
+)
+from app.router.org_router import (  # noqa: E402
+    OrgCreate, OrgUpdate, InviteRequest, RoleUpdateRequest,
+)
+from app.core.exceptions import OrganizationNotFoundException  # noqa: E402
+from app.models.organization import OrganizationMember  # noqa: E402
+
+
+@pytest.mark.asyncio
+async def test_direct_create_org_success(client):
+    async with client._factory() as db:
+        resp = await create_org(OrgCreate(name="直调组织"),
+                                {"user_id": OWNER, "username": "老板"}, db)
+        assert resp.status_code == 200
+        assert json.loads(resp.body)["data"]["name"] == "直调组织"
+
+
+@pytest.mark.asyncio
+async def test_direct_create_org_empty_name(client):
+    async with client._factory() as db:
+        with pytest.raises(HTTPException) as ei:
+            await create_org(OrgCreate(name="  "),
+                             {"user_id": OWNER, "username": "老板"}, db)
+        assert ei.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_direct_list_orgs(client):
+    async with client._factory() as db:
+        resp = await list_orgs(OWNER, db)
+        data = json.loads(resp.body)["data"]
+        assert data["total"] == 1
+        assert data["orgs"][0]["role"] == "owner"
+
+
+@pytest.mark.asyncio
+async def test_direct_get_org_outsider(client):
+    async with client._factory() as db:
+        with pytest.raises(HTTPException) as ei:
+            await get_org("org-1", OUTSIDER, db)
+        assert ei.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_direct_get_org_not_member_403(client):
+    async with client._factory() as db:
+        with pytest.raises(HTTPException) as ei:
+            await get_org("org-nope", OWNER, db)
+        assert ei.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_direct_get_org_missing(client):
+    # 成员记录指向不存在的组织 -> 先过成员校验，再抛 404
+    async with client._factory() as db:
+        db.add(OrganizationMember(id="m-ghost", org_id="org-ghost",
+                                  user_id="u-ghost-1", role="member"))
+        await db.commit()
+    async with client._factory() as db:
+        with pytest.raises(OrganizationNotFoundException):
+            await get_org("org-ghost", "u-ghost-1", db)
+
+
+@pytest.mark.asyncio
+async def test_direct_get_org_owner(client):
+    async with client._factory() as db:
+        resp = await get_org("org-1", OWNER, db)
+        assert resp.status_code == 200
+        assert json.loads(resp.body)["data"]["member_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_direct_update_org_missing(client):
+    async with client._factory() as db:
+        with pytest.raises(OrganizationNotFoundException):
+            await update_org("org-nope", OrgUpdate(name="x"), OWNER, db, "owner")
+
+
+@pytest.mark.asyncio
+async def test_direct_update_org_empty_name(client):
+    async with client._factory() as db:
+        with pytest.raises(HTTPException) as ei:
+            await update_org("org-1", OrgUpdate(name=" "), OWNER, db, "owner")
+        assert ei.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_direct_update_org_success(client):
+    async with client._factory() as db:
+        resp = await update_org("org-1", OrgUpdate(name="改名", description="d"),
+                                OWNER, db, "owner")
+        assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_direct_delete_org_missing(client):
+    async with client._factory() as db:
+        with pytest.raises(OrganizationNotFoundException):
+            await delete_org("org-nope", OWNER, db, "owner")
+
+
+@pytest.mark.asyncio
+async def test_direct_delete_org_success(client):
+    async with client._factory() as db:
+        resp = await delete_org("org-1", OWNER, db, "owner")
+        assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_direct_list_members_outsider(client):
+    async with client._factory() as db:
+        with pytest.raises(HTTPException) as ei:
+            await list_members("org-1", OUTSIDER, db)
+        assert ei.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_direct_list_members_owner(client):
+    async with client._factory() as db:
+        resp = await list_members("org-1", OWNER, db)
+        assert json.loads(resp.body)["data"]["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_direct_invite_empty_identifier(client):
+    async with client._factory() as db:
+        with pytest.raises(HTTPException) as ei:
+            await invite_member("org-1", InviteRequest(username=""), OWNER, db)
+        assert ei.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_direct_invite_unknown_org(client):
+    async with client._factory() as db:
+        with pytest.raises(OrganizationNotFoundException):
+            await invite_member("org-nope", InviteRequest(username="x"), OWNER, db)
+
+
+@pytest.mark.asyncio
+async def test_direct_invite_forbidden(client):
+    async with client._factory() as db:
+        with pytest.raises(HTTPException) as ei:
+            await invite_member("org-1", InviteRequest(username="x"), OUTSIDER, db)
+        assert ei.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_direct_invite_target_not_found(client, monkeypatch):
+    import app.router.org_router as or_mod
+
+    async def _none(payload):
+        return None
+    monkeypatch.setattr(or_mod, "_lookup_user_for_invite", _none)
+    async with client._factory() as db:
+        with pytest.raises(HTTPException) as ei:
+            await invite_member("org-1", InviteRequest(username="x"), OWNER, db)
+        assert ei.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_direct_invite_self(client, monkeypatch):
+    import app.router.org_router as or_mod
+
+    async def _self(payload):
+        return {"user_id": OWNER, "username": "老板", "email": None}
+    monkeypatch.setattr(or_mod, "_lookup_user_for_invite", _self)
+    async with client._factory() as db:
+        with pytest.raises(HTTPException) as ei:
+            await invite_member("org-1", InviteRequest(username="x"), OWNER, db)
+        assert ei.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_direct_invite_already_member(client, monkeypatch):
+    import app.router.org_router as or_mod
+
+    async def _member(payload):
+        return {"user_id": "u-already-1", "username": "老成员", "email": None}
+    monkeypatch.setattr(or_mod, "_lookup_user_for_invite", _member)
+    async with client._factory() as db:
+        db.add(OrganizationMember(id="m-x", org_id="org-1",
+                                  user_id="u-already-1", role="member"))
+        await db.commit()
+    async with client._factory() as db:
+        with pytest.raises(HTTPException) as ei:
+            await invite_member("org-1", InviteRequest(username="x"), OWNER, db)
+        assert ei.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_direct_invite_success(client):
+    async with client._factory() as db:
+        resp = await invite_member("org-1", InviteRequest(username="新同事"),
+                                   OWNER, db)
+        assert resp.status_code == 200
+        assert json.loads(resp.body)["data"]["username"] == "新同事"
+
+
+@pytest.mark.asyncio
+async def test_direct_remove_member_not_found(client):
+    async with client._factory() as db:
+        with pytest.raises(HTTPException) as ei:
+            await remove_member("org-1", "u-nope-1", OWNER, db, "owner")
+        assert ei.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_direct_remove_owner_forbidden(client):
+    async with client._factory() as db:
+        with pytest.raises(HTTPException) as ei:
+            await remove_member("org-1", OWNER, OWNER, db, "owner")
+        assert ei.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_direct_remove_member_success(client):
+    async with client._factory() as db:
+        db.add(OrganizationMember(id="m-rm", org_id="org-1",
+                                  user_id="u-rm-1", role="member"))
+        await db.commit()
+    async with client._factory() as db:
+        resp = await remove_member("org-1", "u-rm-1", OWNER, db, "owner")
+        assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_direct_update_role_invalid(client):
+    async with client._factory() as db:
+        with pytest.raises(HTTPException) as ei:
+            await update_member_role("org-1", "u-x-1",
+                                     RoleUpdateRequest(role="super"),
+                                     OWNER, db, "owner")
+        assert ei.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_direct_update_role_to_owner(client):
+    async with client._factory() as db:
+        with pytest.raises(HTTPException) as ei:
+            await update_member_role("org-1", "u-x-1",
+                                     RoleUpdateRequest(role="owner"),
+                                     OWNER, db, "owner")
+        assert ei.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_direct_update_role_not_member(client):
+    async with client._factory() as db:
+        with pytest.raises(HTTPException) as ei:
+            await update_member_role("org-1", "u-nope-1",
+                                     RoleUpdateRequest(role="admin"),
+                                     OWNER, db, "owner")
+        assert ei.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_direct_update_role_target_owner(client):
+    async with client._factory() as db:
+        with pytest.raises(HTTPException) as ei:
+            await update_member_role("org-1", OWNER,
+                                     RoleUpdateRequest(role="admin"),
+                                     OWNER, db, "owner")
+        assert ei.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_direct_update_role_success(client):
+    async with client._factory() as db:
+        db.add(OrganizationMember(id="m-ru", org_id="org-1",
+                                  user_id="u-ru-1", role="member"))
+        await db.commit()
+    async with client._factory() as db:
+        resp = await update_member_role("org-1", "u-ru-1",
+                                        RoleUpdateRequest(role="admin"),
+                                        OWNER, db, "owner")
+        assert resp.status_code == 200
+        assert json.loads(resp.body)["message"] == "角色已更新为 admin"
+
+
+@pytest.mark.asyncio
+async def test_lookup_user_empty_identifier():
+    # 空 identifier 分支无 DB 依赖，直接验证返回 None
+    assert await _lookup_user_for_invite(InviteRequest(username="")) is None
