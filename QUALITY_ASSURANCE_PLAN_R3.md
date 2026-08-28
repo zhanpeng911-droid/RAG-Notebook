@@ -106,7 +106,7 @@
 - [x] P1-B3：agent/agent_tools ≥70%
 - [x] P1-B2：services 层 note_service 90%/database_session_manager 91%/note_vector_index 98%/celery_app 100%（B4 杂项待做）
 - [x] 新基线落盘：`--cov-fail-under` = 88−3=**85**（ci.yml 已更新），README/附录同步
-- [ ] P2：前端单测 ~50，coverage 报表进 CI
+- [x] P2：前端单测 16→61，coverage 报表进 CI（vitest 阈值 lines70/funcs40/stmts64/branches55）
 - [ ] P3：依赖 triage 完成（升级或豁免登记）；pip/npm audit 门禁化；Django ruff 接入
 - [ ] P4：`docs/functional-report.md` 产出，PASS/FAIL/跳过计数 + 缺陷登记完整
 

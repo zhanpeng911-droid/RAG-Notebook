@@ -113,8 +113,8 @@ jobs:
       - run: npm ci
       - name: Lint
         run: npm run lint
-      - name: Unit tests
-        run: npm run test:unit
+      - name: Unit tests + coverage
+        run: npm run test:unit:coverage
       - run: npm run build
 
   frontend-e2e:
