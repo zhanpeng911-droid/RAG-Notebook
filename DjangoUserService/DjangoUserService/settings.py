@@ -136,9 +136,10 @@ if _redis_url:
             }
         }
     except Exception as cache_exc:
-        import logging
         # 降级 LocMem 会导致 token 吊销/限流按进程隔离，必须显式暴露
-        logging.error("Redis 缓存不可用，降级为 LocMemCache（黑名单/限流将按进程隔离）: %s", cache_exc)
+        import logging
+        _logger = logging.getLogger(__name__)
+        _logger.error("Redis 缓存不可用，降级为 LocMemCache（黑名单/限流将按进程隔离）: %s", cache_exc)
         CACHES = {
             'default': {
                 'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
