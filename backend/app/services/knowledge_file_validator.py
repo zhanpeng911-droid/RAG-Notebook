@@ -107,3 +107,9 @@ def _file_extension(filename: str) -> str:
     """获取小写的文件扩展名"""
     import os
     return os.path.splitext(filename)[1].lower()
+
+
+def is_valid_md5(value: object) -> bool:
+    """校验是否为合法的 32 位十六进制 MD5（防止路径参数拼接穿越）。"""
+    import re
+    return isinstance(value, str) and bool(re.fullmatch(r"[a-f0-9]{32}", value.lower()))

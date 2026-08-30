@@ -25,6 +25,14 @@ from app.services.knowledge_file_validator import MAX_FILE_SIZE, safe_filename, 
 KNOWLEDGE_STORAGE_DIR = "knowledge_files"
 
 
+def _sanitize_storage_filename(filename: str) -> str:
+    """剥离路径成分，仅保留纯文件名（防止上传文件名路径穿越写盘）。"""
+    cleaned = os.path.basename(str(filename or "").replace(chr(92), "/")).strip()
+    if not cleaned or cleaned in {".", ".."}:
+        raise ValueError("非法文件名")
+    return cleaned
+
+
 def _get_storage_dir(user_id: str) -> str:
     """获取用户知识库文件存储目录"""
     return os.path.join(get_data_path(), KNOWLEDGE_STORAGE_DIR, user_id)
@@ -174,7 +182,7 @@ async def save_uploaded_file(
     os.makedirs(storage_dir, exist_ok=True)
 
     # 生成唯一文件名（避免冲突）
-    unique_filename = f"{uuid.uuid4().hex[:12]}_{filename}"
+    unique_filename = f"{uuid.uuid4().hex[:12]}_{_sanitize_storage_filename(filename)}"
     file_path = os.path.join(storage_dir, unique_filename)
 
     # 保存文件

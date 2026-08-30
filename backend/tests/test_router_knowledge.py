@@ -247,7 +247,7 @@ async def test_document_chunks_ok(client):
 
 @pytest.mark.asyncio
 async def test_batch_images_ok(client):
-    r = await client.get("/api/v1/knowledge/images/all/m1",
+    r = await client.get(f"/api/v1/knowledge/images/all/{'a' * 32}",
                          headers=_auth(USER_A))
     assert r.status_code == 200
     assert "a.png" in r.json()["data"]["images"]
@@ -344,15 +344,32 @@ async def test_serve_image_path_traversal_400(client):
     # httpx 会规范化 URL 中的 ..，路径穿越校验走直接调用验证
     from app.router.knowledge_router import serve_knowledge_image
     with pytest.raises(FE) as ei:
-        await serve_knowledge_image("m1", "../evil.png", USER_A)
+        await serve_knowledge_image("a" * 32, "../evil.png", USER_A)
     assert ei.value.status_code == 400
 
 
 @pytest.mark.asyncio
 async def test_serve_image_missing_404(client):
-    r = await client.get("/api/v1/knowledge/image/m1/nope.png",
+    r = await client.get(f"/api/v1/knowledge/image/{'a' * 32}/nope.png",
                          headers=_auth(USER_A))
     assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_serve_image_invalid_md5_400(client):
+    # md5 路径参数必须为 32 位十六进制，否则 400（路径穿越防护回归）
+    for bad in ("..%5C..%5C..", "m1", "g" * 32, "a" * 31):
+        r = await client.get(f"/api/v1/knowledge/image/{bad}/x.png",
+                             headers=_auth(USER_A))
+        assert r.status_code == 400, bad
+
+
+@pytest.mark.asyncio
+async def test_batch_images_invalid_md5_400(client):
+    from app.router.knowledge_router import serve_batch_images
+    with pytest.raises(FE) as ei:
+        await serve_batch_images("../evil", USER_A, FakeKnowledgeService())
+    assert ei.value.status_code == 400
 
 
 # ==================== 直接调用端点函数（绕 aiosqlite 追踪缺陷） ====================
@@ -446,7 +463,7 @@ async def test_direct_document_chunks(client):
 
 @pytest.mark.asyncio
 async def test_direct_batch_images(client):
-    resp = await serve_batch_images("m1", USER_A, FakeKnowledgeService())
+    resp = await serve_batch_images("a" * 32, USER_A, FakeKnowledgeService())
     assert resp.status_code == 200
 
 

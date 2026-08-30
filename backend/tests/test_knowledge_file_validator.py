@@ -128,3 +128,23 @@ def test_max_file_size_is_20mb():
 
 def test_max_folder_size_is_200mb():
     assert MAX_FOLDER_SIZE == 200 * 1024 * 1024
+
+
+# ==================== is_valid_md5（路径穿越防护回归） ====================
+
+from app.services.knowledge_file_validator import is_valid_md5  # noqa: E402
+
+
+def test_is_valid_md5_accepts_32hex():
+    assert is_valid_md5("a" * 32) is True
+    assert is_valid_md5("0123456789abcdef0123456789abcdef") is True
+    assert is_valid_md5("A" * 32) is True  # 大写也接受（内部 lower）
+
+
+def test_is_valid_md5_rejects_traversal_and_garbage():
+    assert is_valid_md5("../evil") is False
+    assert is_valid_md5(".." + chr(92) + ".." + chr(92) + "x") is False
+    assert is_valid_md5("") is False
+    assert is_valid_md5(None) is False
+    assert is_valid_md5("a" * 31) is False
+    assert is_valid_md5("g" * 32) is False

@@ -47,24 +47,24 @@ def _make_pdf_with_one_image(path):
 
 
 def test_get_image_storage_dir_creates_nested(data_root):
-    d = get_image_storage_dir("u1", "MD5A")
+    d = get_image_storage_dir("u1", "a" * 32)
     assert os.path.isdir(d)
-    assert str(data_root / "extracted_images" / "u1" / "MD5A") == d
+    assert str(data_root / "extracted_images" / "u1" / ("a" * 32)) == d
 
 
 def test_extract_missing_pdf_returns_empty(data_root):
-    assert extract_images_from_pdf("ghost.pdf", "u1", "M") == {}
+    assert extract_images_from_pdf("ghost.pdf", "u1", "a" * 32) == {}
 
 
 def test_extract_from_real_pdf_with_embedded_png(data_root, tmp_path):
     pdf = tmp_path / "sample.pdf"
     _make_pdf_with_one_image(pdf)
 
-    result = extract_images_from_pdf(str(pdf), "u1", "MD5B")
+    result = extract_images_from_pdf(str(pdf), "u1", "b" * 32)
     assert list(result.keys()) == [0]
     names = result[0]
     assert len(names) == 1
-    saved = data_root / "extracted_images" / "u1" / "MD5B" / names[0]
+    saved = data_root / "extracted_images" / "u1" / ("b" * 32) / names[0]
     assert saved.is_file() and saved.stat().st_size > 0
     assert names[0].startswith("p0_i0.") and names[0].endswith(".png")
 
@@ -73,22 +73,42 @@ def test_extract_unopenable_file_returns_empty(data_root, tmp_path):
     bad = tmp_path / "bad.pdf"
     bad.write_bytes(b"not a pdf")
     # PyMuPDF 打不开的文件同样走异常兜底
-    assert extract_images_from_pdf(str(bad), "u1", "M") == {}
+    assert extract_images_from_pdf(str(bad), "u1", "c" * 32) == {}
 
 
 def test_delete_image_directory_true_false(data_root):
-    assert delete_image_directory("u1", "NOPE") is False
-    d = get_image_storage_dir("u1", "HAS")
+    assert delete_image_directory("u1", "d" * 32) is False
+    d = get_image_storage_dir("u1", "b" * 32)
     with open(os.path.join(d, "p0_i0.png"), "wb") as fh:
         fh.write(b"x")
-    assert delete_image_directory("u1", "HAS") is True
+    assert delete_image_directory("u1", "b" * 32) is True
     assert not os.path.exists(d)
 
 
 def test_delete_user_all_images_true_false(data_root):
     assert delete_user_all_images("nobody") is False
-    get_image_storage_dir("user9", "A")
-    get_image_storage_dir("user9", "B")
+    get_image_storage_dir("user9", "c" * 32)
+    get_image_storage_dir("user9", "d" * 32)
     assert delete_user_all_images("user9") is True
     user_dir = data_root / "extracted_images" / "user9"
     assert not user_dir.exists()
+
+
+# ==================== get_image_storage_dir 加固回归 ====================
+
+
+def test_get_image_storage_dir_rejects_bad_md5(data_root):
+    with pytest.raises(ValueError):
+        get_image_storage_dir("u-1", "../../evil")
+    with pytest.raises(ValueError):
+        get_image_storage_dir("u-1", "short")
+
+
+def test_get_image_storage_dir_rejects_traversal_user_id(data_root):
+    with pytest.raises(ValueError):
+        get_image_storage_dir(".." + chr(92) + ".." + chr(92) + "x", "a" * 32)
+
+
+def test_get_image_storage_dir_creates_inside_base(data_root):
+    d = get_image_storage_dir("u-1", "a" * 32)
+    assert str(data_root / "extracted_images") in d

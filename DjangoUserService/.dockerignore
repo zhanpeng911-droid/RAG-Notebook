@@ -1,0 +1,8 @@
+.env
+.env.*
+.venv
+__pycache__/
+*.pyc
+test_media/
+*.sqlite3
+DjangoUserService.egg-info/

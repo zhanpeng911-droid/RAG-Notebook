@@ -430,7 +430,7 @@ async def test_batch_images_no_dir(monkeypatch, tmp_path):
     svc = KnowledgeService()
     import app.utils.path_tool as pt
     monkeypatch.setattr(pt, "get_data_path", lambda: str(tmp_path))
-    out = await svc.handle_get_batch_images(USER_A, "m1")
+    out = await svc.handle_get_batch_images(USER_A, "a" * 32)
     assert out["images"] == {}
 
 
@@ -440,10 +440,10 @@ async def test_batch_images_read_files(monkeypatch, tmp_path):
     svc = KnowledgeService()
     import app.utils.path_tool as pt
     monkeypatch.setattr(pt, "get_data_path", lambda: str(tmp_path))
-    img_dir = tmp_path / "extracted_images" / USER_A / "m1"
+    img_dir = tmp_path / "extracted_images" / USER_A / ("a" * 32)
     img_dir.mkdir(parents=True)
     (img_dir / "a.png").write_bytes(b"\x89PNG fake")
-    out = await svc.handle_get_batch_images(USER_A, "m1")
+    out = await svc.handle_get_batch_images(USER_A, "a" * 32)
     assert "a.png" in out["images"]
     assert out["images"]["a.png"].startswith("data:image/png;base64,")
 

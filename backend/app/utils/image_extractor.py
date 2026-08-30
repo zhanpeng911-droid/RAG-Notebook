@@ -27,10 +27,22 @@ def get_image_storage_dir(user_id: str, md5: str) -> str:
     Returns:
         图片存储目录的绝对路径字符串。
     """
+    from app.services.knowledge_file_validator import is_valid_md5
+
+    if not is_valid_md5(md5):
+        raise ValueError("非法MD5")
+
     base_dir = os.path.join(get_data_path(), 'extracted_images')
     storage_dir = os.path.join(base_dir, user_id, md5)
-    os.makedirs(storage_dir, exist_ok=True)
-    return storage_dir
+
+    # 锚定固定基目录做包含性校验（防止 user_id/md5 拼接逃逸出 extracted_images）
+    real_base = os.path.realpath(base_dir)
+    real_storage = os.path.realpath(storage_dir)
+    if not real_storage.startswith(real_base + os.sep):
+        raise ValueError("非法存储路径")
+
+    os.makedirs(real_storage, exist_ok=True)
+    return real_storage
 
 
 def extract_images_from_pdf(pdf_path: str, user_id: str, md5: str) -> dict[int, list[str]]:

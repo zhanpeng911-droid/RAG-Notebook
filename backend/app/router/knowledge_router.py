@@ -363,7 +363,15 @@ async def serve_knowledge_image(
     if safe_filename != filename or '..' in filename or '/' in filename or '\\' in filename:
         raise HTTPException(status_code=400, detail="非法文件名")
 
-    image_dir = get_image_storage_dir(user_id, md5)
+    # 防止路径穿越：md5 强制 32 位十六进制（服务端计算的值本就是该格式）
+    from app.services.knowledge_file_validator import is_valid_md5
+    if not is_valid_md5(md5):
+        raise HTTPException(status_code=400, detail="非法MD5")
+
+    try:
+        image_dir = get_image_storage_dir(user_id, md5)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     image_path = os.path.join(image_dir, safe_filename)
 
     # 验证解析后的路径仍在预期目录内
@@ -401,6 +409,10 @@ async def serve_batch_images(
         _: None = Depends(rate_limit(limit=10, window=60))
 ):
     """返回指定PDF的所有图片（单次请求，JSON + base64）"""
+    # 防止路径穿越：md5 强制 32 位十六进制（与 /image/{md5}/{filename} 同一防护）
+    from app.services.knowledge_file_validator import is_valid_md5
+    if not is_valid_md5(md5):
+        raise HTTPException(status_code=400, detail="非法MD5")
     result = await knowledge_service.handle_get_batch_images(user_id, md5)
     return success_response(data=result)
 

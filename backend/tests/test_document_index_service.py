@@ -314,3 +314,22 @@ def test_embedding_health_cache_paths(monkeypatch):
                         NS(resolve=lambda: FakeDashScopeEmbedding()))
     assert dis._check_embedding_available(force_check=True) is True
     assert dis.get_embedding_health_status()["available"] is True
+
+
+# ==================== _sanitize_storage_filename（路径穿越防护回归） ====================
+
+from app.services.document_index_service import _sanitize_storage_filename  # noqa: E402
+
+
+def test_sanitize_filename_strips_path_components():
+    assert _sanitize_storage_filename("a.txt") == "a.txt"
+    assert _sanitize_storage_filename(".." + chr(92) + ".." + chr(92) + "evil.txt") == "evil.txt"
+    assert _sanitize_storage_filename("../../evil.txt") == "evil.txt"
+    assert _sanitize_storage_filename("dir/../../../x.pdf") == "x.pdf"
+
+
+def test_sanitize_filename_rejects_empty_and_dot_names():
+    import pytest
+    for bad in ("", "..", ".", ".." + chr(92) + ".."):
+        with pytest.raises(ValueError):
+            _sanitize_storage_filename(bad)

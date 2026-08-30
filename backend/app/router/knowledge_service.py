@@ -610,6 +610,9 @@ class KnowledgeService:
             - 文件名按字母排序以保证返回顺序一致
         """
         from app.utils.path_tool import get_data_path
+        from app.services.knowledge_file_validator import is_valid_md5
+        if not is_valid_md5(md5):
+            raise HTTPException(status_code=400, detail="非法MD5")
         image_dir = os.path.join(get_data_path(), 'extracted_images', user_id, md5)
         if not os.path.isdir(image_dir):
             logger.warning(f"【知识库】图片目录不存在: {image_dir}")

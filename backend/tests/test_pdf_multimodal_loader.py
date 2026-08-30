@@ -93,7 +93,7 @@ async def test_missing_file_returns_empty(monkeypatch, tmp_path):
         pass
     _inject(V, monkeypatch)
     assert await pml.pdf_multimodal_loader(str(tmp_path / "none.pdf"),
-                                           "M", "u1") == []
+                                           "a" * 32, "u1") == []
 
 
 @pytest.mark.asyncio
@@ -103,7 +103,7 @@ async def test_unopenable_pdf_returns_empty(monkeypatch, tmp_path):
     _inject(V, monkeypatch)
     bad = tmp_path / "bad.pdf"
     bad.write_bytes(b"junk")
-    assert await pml.pdf_multimodal_loader(str(bad), "M", "u1") == []
+    assert await pml.pdf_multimodal_loader(str(bad), "a" * 32, "u1") == []
 
 
 @pytest.mark.asyncio
@@ -123,10 +123,10 @@ async def test_pure_long_text_pages_skip_vision(monkeypatch, tmp_path):
     # 覆盖注入的类为 Recording 版本需重新注入
     _inject(RecordingV, monkeypatch)
 
-    docs = await pml.pdf_multimodal_loader(str(pdf), "MD5X", "u9")
+    docs = await pml.pdf_multimodal_loader(str(pdf), "a" * 32, "u9")
     assert [d.metadata["page"] for d in docs] == [1, 2]
     assert all(d.metadata["has_images"] is False for d in docs)
-    assert docs[0].metadata["md5"] == "MD5X"
+    assert docs[0].metadata["md5"] == "a" * 32
     metas_dump = [dict(d.metadata) for d in docs]
     assert all(d.metadata["image_paths"] is None for d in docs), metas_dump
 
@@ -141,7 +141,7 @@ async def test_short_text_page_gets_vision_description(monkeypatch, tmp_path):
     pdf = tmp_path / "chart.pdf"
     _make_pdf(pdf, ["short"])  # <100 字符触发视觉路径
 
-    docs = await pml.pdf_multimodal_loader(str(pdf), "M", "u1")
+    docs = await pml.pdf_multimodal_loader(str(pdf), "a" * 32, "u1")
     assert len(docs) == 1
     assert "[页面视觉描述]: 这是流程图说明" in docs[0].page_content
 
@@ -165,7 +165,7 @@ async def test_dedup_groups_share_vision_text(monkeypatch, tmp_path):
     pdf = tmp_path / "dup.pdf"
     _make_pdf(pdf, ["短一", "短二"])
 
-    docs = await pml.pdf_multimodal_loader(str(pdf), "M", "u1")
+    docs = await pml.pdf_multimodal_loader(str(pdf), "a" * 32, "u1")
     assert calls_box["n"] == 1            # 相似页只调用一次视觉模型
     contents = sorted(d.page_content for d in docs)
     assert all("组描述" in c for c in contents)
@@ -182,14 +182,14 @@ async def test_batch_size_splits_calls(monkeypatch, tmp_path):
     pdf = tmp_path / "many.pdf"
     _make_pdf(pdf, ["p1短", "p2短", "p3短"])
 
-    docs = await pml.pdf_multimodal_loader(str(pdf), "M", "u1")
+    docs = await pml.pdf_multimodal_loader(str(pdf), "a" * 32, "u1")
     assert len(docs) == 3
 
 
 def test_build_document_metadata_contract():
-    d = pml._build_document("内容", 3, "MD5", "a.pdf", [], False)
+    d = pml._build_document("内容", 3, "b" * 32, "a.pdf", [], False)
     assert d.metadata == {
-        "page": 3, "md5": "MD5", "source": "a.pdf",
+        "page": 3, "md5": "b" * 32, "source": "a.pdf",
         "image_paths": None, "has_images": False,
     }
     d2 = pml._build_document("c", 1, "m", "s.pdf", ["i.png"], True)
@@ -217,7 +217,7 @@ async def test_temp_render_files_cleaned_up(monkeypatch, tmp_path):
 
     pdf = tmp_path / "tmpclean.pdf"
     _make_pdf(pdf, ["短"])
-    await pml.pdf_multimodal_loader(str(pdf), "M", "u1")
+    await pml.pdf_multimodal_loader(str(pdf), "a" * 32, "u1")
     assert created, "应渲染过临时 PNG"
     for tp in created:
         assert not os.path.exists(tp), f"临时文件未清理: {tp}"
@@ -230,7 +230,7 @@ def test_sync_missing_returns_empty(monkeypatch, tmp_path):
         pass
     _inject(V, monkeypatch)
     assert pml.pdf_multimodal_loader_sync(str(tmp_path / "no.pdf"),
-                                          "M", "u1") == []
+                                          "a" * 32, "u1") == []
 
 
 def test_sync_short_text_uses_thread_pool_batch(monkeypatch, tmp_path):
@@ -240,5 +240,5 @@ def test_sync_short_text_uses_thread_pool_batch(monkeypatch, tmp_path):
     _inject(SyncV, monkeypatch)
     pdf = tmp_path / "sync.pdf"
     _make_pdf(pdf, ["短页"])
-    docs = pml.pdf_multimodal_loader_sync(str(pdf), "M", "u1")
+    docs = pml.pdf_multimodal_loader_sync(str(pdf), "a" * 32, "u1")
     assert "同步描述" in docs[0].page_content
