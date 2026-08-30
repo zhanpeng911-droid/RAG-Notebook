@@ -64,7 +64,7 @@ MIDDLEWARE = [
     'django.contrib.sessions.middleware.SessionMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
-    # 'django.middleware.csrf.CsrfViewMiddleware',
+    'django.middleware.csrf.CsrfViewMiddleware',  # DRF APIView 默认豁免，恢复对 admin 的防护
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
@@ -135,7 +135,10 @@ if _redis_url:
                 'LOCATION': _redis_url,
             }
         }
-    except Exception:
+    except Exception as cache_exc:
+        import logging
+        # 降级 LocMem 会导致 token 吊销/限流按进程隔离，必须显式暴露
+        logging.error("Redis 缓存不可用，降级为 LocMemCache（黑名单/限流将按进程隔离）: %s", cache_exc)
         CACHES = {
             'default': {
                 'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
@@ -209,8 +212,9 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'apps.user.authentications.JWTAuthentication',
     ],
+    # 默认拒绝：新增视图漏配权限时安全兜底（公开视图需显式 AllowAny）
     'DEFAULT_PERMISSION_CLASSES': [
-        # 权限类
+        'rest_framework.permissions.IsAuthenticated',
     ],
     # 3. 全局分页
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',

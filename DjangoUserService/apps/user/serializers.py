@@ -36,14 +36,14 @@ class LoginSerializer(serializers.Serializer):
                     User.objects.filter(email=email)
 
         if not user_query.exists():
-            raise serializers.ValidationError("用户名或邮箱不存在")
+            raise serializers.ValidationError("用户名或密码错误")
 
         # 获取用户对象
         user = user_query.first()
 
         # 验证密码是否正确
         if not user.check_password(password):
-            raise serializers.ValidationError("密码错误")
+            raise serializers.ValidationError("用户名或密码错误")
 
         # 验证用户状态是否为激活
         if user.status != UserStatusChoice.ACTIVE:
@@ -110,6 +110,11 @@ class RegisterSerializer(serializers.ModelSerializer):
         password = attrs.get('password')
         confirm_password = attrs.get('confirm_password')
         
+        # 验证用户名是否已存在（username 列当前无唯一约束，创建侧先拦住）
+        username = attrs.get('username')
+        if username and User.objects.filter(username=username).exists():
+            raise serializers.ValidationError({'username': '该用户名已被注册'})
+
         # 验证邮箱是否已存在
         if User.objects.filter(email=email).exists():
             raise serializers.ValidationError({'email': '该邮箱已被注册'})

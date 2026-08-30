@@ -14,6 +14,7 @@ from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import serializers, status
 from rest_framework.exceptions import AuthenticationFailed
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -56,6 +57,8 @@ class UserUpdateResponseSerializer(serializers.Serializer):
 
 class LoginView(APIView):
     """类视图，处理用户登录"""
+    permission_classes = [AllowAny]
+
     @swagger_auto_schema(
         request_body=LoginSerializer,
         responses={
@@ -66,6 +69,7 @@ class LoginView(APIView):
             400: openapi.Response(description="登录失败")
         }
     )
+    @rate_limit(limit=10, window=60, scope="login")
     def post(self, request) -> Response:
         """
         处理post请求，验证用户登录
@@ -93,6 +97,8 @@ class LoginView(APIView):
 
 class RegisterView(APIView):
     """类视图，处理用户注册"""
+    permission_classes = [AllowAny]
+
     @swagger_auto_schema(
         request_body=RegisterSerializer,
         responses={
@@ -103,7 +109,7 @@ class RegisterView(APIView):
             400: openapi.Response(description="注册失败")
         }
     )
-    @rate_limit(limit=3, window=60)
+    @rate_limit(limit=3, window=60, scope="register")
     def post(self, request) -> Response:
         """
         处理post请求，用户注册
@@ -181,6 +187,9 @@ class ResetPasswordView(AuthenticatedView):
 
 class TokenRefreshView(APIView):
     """处理Token刷新请求"""
+    permission_classes = [AllowAny]
+
+    @rate_limit(limit=10, window=60, scope="refresh")
     @swagger_auto_schema(
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,

@@ -1,6 +1,7 @@
 import os
 
 from django.conf import settings
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from shortuuid import uuid
@@ -13,6 +14,8 @@ from apps.utils.cache_utils import clear_user_cache
 class UploadAPIView(APIView):
     """文件上传"""
     authentication_classes = [JWTAuthentication]
+    # 保持原有手写登录检查与响应体（全局默认 IsAuthenticated 下显式豁免）
+    permission_classes = [AllowAny]
 
     def post(self, request, *args, **kwargs) -> Response:
         """文件上传"""
