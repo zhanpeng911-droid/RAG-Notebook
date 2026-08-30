@@ -486,14 +486,25 @@ class KnowledgeService:
         )
 
         # 多线程切片
-        queue, executor, _ = self._start_slicing(valid_files, user_id, space_id)
+        queue, executor, futures = self._start_slicing(valid_files, user_id, space_id)
 
-        # 串行消费 + 写入
+        # 串行消费 + 写入（客户端断开时由 finally 兜底清理）
         store = VectorStoreService()
-        async for event in self._process_slice_results(queue, len(valid_files), store, state, user_id):
-            yield event
-
-        executor.shutdown(wait=True)
+        try:
+            async for event in self._process_slice_results(queue, len(valid_files), store, state, user_id):
+                yield event
+        finally:
+            # 持续排空队列直到切片线程全部退出，解除它们在 put 上的阻塞；
+            # 否则客户端中断 SSE 后线程会永久卡死、线程池永不关闭
+            try:
+                while not all(f.done() for f in futures):
+                    try:
+                        queue.get(block=False)
+                    except Exception:
+                        pass
+                    await asyncio.sleep(0.01)
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
 
         logger.info(
             f"【SSE上传】文件处理完成，总数: {total_files}，"

@@ -79,6 +79,9 @@ class AgentGraph:
 
         # 清洗查询
         state.query = self.guardrails.sanitize_query(query)
+        # 保留清洗后的原始查询（state.query 之后可能被 CRAG 改写为检索词，
+        # 答案生成必须使用清洗版原始查询，防止注入文本直达 prompt）
+        state.original_query = state.query
         if not state.query:
             yield self._create_event(AgentPhase.ERROR, error="查询不能为空")
             return
@@ -201,7 +204,8 @@ class AgentGraph:
 
             answer_generator = create_answer_generator(llm_config=self.llm_config)
             result = await answer_generator.generate(
-                query=query,  # 使用原始查询生成答案
+                # 使用清洗后的原始查询生成答案（检索用改写词，答案生成防注入）
+                query=state.original_query,
                 evidences=state.evidences,
             )
 

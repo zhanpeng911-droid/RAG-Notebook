@@ -129,7 +129,8 @@ async def get_health_model():
     """健康检查-模型：Embedding 服务是否可调用"""
     try:
         from app.utils.factory import embed_model
-        result = embed_model.embed_query("health check")
+        # 同步网络调用必须放线程池，避免阻塞事件循环（健康探针尤其不能卡主循环）
+        result = await asyncio.to_thread(embed_model.embed_query, "health check")
         if result and len(result) > 0:
             return success_response(
                 message="Embedding model OK",

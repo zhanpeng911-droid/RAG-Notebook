@@ -136,6 +136,8 @@ class DocumentProcessor:
                 )
                 content = await file.read()
                 await asyncio.to_thread(temp_file_path.write, content)
+                # 立即关闭句柄，确保缓冲区落盘（MD5 与加载器用另一句柄读同一文件）
+                await asyncio.to_thread(temp_file_path.close)
                 file_paths.append(temp_file_path.name)
                 file_names[temp_file_path.name] = file.filename
         else:

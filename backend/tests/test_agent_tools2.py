@@ -162,6 +162,24 @@ async def test_get_related_notes_empty(tool_env):
 
 
 @pytest.mark.asyncio
+async def test_get_related_notes_formats_dict_shape(tool_env):
+    # 回归：get_related_notes 返回 {"notes": [...], "knowledge_docs": [...]},
+    # 工具此前按扁平列表迭代导致必现 TypeError（永远返回"获取关联推荐时出错"）
+    async def related(db, note_id, user_id, top_k=3):
+        return {
+            "notes": [{"id": "n2", "title": "相关笔记",
+                       "content_preview": "预览内容", "similarity": 0.8}],
+            "knowledge_docs": [{"id": "kb1", "title": "知识库文档",
+                                "content": "文档内容", "similarity": 0.6}],
+        }
+    tool_env.notes.get_related_notes = related
+    out = await _call("get_related_notes_tool", note_id="n1")
+    assert "获取关联推荐时出错" not in out
+    assert "相关笔记" in out and "📝 笔记" in out
+    assert "知识库文档" in out and "📚 知识库" in out
+
+
+@pytest.mark.asyncio
 async def test_search_notes_formats_result(tool_env):
     async def rich(db, user_id, query, top_k=5):
         return [NS(title="RAG 入门", category="study", tags=["rag", "笔记"],

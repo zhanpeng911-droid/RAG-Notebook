@@ -235,14 +235,20 @@ async def get_related_notes_tool(note_id: str, top_k: int = 3) -> str:
     async with AsyncSessionLocal() as db:
         try:
             related = await note_service.get_related_notes(db, note_id, user_id, top_k=top_k)
-            if not related:
+            # get_related_notes 返回 {"notes": [...], "knowledge_docs": [...]}
+            note_items = related.get("notes", []) if isinstance(related, dict) else []
+            kb_items = related.get("knowledge_docs", []) if isinstance(related, dict) else []
+            if not note_items and not kb_items:
                 return "未找到关联笔记或知识库文档"
-            lines = [f"🔗 关联推荐（共 {len(related)} 项）\n"]
-            for i, item in enumerate(related, 1):
-                source_label = "📝 笔记" if item['source'] == 'note' else "📚 知识库"
-                lines.append(f"{i}. {source_label} — {item['title']}")
-                lines.append(f"   相似度: {item['similarity']}")
-                lines.append(f"   预览: {item['content_preview'][:100]}...\n")
+            lines = [f"🔗 关联推荐（共 {len(note_items) + len(kb_items)} 项）\n"]
+            idx = 1
+            for label, items in (("📝 笔记", note_items), ("📚 知识库", kb_items)):
+                for item in items:
+                    lines.append(f"{idx}. {label} — {item.get('title', '无标题')}")
+                    lines.append(f"   相似度: {item.get('similarity')}")
+                    preview = str(item.get('content_preview') or item.get('content') or '')
+                    lines.append(f"   预览: {preview[:100]}...\n")
+                    idx += 1
             return "\n".join(lines)
         except Exception as e:
             logger.error(f"获取关联推荐失败: {e}")

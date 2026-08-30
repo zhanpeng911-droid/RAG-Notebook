@@ -487,10 +487,11 @@ async def test_embedding(
 
         model_name = getattr(embed, 'model_name', 'unknown')
 
-        # 执行真实调用
+        # 执行真实调用（同步网络调用放线程池，避免阻塞事件循环）
+        import asyncio
         import time
         start = time.time()
-        vector = embed.embed_query("测试连接")
+        vector = await asyncio.to_thread(embed.embed_query, "测试连接")
         elapsed = time.time() - start
 
         return success_response(data={
