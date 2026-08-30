@@ -313,7 +313,7 @@ async def test_stream_full_flow(monkeypatch):
         yield "data: progress\n\n"
 
     def fake_start(valid_files, uid, space):
-        return NS(), NS(shutdown=lambda wait=True: None), []
+        return NS(), NS(shutdown=lambda wait=True, cancel_futures=False: None), []
 
     monkeypatch.setattr(svc, "_validate_and_read_files", fake_validate)
     monkeypatch.setattr(svc, "_start_slicing", fake_start)
@@ -428,7 +428,7 @@ async def test_handle_document_chunks_nonempty(monkeypatch):
 async def test_batch_images_no_dir(monkeypatch, tmp_path):
     from app.router.knowledge_service import KnowledgeService
     svc = KnowledgeService()
-    import app.utils.path_tool as pt
+    from app.utils import path_tool as pt
     monkeypatch.setattr(pt, "get_data_path", lambda: str(tmp_path))
     out = await svc.handle_get_batch_images(USER_A, "a" * 32)
     assert out["images"] == {}
@@ -438,7 +438,7 @@ async def test_batch_images_no_dir(monkeypatch, tmp_path):
 async def test_batch_images_read_files(monkeypatch, tmp_path):
     from app.router.knowledge_service import KnowledgeService
     svc = KnowledgeService()
-    import app.utils.path_tool as pt
+    from app.utils import path_tool as pt
     monkeypatch.setattr(pt, "get_data_path", lambda: str(tmp_path))
     img_dir = tmp_path / "extracted_images" / USER_A / ("a" * 32)
     img_dir.mkdir(parents=True)
