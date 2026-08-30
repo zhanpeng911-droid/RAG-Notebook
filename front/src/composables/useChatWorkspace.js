@@ -141,7 +141,8 @@ export function useChatWorkspace() {
       return DOMPurify.sanitize(parsed)
     } catch (error) {
       console.error('Markdown解析错误:', error)
-      return content
+      // 兜底也必须消毒：该返回值直接进入 v-html
+      return DOMPurify.sanitize(content)
     }
   }
   function toggleThinking(message) {
@@ -201,6 +202,12 @@ export function useChatWorkspace() {
 
   async function selectSession(session) {
     if (currentSessionId.value === session.session_id) return
+    // 中止在途流：防止旧回答写入新会话、以及 onDone 把用户拉回旧会话
+    if (typeof abortStream === 'function') {
+      abortStream()
+      abortStream = null
+      isLoading.value = false
+    }
     try {
       const result = await sessionApi.getSession(session.session_id)
       if (result.code === 200 && result.data) {
@@ -214,6 +221,11 @@ export function useChatWorkspace() {
   }
 
   async function deleteSession(sid) {
+    if (typeof abortStream === 'function') {
+      abortStream()
+      abortStream = null
+      isLoading.value = false
+    }
     try {
       await sessionApi.deleteSession(sid)
       sessions.value = sessions.value.filter((s) => s.session_id !== sid)
@@ -230,6 +242,11 @@ export function useChatWorkspace() {
   }
 
   function createNewSession() {
+    if (typeof abortStream === 'function') {
+      abortStream()
+      abortStream = null
+      isLoading.value = false
+    }
     messages.value = [{ ...WELCOME_MSG }]
     sessionId.value = ''
     router.push('/chat')

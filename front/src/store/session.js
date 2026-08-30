@@ -135,6 +135,13 @@ export const useSessionStore = defineStore('session', {
           if (sessionId) break;
         }
 
+        // 拿到会话 ID 后立即取消流：后端 LLM 不再为已弃用的请求继续生成
+        try {
+          await reader.cancel();
+        } catch (e) {
+          /* ignore */
+        }
+
         if (sessionId) {
           const sessionResponse = await this.getSession(sessionId);
           return sessionResponse;
