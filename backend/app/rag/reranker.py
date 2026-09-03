@@ -1,5 +1,5 @@
 """
-重排序服务 —— 基于 DashScope qwen3-vl-rerank 模型。
+重排序服务 —— 基于 DashScope qwen3.7-text-rerank 模型。
 
 对混合检索的候选文档进行交叉编码重排序，提升 top-k 精度。
 """
@@ -22,13 +22,13 @@ class RerankResult:
 
 class Reranker:
     """
-    重排序器 —— 调用 DashScope qwen3-vl-rerank。
+    重排序器 —— 调用 DashScope qwen3.7-text-rerank。
 
     API: POST https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank
     计费: ¥0.5 / 百万 input tokens（仅输入计费，极低成本）
     """
 
-    def __init__(self, api_key: str = None, model: str = "qwen3-vl-rerank"):
+    def __init__(self, api_key: str = None, model: str = "qwen3.7-text-rerank"):
         """
         :param api_key: DashScope API Key（默认从 settings 读取）
         :param model: 重排序模型名

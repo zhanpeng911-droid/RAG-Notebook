@@ -182,7 +182,7 @@ def generate_report(results, cases):
 ## 测试环境
 - 边界文档：10 篇（超长 1 篇 99KB / 跨文档 3 篇 / 模糊 2 篇 / 新旧冲突 4 篇）
 - 评估集：{total} 题
-- LLM：deepseek-v4-flash / 重排序：qwen3-vl-rerank
+- LLM：deepseek-v4-flash / 重排序：qwen3.7-text-rerank
 
 ## 汇总
 

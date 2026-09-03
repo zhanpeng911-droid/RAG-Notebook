@@ -110,7 +110,7 @@ class Planner:
         baseline = get_runtime_config("retrieval.top_k_baseline")
 
         # 根据查询类型调整参数
-        # use_rerank: 启用 qwen3-vl-rerank 重排序（已接入）
+        # use_rerank: 启用 qwen3.7-text-rerank 重排序（已接入）
         # use_hyde: 事实类查询禁用 HyDE（研究证明伪文档会稀释精确术语匹配），
         #           解释/探索类保留（词汇差距大时需要语义扩展）
         if query_type == QueryType.SIMPLE:

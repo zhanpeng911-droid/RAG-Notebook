@@ -121,4 +121,4 @@ async def test_network_error_degrades_to_empty_list(monkeypatch):
 
 def test_default_model_and_singleton():
     # rerank 成功路径里分数经 float() 强转；dataclass 本身不转型
-    assert reranker_module.reranker.model == "qwen3-vl-rerank"
+    assert reranker_module.reranker.model == "qwen3.7-text-rerank"

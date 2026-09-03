@@ -166,7 +166,7 @@ class RetrievalService:
         self, query: str, evidences: List[Evidence]
     ) -> List[Evidence]:
         """
-        使用 qwen3-vl-rerank 对候选证据重排序。
+        使用 qwen3.7-text-rerank 对候选证据重排序。
 
         :param query: 原始查询
         :param evidences: 候选证据列表
