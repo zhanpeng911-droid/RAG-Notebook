@@ -19,7 +19,7 @@
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:debug": "playwright test --debug",
     "test:e2e:phase2": "playwright test tests/e2e/protected-routes.spec.js tests/e2e/settings-theme-ui.spec.js tests/e2e/notes-mocked.spec.js",
-    "test:e2e:full": "E2E_FULL_STACK=true playwright test"
+    "test:e2e:full": "playwright test --config=playwright.full.config.js"
   },
   "dependencies": {
     "@bytemd/plugin-frontmatter": "^1.22.0",

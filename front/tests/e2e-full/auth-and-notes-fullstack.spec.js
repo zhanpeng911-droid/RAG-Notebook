@@ -19,7 +19,8 @@ import { test, expect } from '@playwright/test';
 const E2E_ENABLED = process.env.E2E_FULL_STACK === 'true';
 const USERNAME = process.env.E2E_USERNAME || '';
 const PASSWORD = process.env.E2E_PASSWORD || '';
-const FASTAPI_URL = process.env.E2E_FASTAPI_URL || 'http://127.0.0.1:8000';
+// 统一端口：FastAPI=8002、Django=8001；经 Docker Nginx 时由 E2E_BASE_URL 走统一入口
+const FASTAPI_URL = process.env.E2E_FASTAPI_URL || 'http://127.0.0.1:8002';
 const DJANGO_URL = process.env.E2E_DJANGO_URL || 'http://127.0.0.1:8001';
 
 test.skip(!E2E_ENABLED, 'E2E_FULL_STACK 未设置，跳过 full-stack 测试（需要真实后端服务）');
@@ -40,7 +41,7 @@ async function waitForBackend(timeoutMs = 10000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
-      const res = await fetch(`${FASTAPI_URL}/health/live`, { signal: AbortSignal.timeout(3000) });
+      const res = await fetch(`${FASTAPI_URL}/api/v1/health/live`, { signal: AbortSignal.timeout(3000) });
       if (res.ok) return true;
     } catch { /* 继续重试 */ }
     await new Promise((r) => setTimeout(r, 1000));
@@ -51,8 +52,8 @@ async function waitForBackend(timeoutMs = 10000) {
 async function checkServices() {
   const errors = [];
   try {
-    const res = await fetch(`${FASTAPI_URL}/health/live`, { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) errors.push(`FastAPI /health/live 返回 ${res.status}`);
+    const res = await fetch(`${FASTAPI_URL}/api/v1/health/live`, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) errors.push(`FastAPI /api/v1/health/live 返回 ${res.status}`);
   } catch (e) {
     errors.push(`FastAPI 不可达 (${FASTAPI_URL}): ${e.message}`);
   }
@@ -82,7 +83,7 @@ async function deleteNoteViaAPI(page, noteId) {
   if (!token || !noteId) return false;
   return await page.evaluate(
     async ({ id, tok }) => {
-      const r = await fetch(`/note/${id}`, {
+      const r = await fetch(`/api/v1/note/${id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${tok}` },
       });
@@ -97,7 +98,7 @@ async function findNoteIdByTitle(page, title) {
   if (!token) return null;
   return await page.evaluate(
     async ({ t, tok }) => {
-      const res = await fetch('/note/list?page=1&page_size=100', {
+      const res = await fetch('/api/v1/note/list?page=1&page_size=100', {
         headers: { Authorization: `Bearer ${tok}` },
       });
       const data = await res.json();
