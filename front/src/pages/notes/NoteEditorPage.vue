@@ -168,7 +168,9 @@ import { showToast, showConfirmDialog } from 'vant'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { noteApi } from '../../services/noteApi'
+import * as noteDraft from '../../services/noteDraft'
 import { useModelStore } from '../../store/model'
+import { useUserStore } from '../../store/user'
 import MarkdownEditor from '../../components/MarkdownEditor.vue'
 import QuickToolbar from '../../components/QuickToolbar.vue'
 import InlineCompletion from '../../components/InlineCompletion.vue'
@@ -176,6 +178,7 @@ import InlineCompletion from '../../components/InlineCompletion.vue'
 const route = useRoute()
 const router = useRouter()
 const modelStore = useModelStore()
+const userStore = useUserStore()
 
 // ===== Refs =====
 const markdownEditorRef = ref(null)
@@ -361,37 +364,37 @@ async function handleDelete() {
 }
 
 // ===== Draft =====
+function currentUserId() {
+  const info = userStore.getUserInfo || {}
+  return info.uuid || info.id || info.user_id || ''
+}
+
 function autoSaveDraft() {
   if (autoSaveTimer) clearTimeout(autoSaveTimer)
   autoSaveTimer = setTimeout(() => {
-    localStorage.setItem('note_draft', JSON.stringify({
+    noteDraft.saveDraft(currentUserId(), noteId.value, {
       title: title.value,
       content: content.value,
       tags: tags.value,
       category: category.value,
-      noteId: noteId.value,
-      timestamp: Date.now(),
-    }))
+    })
     autoSaved.value = true
     setTimeout(() => { autoSaved.value = false }, 2000)
   }, 2000)
 }
 
 function clearDraft() {
-  localStorage.removeItem('note_draft')
+  noteDraft.clearDraft(currentUserId(), noteId.value)
 }
 
 function loadDraft() {
-  try {
-    const draft = JSON.parse(localStorage.getItem('note_draft') || 'null')
-    if (draft && draft.noteId === noteId.value) {
-      title.value = draft.title || ''
-      content.value = draft.content || ''
-      tags.value = draft.tags || []
-      category.value = draft.category || ''
-    }
-  } catch (e) {
-    // ignore
+  // 草稿键与内容均带所有者：只恢复当前用户自己的草稿
+  const draft = noteDraft.loadDraft(currentUserId(), noteId.value)
+  if (draft) {
+    title.value = draft.title || ''
+    content.value = draft.content || ''
+    tags.value = draft.tags || []
+    category.value = draft.category || ''
   }
 }
 

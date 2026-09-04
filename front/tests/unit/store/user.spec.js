@@ -10,6 +10,8 @@ vi.mock('../../../src/services/http', () => ({
 }))
 
 const { useUserStore } = await import('../../../src/store/user')
+const { useSessionStore } = await import('../../../src/store/session')
+const { useQaHistoryStore } = await import('../../../src/store/qaHistory')
 
 describe('user store', () => {
   beforeEach(() => {
@@ -91,12 +93,57 @@ describe('user store', () => {
     expect(out.success).toBe(false)
   })
 
-  it('updatePassword 成功', async () => {
-    localStorage.setItem('jwt_token', 't')
-    httpPost.mockResolvedValue({ status: 200, data: { message: 'ok' } })
+  it('updatePassword 成功后接管新 token（旧 token 已被 Django 撤销）', async () => {
+    localStorage.setItem('jwt_token', 'old-token')
+    httpPost.mockResolvedValue({ status: 200, data: { message: 'ok', token: 'new-token' } })
     const store = useUserStore()
     const out = await store.updatePassword('old', 'new')
     expect(out.success).toBe(true)
+    expect(store.token).toBe('new-token')
+    expect(localStorage.getItem('jwt_token')).toBe('new-token')
+  })
+
+  it('改密码后立即请求资料使用新 token', async () => {
+    localStorage.setItem('jwt_token', 'old-token')
+    httpPost.mockResolvedValue({ status: 200, data: { message: 'ok', token: 'new-token' } })
+    httpGet.mockResolvedValue({ status: 200, data: { data: { id: 1 } } })
+    const store = useUserStore()
+    await store.updatePassword('old', 'new')
+    await store.getUserInfoDetail()
+    // 请求发出时 Authorization 必须带新 token（http 拦截器从 localStorage 读取）
+    expect(localStorage.getItem('jwt_token')).toBe('new-token')
+    expect(httpGet).toHaveBeenCalled()
+  })
+
+  it('clearAuth 清理会话与问答历史并递增 authEpoch', async () => {
+    const sessionStore = useSessionStore()
+    sessionStore.sessions = [{ session_id: 's1', title: 't' }]
+    sessionStore.currentSession = { session_id: 's1' }
+    const qaStore = useQaHistoryStore()
+    qaStore.history = [{ id: 'q1', question: 'x' }]
+    localStorage.setItem('jwt_token', 't')
+    const store = useUserStore()
+    const epochBefore = store.authEpoch
+    store.isLogin = true
+
+    await store.clearAuth()
+
+    expect(store.token).toBe('')
+    expect(store.isLogin).toBe(false)
+    expect(localStorage.getItem('jwt_token')).toBeNull()
+    expect(store.authEpoch).toBe(epochBefore + 1)
+    expect(sessionStore.sessions).toEqual([])
+    expect(sessionStore.currentSession).toBeNull()
+    expect(qaStore.history).toEqual([])
+  })
+
+  it('clearAuth 保留非敏感偏好（不清 localStorage 全量）', async () => {
+    localStorage.setItem('theme', 'dark')
+    localStorage.setItem('jwt_token', 't')
+    const store = useUserStore()
+    await store.clearAuth()
+    expect(localStorage.getItem('theme')).toBe('dark')
+    expect(localStorage.getItem('jwt_token')).toBeNull()
   })
 
   it('register 成功自动登录', async () => {

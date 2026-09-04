@@ -42,6 +42,8 @@ export const useUserStore = defineStore('user', {
     userInfo: null,
     token: '',
     isLogin: false,
+    // 认证代次：登出/401/切换账号时递增，用于丢弃迟到请求写回旧用户数据
+    authEpoch: 0,
     userBio: '这是我的个人简介'
   }),
 
@@ -53,6 +55,20 @@ export const useUserStore = defineStore('user', {
   },
 
   actions: {
+    // 统一认证会话更新：登录/注册/刷新/资料修改/密码修改后复用。
+    // 返回是否拿到 token；user 可选（改密码只返回新 token）。
+    applyAuthSession(data = {}) {
+      const token = data.token || data.access || data.data?.token || data.data?.access;
+      const userInfo = data.user || data.data?.user || null;
+      if (userInfo) this.userInfo = userInfo;
+      if (token) {
+        this.token = token;
+        this.isLogin = true;
+        localStorage.setItem('jwt_token', token);
+      }
+      return Boolean(token);
+    },
+
     // 登录
     async login(userData) {
       try {
@@ -62,22 +78,9 @@ export const useUserStore = defineStore('user', {
         });
 
         if (response.status === 200) {
-          const token = response.data.token
-            || response.data.access
-            || response.data.data?.token
-            || response.data.data?.access;
-
-          const userInfo = response.data.user || response.data.data?.user || null;
-
-          if (!token) {
+          if (!this.applyAuthSession(response.data)) {
             return { success: false, message: response.data.message || '登录失败：未返回 token' };
           }
-
-          localStorage.setItem('jwt_token', token);
-          this.token = token;
-          this.userInfo = userInfo;
-          this.isLogin = true;
-
           return { success: true, message: response.data.message || '登录成功' };
         } else {
           return { success: false, message: response.data.message || response.data.detail || '登录失败' };
@@ -99,16 +102,31 @@ export const useUserStore = defineStore('user', {
       } catch (error) {
         console.error('注销请求失败:', error);
       } finally {
-        this.clearAuth();
+        await this.clearAuth();
       }
     },
 
-    // 清除认证状态
-    clearAuth() {
+    // 统一清理用户级数据（会话列表、问答历史等）。
+    // 动态 import 避免 user → session → http → user 的静态循环依赖。
+    async clearUserScopedData() {
+      const [{ useSessionStore }, { useQaHistoryStore }] = await Promise.all([
+        import('./session'),
+        import('./qaHistory'),
+      ]);
+      useSessionStore().clearSessions();
+      useQaHistoryStore().clear();
+    },
+
+    // 清除认证状态 —— 登出/401/切换账号统一入口。
+    // 递增 authEpoch 使在途 SSE/fetch 的迟到写回被丢弃；不清 localStorage 全量，
+    // 保留主题等非敏感偏好。
+    async clearAuth() {
+      this.authEpoch += 1;
       this.userInfo = null;
       this.token = '';
       this.isLogin = false;
       localStorage.removeItem('jwt_token');
+      await this.clearUserScopedData();
     },
 
     // 获取用户信息
@@ -144,11 +162,7 @@ export const useUserStore = defineStore('user', {
         const response = await http.put('/user/update/', userData);
 
         if (response.status === 200) {
-          this.userInfo = response.data.user;
-          if (response.data.token) {
-            this.token = response.data.token;
-            localStorage.setItem('jwt_token', response.data.token);
-          }
+          this.applyAuthSession(response.data);
           return { success: true, message: response.data.message };
         } else {
           return { success: false, message: response.data.detail || '更新用户信息失败' };
@@ -177,6 +191,9 @@ export const useUserStore = defineStore('user', {
         });
 
         if (response.status === 200) {
+          // Django 端已撤销旧 token 并签发新 token（见 views.py ResetPasswordView）
+          // 必须立即接管新 token，否则后续请求仍用已撤销的旧 token
+          this.applyAuthSession(response.data);
           return { success: true, message: response.data.message };
         } else {
           return { success: false, message: response.data.detail || '更新密码失败' };
@@ -201,14 +218,7 @@ export const useUserStore = defineStore('user', {
         const response = await http.post('/user/register/', payload);
 
         if (response.data.status === 201 && response.data.token) {
-          const token = response.data.token;
-          const userInfo = response.data.user;
-
-          localStorage.setItem('jwt_token', token);
-          this.userInfo = userInfo;
-          this.token = token;
-          this.isLogin = true;
-
+          this.applyAuthSession(response.data);
           return { success: true, message: response.data.message || '注册成功' };
         } else {
           return { success: false, message: response.data.message || '注册失败' };

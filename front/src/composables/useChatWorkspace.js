@@ -309,6 +309,10 @@ export function useChatWorkspace() {
     let completedCitations = []
     const relatedNotesPromise = fetchRelatedNotes(userMessage)
 
+    // 认证代次：登出/401 后 userStore.authEpoch 递增，迟到 SSE 写回直接丢弃
+    const authEpoch = userStore.authEpoch
+    const isStaleAuth = () => userStore.authEpoch !== authEpoch
+
     try {
       abortStream = chatApi.queryStream(
         {
@@ -318,6 +322,7 @@ export function useChatWorkspace() {
         },
         {
           onThinking(json) {
+            if (isStaleAuth()) return
             const idx = messages.value.length - 1
             if (messages.value[idx].role === 'assistant') {
               const newStep = {
@@ -333,6 +338,7 @@ export function useChatWorkspace() {
             }
           },
           async onCompleted(json) {
+            if (isStaleAuth()) return
             // Agent 完成事件：等待相关笔记请求后再入栈，避免快照丢失异步结果
             completedCitations = Array.isArray(json.citations) ? json.citations : []
             await relatedNotesPromise
@@ -347,6 +353,7 @@ export function useChatWorkspace() {
             }
           },
           onResponse(json) {
+            if (isStaleAuth()) return
             const lastMsg = messages.value[messages.value.length - 1]
             if (!lastMsg.thinkingAutoCollapsed && lastMsg.thinking.length > 0) {
               lastMsg.thinkingAutoCollapsed = true
@@ -367,6 +374,7 @@ export function useChatWorkspace() {
             }
           },
           onDone(json) {
+            if (isStaleAuth()) return
             const sid = json.session_id
             if (sid && typeof sid === 'string' && sid.trim()) {
               sessionId.value = sid
@@ -375,12 +383,18 @@ export function useChatWorkspace() {
             }
           },
           onError(err) {
+            if (isStaleAuth()) return
             console.error('SSE error:', err)
             messages.value[messages.value.length - 1].content = `发生错误: ${
               err.message || '请检查网络连接和API设置'
             }`
           },
           async onFinally() {
+            if (isStaleAuth()) {
+              if (typeof abortStream === 'function') abortStream()
+              abortStream = null
+              return
+            }
             isLoading.value = false
             await nextTick()
             scrollToBottom()

@@ -271,7 +271,7 @@ function loadMore() {
 }
 
 function createNote() {
-  localStorage.removeItem('note_draft')
+  // 新草稿按用户+笔记隔离，进入编辑器时已按当前用户清理；无需再清旧全局键
   router.push('/notes/new')
 }
 
