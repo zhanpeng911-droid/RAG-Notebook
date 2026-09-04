@@ -87,7 +87,13 @@ async def lifespan(app: FastAPI):
         pass
 
 
-app = FastAPI(lifespan=lifespan)
+# 显式配置文档路径：路由统一 /api/v1 前缀后，docs 不会自动迁移；
+# 固定为 /api/v1/docs（经 Nginx 统一入口可达），与 README/API.md 一致。
+app = FastAPI(
+    lifespan=lifespan,
+    docs_url="/api/v1/docs",
+    openapi_url="/api/v1/openapi.json",
+)
 
 
 @app.middleware("http")
