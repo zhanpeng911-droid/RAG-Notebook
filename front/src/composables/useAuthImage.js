@@ -8,7 +8,7 @@ export function useAuthImage() {
     if (!token) return {};
 
     try {
-      const response = await fetch(`/knowledge/images/all/${md5}`, {
+      const response = await fetch(`/api/v1/knowledge/images/all/${md5}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!response.ok) return {};

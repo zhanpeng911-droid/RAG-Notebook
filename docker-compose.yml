@@ -49,7 +49,8 @@ services:
     env_file:
       - ./backend/.env.docker
     ports:
-      - "8000:8000"
+      # 回环绑定：业务端口不对外，统一经前端 Nginx 入口访问
+      - "127.0.0.1:8000:8000"
     volumes:
       - backend_data:/app/data
       - backend_logs:/app/logs
@@ -115,7 +116,10 @@ services:
     env_file:
       - ./DjangoUserService/.env.docker
     ports:
-      - "8001:8001"
+      # 回环绑定：业务端口不对外，统一经前端 Nginx 入口访问
+      - "127.0.0.1:8001:8001"
+    volumes:
+      - django_media:/app/media
     depends_on:
       mysql:
         condition: service_healthy
@@ -133,13 +137,13 @@ services:
     build:
       context: ./front
       dockerfile: Dockerfile
-      args:
-        - VITE_BACKEND_TARGET=http://backend:8000
-        - VITE_USER_TARGET=http://django:8001
     container_name: notebook-frontend
     restart: unless-stopped
     ports:
       - "3000:80"
+    volumes:
+      # 头像媒体只读挂载给 Nginx（由 /media/ alias 提供公开访问）
+      - django_media:/srv/notebook-media:ro
     depends_on:
       backend:
         condition: service_healthy
@@ -174,6 +178,8 @@ volumes:
   redis_data:
   backend_data:
   backend_logs:
+  # Django 媒体（头像）持久化：Django 写 /app/media，Nginx 只读挂载 /srv/notebook-media
+  django_media:
   # ollama_data:
 
 networks:
