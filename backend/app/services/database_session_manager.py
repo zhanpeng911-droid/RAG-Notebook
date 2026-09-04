@@ -12,6 +12,7 @@
 - ChatMessage: 消息表（session_id, role, content）
 """
 import asyncio
+from datetime import datetime, timezone
 from typing import Dict, List, Tuple, Optional
 
 from sqlalchemy import delete, select
@@ -39,11 +40,15 @@ class DatabaseSessionManager:
         return instance
 
     async def get_session(self, session_id: str, user_id: str) -> Dict:
-        """获取会话"""
+        """获取会话（已删除的 tombstone 视为不存在）"""
         async with AsyncSessionLocal() as db:
-            # 尝试查找会话，验证属于该用户
+            # 尝试查找会话，验证属于该用户且未删除
             result = await db.run_sync(
-                lambda session: session.query(ChatSession).filter(ChatSession.id == session_id, ChatSession.user_id == user_id).first()
+                lambda session: session.query(ChatSession).filter(
+                    ChatSession.id == session_id,
+                    ChatSession.user_id == user_id,
+                    ChatSession.deleted_at.is_(None),
+                ).first()
             )
 
             if result:
@@ -67,6 +72,11 @@ class DatabaseSessionManager:
                 )
                 from fastapi import HTTPException, status
                 if existing_session:
+                    if existing_session.deleted_at is not None:
+                        raise HTTPException(
+                            status_code=status.HTTP_404_NOT_FOUND,
+                            detail="会话不存在或已删除",
+                        )
                     logger.warning(f"【数据库会话管理】会话 {session_id} 不属于用户 {user_id}")
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
@@ -80,38 +90,38 @@ class DatabaseSessionManager:
 
 
     async def add_message(self, session_id: str, user_id: str, user_message: str, assistant_message: str):
-        """添加消息并保存到数据库"""
+        """向已有会话追加消息。
+
+        会话必须存在且属于当前用户、未被删除；不再替迟到请求自动创建旧会话 ID
+        （F03：删除后迟到写入不得重建会话）。新会话由服务端显式创建。
+        """
+        from fastapi import HTTPException, status
+
         async with AsyncSessionLocal() as db:
-            # 检查会话id是否存在
             existing_session = await db.run_sync(
-                lambda session: session.query(ChatSession).filter(ChatSession.id == session_id).first()
+                lambda s: s.query(ChatSession).filter(ChatSession.id == session_id).first()
             )
 
-            if existing_session:
-                # 检查会话是否属于当前用户
-                if existing_session.user_id != user_id:
-                    # 会话存在但不属于当前用户，不添加消息
-                    logger.warning(f"【数据库会话管理】会话 {session_id} 不属于用户 {user_id}，无法添加消息")
-                    from fastapi import HTTPException, status
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail="当前会话不属于你，无法添加消息"
-                    )
-                session = existing_session
-            else:
-                # 会话不存在，创建一个新的
-                session = ChatSession(
-                    id=session_id,
-                    user_id=user_id,
-                    title="新的对话"
+            if not existing_session or existing_session.deleted_at is not None:
+                # 会话不存在或已删除：拒绝追加，不得重建
+                logger.warning(
+                    f"【数据库会话管理】会话 {session_id} 不存在或已删除，拒绝追加消息（F03 防复活）"
                 )
-                db.add(session)
-                await db.commit()
-                await db.refresh(session)
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="会话不存在或已删除",
+                )
 
-            # 检查是否是新会话且标题为默认值，如果是则更新为用户的第一个问题
+            if existing_session.user_id != user_id:
+                logger.warning(f"【数据库会话管理】会话 {session_id} 不属于用户 {user_id}，无法添加消息")
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="当前会话不属于你，无法添加消息",
+                )
+            session = existing_session
+
+            # 标题仍是默认值时，用首个问题做摘要（仅针对已存在会话，不自动创建）
             if session.title == "新的对话":
-                # 生成用户问题的摘要作为标题（截取前30个字符）
                 title_summary = user_message[:30].strip()
                 if len(user_message) > 30:
                     title_summary += "..."
@@ -157,39 +167,51 @@ class DatabaseSessionManager:
                 ).first()
             )
 
-            if session:
+            if session and session.deleted_at is None:
                 # 该会话下的运行 ID（AgentRun.session_id 为普通字段）
                 run_ids = select(AgentRun.id).where(AgentRun.session_id == session_id)
                 await db.execute(delete(AgentFeedback).where(AgentFeedback.run_id.in_(run_ids)))
                 await db.execute(delete(AgentStep).where(AgentStep.run_id.in_(run_ids)))
                 await db.execute(delete(AgentRun).where(AgentRun.session_id == session_id))
-                # 删除消息与会话
+                # 删除消息
                 await db.execute(delete(ChatMessage).where(ChatMessage.session_id == session_id))
-                await db.delete(session)
+                # tombstone：保留最小行（清空标题/元数据），置删除时间，
+                # 防止迟到写入把会话重建出来（F03）
+                session.deleted_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                session.title = None
+                session.metadata_ = None
                 await db.commit()
                 logger.info(
-                    f"【数据库会话管理】会话 {session_id} 及其关联数据已清除，属于用户: {user_id}"
+                    f"【数据库会话管理】会话 {session_id} 及其关联数据已清除（tombstone），属于用户: {user_id}"
                 )
 
     async def get_all_session_ids(self, user_id: Optional[str] = None) -> List[str]:
-        """获取所有会话 ID，如果提供了 user_id，则只返回该用户的会话"""
+        """获取所有会话 ID，如果提供了 user_id，则只返回该用户的会话（不含已删除）"""
         async with AsyncSessionLocal() as db:
             if user_id:
                 sessions = await db.run_sync(
-                    lambda session: session.query(ChatSession).filter(ChatSession.user_id == user_id).all()
+                    lambda session: session.query(ChatSession).filter(
+                        ChatSession.user_id == user_id,
+                        ChatSession.deleted_at.is_(None),
+                    ).all()
                 )
             else:
                 sessions = await db.run_sync(
-                    lambda session: session.query(ChatSession).all()
+                    lambda session: session.query(ChatSession).filter(
+                        ChatSession.deleted_at.is_(None),
+                    ).all()
                 )
             # run_sync 的 Query 结果未经 ORM 注解，mypy 把字段推断为 Column[str]
             return [session.id for session in sessions]  # type: ignore[misc]
 
     async def get_user_sessions(self, user_id: str) -> List[Dict]:
-        """获取用户所有会话详细信息"""
+        """获取用户所有会话详细信息（不含已删除）"""
         async with AsyncSessionLocal() as db:
             sessions = await db.run_sync(
-                lambda session: session.query(ChatSession).filter(ChatSession.user_id == user_id).all()
+                lambda session: session.query(ChatSession).filter(
+                    ChatSession.user_id == user_id,
+                    ChatSession.deleted_at.is_(None),
+                ).all()
             )
             return [
                 {

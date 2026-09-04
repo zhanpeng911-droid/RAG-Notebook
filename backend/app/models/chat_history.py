@@ -24,6 +24,8 @@ class ChatSession(Base):  # type: ignore[misc,valid-type]  # 同上
     metadata_ = Column(JSON, name="metadata")  # metadata 是 SQL 保留字，加下划线
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    # 删除标记（tombstone）：删除后保留最小行，防止迟到写入重建会话（F03）
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
 
     # 关系：一个会话包含多条消息
     messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan")

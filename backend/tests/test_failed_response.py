@@ -80,6 +80,21 @@ async def test_http_exception_handler_unknown_code_uses_detail():
 
 
 @pytest.mark.asyncio
+async def test_http_exception_handler_preserves_retry_after_and_www_authenticate():
+    """429 Retry-After 与 401 WWW-Authenticate 必须在异常处理响应中保留（F10）。"""
+    resp429 = await fr.http_exception_handler(
+        _request(), HTTPException(status_code=429, detail="限流", headers={"Retry-After": "60"}))
+    assert resp429.status_code == 429
+    assert resp429.headers.get("Retry-After") == "60"
+
+    resp401 = await fr.http_exception_handler(
+        _request(), HTTPException(status_code=401, detail="未登录",
+                                 headers={"WWW-Authenticate": "Bearer"}))
+    assert resp401.status_code == 401
+    assert resp401.headers.get("WWW-Authenticate") == "Bearer"
+
+
+@pytest.mark.asyncio
 async def test_validation_exception_handler_friendly_fields():
     exc = RequestValidationError([
         {"loc": ("body", "age"), "msg": "field required", "type": "missing"},

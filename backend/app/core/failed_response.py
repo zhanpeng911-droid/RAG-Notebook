@@ -140,9 +140,14 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         extra={"path": str(request.url), "method": request.method}
     )
 
+    # 保留框架异常的合法响应头（Retry-After、WWW-Authenticate 等），
+    # 避免限流 429 的 Retry-After 在异常处理器中丢失（F10）
+    headers = dict(exc.headers or {})
+
     return JSONResponse(
         status_code=exc.status_code,
-        content={"code": exc.status_code, "message": friendly_msg, "data": None}
+        content={"code": exc.status_code, "message": friendly_msg, "data": None},
+        headers=headers or None,
     )
 
 
