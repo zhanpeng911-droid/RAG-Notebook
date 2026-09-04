@@ -117,6 +117,24 @@ class DocumentIndexRepository:
         await self.session.flush()
         logger.info(f"【文档索引】更新状态: id={doc_id}, status={status.value}")
 
+    async def claim_for_indexing(self, doc_id: str) -> bool:
+        """原子抢占 INDEXING：仅当当前状态为 pending_index 时成功。
+
+        两个 worker 同时领取同一文档时只有一个拿到（rowcount=1），
+        另一个安全退出；已处于终态/正在索引的重复投递不再进入 INDEXING。
+        """
+        result = await self.session.execute(
+            update(DocumentIndex)
+            .where(DocumentIndex.id == doc_id)
+            .where(DocumentIndex.status == DocumentIndexStatus.PENDING_INDEX)
+            .values(
+                status=DocumentIndexStatus.INDEXING,
+                updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            )
+        )
+        await self.session.flush()
+        return result.rowcount > 0
+
     async def increment_retry(self, doc_id: str) -> None:
         """增加重试次数"""
         result = await self.session.execute(

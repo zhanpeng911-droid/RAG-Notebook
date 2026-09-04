@@ -276,15 +276,34 @@ async def save_uploaded_file(
                 "duplicate": False,
             }
 
-        # 空文档/空切片等通常不可自动重试的失败：DB 已落 index_failed
+        if sync_status == DocumentIndexStatus.INDEX_FAILED:
+            # 空文档/空切片等通常不可自动重试的失败：DB 已落 index_failed
+            return {
+                "document_id": doc.id,
+                "filename": filename,
+                "status": DocumentIndexStatus.INDEX_FAILED.value,
+                "message": "文件已保存，但索引失败（文件内容为空或无法解析）",
+                "retry_scheduled": False,
+                "duplicate": False,
+            }
+
+        # INDEXING/PENDING_INDEX：被并发 worker 抢占，正在处理中（响应与 DB 一致）
         return {
             "document_id": doc.id,
             "filename": filename,
-            "status": DocumentIndexStatus.INDEX_FAILED.value,
-            "message": "文件已保存，但索引失败（文件内容为空或无法解析）",
-            "retry_scheduled": False,
+            "status": DocumentIndexStatus.PENDING_INDEX.value,
+            "message": "文件已保存，索引处理中",
             "duplicate": False,
         }
+
+
+def _stable_chunk_ids(user_id: str, document_id: str, split_docs) -> List[str]:
+    """稳定 chunk ID：所有者 + 文档ID + 版本 + 序号。
+
+    重跑同一文档生成相同 ID，Chroma upsert 覆盖而非追加，
+    重复投递/两个 worker 重试不会产生重复有效向量。
+    """
+    return [f"{user_id}:{document_id}:v1:{i}" for i in range(len(split_docs))]
 
 
 async def _sync_index(document_id: str, user_id: str) -> DocumentIndexStatus:
@@ -301,7 +320,12 @@ async def _sync_index(document_id: str, user_id: str) -> DocumentIndexStatus:
         repo = DocumentIndexRepository(session)
 
         try:
-            await repo.update_status(document_id, DocumentIndexStatus.INDEXING)
+            # 原子抢占 INDEXING：仅 pending_index 可进入；并发 worker 重复投递安全退出
+            if not await repo.claim_for_indexing(document_id):
+                doc_now = await repo.get_by_id(document_id, user_id)
+                await session.commit()
+                return doc_now.status if doc_now else DocumentIndexStatus.INDEX_FAILED
+
             await session.commit()
 
             doc = await repo.get_by_id(document_id, user_id)
@@ -342,8 +366,11 @@ async def _sync_index(document_id: str, user_id: str) -> DocumentIndexStatus:
                 await session.commit()
                 return DocumentIndexStatus.INDEX_FAILED
 
-            # 写入向量数据库
-            await asyncio.to_thread(store.vectors_store.add_documents, split_docs)
+            # 写入向量数据库（稳定 chunk ID，重复执行走 upsert 不产生重复向量）
+            chunk_ids = _stable_chunk_ids(user_id, document_id, split_docs)
+            await asyncio.to_thread(
+                store.vectors_store.add_documents, split_docs, ids=chunk_ids
+            )
 
             # 保存 MD5 记录
             await store.save_md5_hex(doc.md5, doc.filename, doc.original_filename, user_id)
@@ -486,6 +513,10 @@ async def delete_index_record(document_id: str, user_id: str, delete_file: bool 
         saved_md5 = doc.md5
         saved_status = doc.status
 
+        # 先置为 DELETING：并发索引任务无法再 claim，读取侧可见"删除中"
+        await repo.update_status(document_id, DocumentIndexStatus.DELETING)
+        await session.commit()
+
         # 如果文档已索引或正在索引，清理向量和旧 MD5 记录
         if saved_status in (DocumentIndexStatus.INDEXED, DocumentIndexStatus.INDEXING) and saved_md5:
             try:
@@ -495,7 +526,17 @@ async def delete_index_record(document_id: str, user_id: str, delete_file: bool 
                 await asyncio.to_thread(store.vectors_store.delete, where=where_clause)
                 logger.info(f"【文档索引】已删除向量: user_id={user_id}, md5={saved_md5}")
             except Exception as e:
-                logger.warning(f"【文档索引】删除向量失败（可能未索引）: {e}")
+                # 向量清理未完成：保留 deleting 记录（可重试），不得先删 SQL 记录导致
+                # "向量仍可检索但记录已删除"的复活/残留
+                error_msg = str(e)[:300]
+                logger.error(f"【文档索引】向量清理失败，保留 deleting 记录: {error_msg}")
+                await repo.update_status(
+                    document_id,
+                    DocumentIndexStatus.DELETING,
+                    error_message=f"向量清理失败: {error_msg}",
+                )
+                await session.commit()
+                return {"success": False, "message": "向量清理未完成，记录保留（deleting），可重试"}
 
             try:
                 from app.services.knowledge_record_service import KnowledgeRecordService
@@ -516,8 +557,17 @@ async def delete_index_record(document_id: str, user_id: str, delete_file: bool 
         return {"success": True, "message": "文档已删除"}
 
 
+def _is_within(child_real: str, parent_real: str) -> bool:
+    """路径级目录边界判断：child 必须在 parent 内（处理同前缀兄弟目录、目录本身、跨盘符）。"""
+    try:
+        return os.path.commonpath([child_real, parent_real]) == parent_real
+    except ValueError:
+        # 跨盘符（Windows）等无法求公共路径 → 判定为不在目录内
+        return False
+
+
 def _safe_delete_physical_file(file_path: str, user_id: str) -> None:
-    """安全删除物理文件，校验 realpath 必须在用户目录内"""
+    """安全删除物理文件，校验 realpath 必须在用户目录内且为普通文件"""
     if not file_path or not os.path.exists(file_path):
         return
 
@@ -526,11 +576,19 @@ def _safe_delete_physical_file(file_path: str, user_id: str) -> None:
         real_file = os.path.realpath(file_path)
         real_user_dir = os.path.realpath(user_dir)
 
-        if not real_file.startswith(real_user_dir):
+        # startswith 不是可靠目录边界（/user1 与 /user10、目录本身等），
+        # 改用 commonpath 路径级比较；且仅删除普通文件（不删目录/符号链接目标）
+        if real_file == real_user_dir:
+            logger.warning(f"【文档索引】拒绝删除用户目录本身: {file_path}")
+            return
+        if not _is_within(real_file, real_user_dir):
             logger.warning(f"【文档索引】文件路径不在用户目录内，拒绝删除: {file_path}")
             return
+        if not os.path.isfile(real_file):
+            logger.warning(f"【文档索引】目标不是普通文件，拒绝删除: {file_path}")
+            return
 
-        os.unlink(file_path)
+        os.unlink(real_file)
         logger.info(f"【文档索引】已删除物理文件: {file_path}")
     except Exception as e:
         logger.warning(f"【文档索引】删除物理文件失败: {e}")

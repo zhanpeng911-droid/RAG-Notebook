@@ -40,7 +40,11 @@ async def env(tmp_path, monkeypatch):
     monkeypatch.setattr(dis, "get_file_md5_hex_sync", _md5_sync)
 
     # 向量库假实例（conftest 将其模块整体 mock，直接替换类属性入口）
-    box = {"vectors": NS(delete_calls=[])}
+    box = {"vectors": NS(delete_calls=[]), "add_docs_calls": []}
+
+    def _add_docs(docs, **kwargs):
+        box["add_docs_calls"].append((docs, kwargs.get("ids")))
+
     store_impl = NS()
 
     async def _default_ok_loader(path, md5=None, user_id=None):
@@ -50,7 +54,7 @@ async def env(tmp_path, monkeypatch):
     store_impl.split_documents_sync = lambda docs: docs
     store_impl.save_md5_hex_seen = []
     store_impl.vectors_store = NS(
-        add_documents=lambda docs: None,
+        add_documents=_add_docs,
         delete=lambda where=None, ids=None: box["vectors"].delete_calls.append(where),
     )
 
@@ -93,7 +97,7 @@ async def env(tmp_path, monkeypatch):
 
     yield NS(engine=engine, tmp=tmp_path, store=store_impl,
              vectors=box["vectors"], records=record_box["deleted"],
-             delays=delay_box)
+             delays=delay_box, add_docs=box["add_docs_calls"])
     await engine.dispose()
 
 
@@ -253,6 +257,14 @@ async def test_sync_index_marks_failed_when_loader_empty(env):
     made = await dis.save_uploaded_file(_upload("empty.txt"), "u-empty")
     doc_id = made["document_id"]
 
+    # 模拟重新索引：回到 pending_index（claim 只认 pending_index，已 indexed 不重复执行）
+    import app.db.db_config as db_cfg
+    from app.repositories.document_index_repository import DocumentIndexRepository
+    async with db_cfg.AsyncSessionLocal() as s:
+        await DocumentIndexRepository(s).update_status(
+            doc_id, DocumentIndexStatus.PENDING_INDEX)
+        await s.commit()
+
     async def empty_loader(path, md5=None, user_id=None):
         return []
     env.store.get_file_document = empty_loader
@@ -352,6 +364,112 @@ async def test_clean_user_records_counts_and_clears(env):
 
     empties = await dis.clean_user_index_records("u-clean")
     assert empties["deleted_count"] == 0 and "没有" in empties["message"]
+
+
+# ---------- 幂等 / 原子抢占 / 删除状态（批次5B） ----------
+
+@pytest.mark.asyncio
+async def test_upload_writes_stable_chunk_ids(env):
+    out = await dis.save_uploaded_file(_upload("ids.txt"), "u-ids")
+    assert out["status"] == "indexed"
+    assert len(env.add_docs) == 1
+    _docs, ids = env.add_docs[0]
+    assert ids is not None and len(ids) == 1
+    # 格式：{user_id}:{doc_id}:v1:{seq}
+    assert ids[0].startswith("u-ids:")
+    assert ":v1:0" in ids[0]
+
+
+@pytest.mark.asyncio
+async def test_claim_for_indexing_only_first_wins(env):
+    made = await dis.save_uploaded_file(_upload("claim.txt"), "u-claim")
+    doc_id = made["document_id"]
+    # 初始为 indexed，先转回 pending_index
+    import app.db.db_config as db_cfg
+    from app.repositories.document_index_repository import DocumentIndexRepository
+    async with db_cfg.AsyncSessionLocal() as s:
+        repo = DocumentIndexRepository(s)
+        await repo.update_status(doc_id, DocumentIndexStatus.PENDING_INDEX)
+        await s.commit()
+
+    # 两个 worker 同时抢占：只有一个成功
+    async with db_cfg.AsyncSessionLocal() as s:
+        repo = DocumentIndexRepository(s)
+        first = await repo.claim_for_indexing(doc_id)
+        await s.commit()
+    async with db_cfg.AsyncSessionLocal() as s:
+        repo = DocumentIndexRepository(s)
+        second = await repo.claim_for_indexing(doc_id)
+        await s.commit()
+
+    assert first is True
+    assert second is False
+    async with db_cfg.AsyncSessionLocal() as s:
+        repo = DocumentIndexRepository(s)
+        doc = await repo.get_by_id(doc_id, "u-claim")
+        assert doc.status == DocumentIndexStatus.INDEXING
+
+
+@pytest.mark.asyncio
+async def test_sync_index_claim_race_exits_without_indexing(env):
+    """已 indexed 的文档再次 _sync_index：claim 失败，不重复写入向量。"""
+    made = await dis.save_uploaded_file(_upload("race.txt"), "u-race")
+    doc_id = made["document_id"]
+    before = len(env.add_docs)
+
+    status = await dis._sync_index(doc_id, "u-race")
+    assert status == DocumentIndexStatus.INDEXED
+    assert len(env.add_docs) == before  # 未重复写向量
+
+
+@pytest.mark.asyncio
+async def test_delete_vector_failure_keeps_deleting_record(env):
+    made = await dis.save_uploaded_file(_upload("delkeep.txt"), "u-delkeep")
+    doc_id = made["document_id"]
+
+    # 向量删除失败 → 保留 deleting 记录，不删 SQL
+    def _boom_delete(where=None, ids=None):
+        raise RuntimeError("chroma down")
+    env.store.vectors_store.delete = _boom_delete
+
+    out = await dis.delete_index_record(doc_id, "u-delkeep")
+    assert out["success"] is False
+    assert "deleting" in out["message"]
+
+    rows = await dis.get_user_index_status("u-delkeep")
+    row = next(x for x in rows if x["id"] == doc_id)
+    assert row["status"] == "deleting"
+
+    # 向量恢复后再次删除 → 成功
+    env.store.vectors_store.delete = lambda where=None, ids=None: None
+    out2 = await dis.delete_index_record(doc_id, "u-delkeep")
+    assert out2["success"] is True
+    rows2 = await dis.get_user_index_status("u-delkeep")
+    assert all(x["id"] != doc_id for x in rows2)
+
+
+# ---------- 路径安全（批次5B） ----------
+
+def test_safe_delete_rejects_sibling_dir_prefix():
+    """/user1 与 /user10 前缀相同但互为兄弟目录：commonpath 必须拒绝。"""
+    import os
+    import tempfile
+    root = tempfile.mkdtemp()
+    user1 = os.path.join(root, "user1")
+    user10 = os.path.join(root, "user10")
+    os.makedirs(user1, exist_ok=True)
+    os.makedirs(user10, exist_ok=True)
+    victim = os.path.join(user10, "x.txt")
+    with open(victim, "w") as f:
+        f.write("data")
+
+    # 用 user1 的目录做边界：victim 在 user10，必须拒绝
+    assert dis._is_within(os.path.realpath(victim), os.path.realpath(user1)) is False
+    assert dis._is_within(os.path.realpath(user1), os.path.realpath(user1)) is True
+
+    # 目录本身不得删除
+    assert dis._is_within(os.path.realpath(user1), os.path.realpath(user1)) is True
+    assert os.path.exists(victim)  # 未被误删
 
 
 # ---------- 健康检查缓存 ----------

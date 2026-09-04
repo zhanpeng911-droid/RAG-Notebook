@@ -19,6 +19,7 @@ class DocumentIndexStatus(str, PyEnum):
     INDEXING = "indexing"           # 正在后台索引
     INDEXED = "indexed"             # 已完成索引，可用于检索
     INDEX_FAILED = "index_failed"   # 索引失败，可重试
+    DELETING = "deleting"           # 删除中（向量清理未完成前保留记录，可重试清理）
 
 
 class DocumentIndex(Base):

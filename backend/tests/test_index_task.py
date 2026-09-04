@@ -48,7 +48,10 @@ async def env(tmp_path, monkeypatch):
     store_impl = NS(
         get_file_document=None,
         split_documents_sync=lambda docs: docs,
-        vectors_store=NS(add_documents=lambda docs: None),
+        add_ids=[],
+        vectors_store=NS(
+            add_documents=lambda docs, **kwargs: store_impl.add_ids.append(kwargs.get("ids"))
+        ),
         save_md5_hex_seen=[],
     )
 

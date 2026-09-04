@@ -79,8 +79,10 @@ async def _index_document_async(task, document_id: str, user_id: str):
             await session.commit()
             return
 
-        # 更新状态为 indexing
-        await repo.update_status(document_id, DocumentIndexStatus.INDEXING)
+        # 更新状态为 indexing（原子抢占：仅 pending_index 可进入；重复投递安全退出）
+        if not await repo.claim_for_indexing(document_id):
+            logger.info(f"【后台索引】未抢占到索引权（可能已在执行），跳过: id={document_id}")
+            return
         await session.commit()
 
         try:
@@ -128,7 +130,12 @@ async def _index_document_async(task, document_id: str, user_id: str):
 
             # 写入向量数据库（这一步会触发真实的 embedding 调用）
             # 如果 embedding 服务不可用，这里会抛出异常
-            await asyncio.to_thread(store.vectors_store.add_documents, split_docs)
+            # 稳定 chunk ID：重复执行 upsert 覆盖，不产生重复向量
+            from app.services.document_index_service import _stable_chunk_ids
+            chunk_ids = _stable_chunk_ids(user_id, document_id, split_docs)
+            await asyncio.to_thread(
+                store.vectors_store.add_documents, split_docs, ids=chunk_ids
+            )
 
             # 保存 MD5 记录
             await store.save_md5_hex(doc.md5, doc.filename, doc.original_filename, user_id)

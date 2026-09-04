@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import (AsyncSession, async_sessionmaker,
                                     create_async_engine)
 
 from app.models.chat_history import Base, ChatSession, ChatMessage
+from app.models.agent_run import AgentRun, AgentStep, AgentFeedback  # noqa: F401  注册 agent 表
 from app.services.database_session_manager import DatabaseSessionManager
 from fastapi import HTTPException as FE
 
@@ -105,6 +106,38 @@ async def test_clear_session_existing(factory):
 async def test_clear_session_missing_noop(factory):
     mgr = DatabaseSessionManager()
     await mgr.clear_session("s-nope", USER_A)  # 不抛错
+
+
+@pytest.mark.asyncio
+async def test_clear_session_cascades_agent_related_data(factory):
+    """删除会话必须同时清理关联的 Agent 运行/步骤/反馈（无外键级联，须显式删除）。"""
+    async with factory() as db:
+        run = AgentRun(id="run-1", user_id=USER_A, session_id="s1", query="q")
+        db.add(run)
+        await db.flush()
+        db.add(AgentStep(run_id="run-1", user_id=USER_A, phase="retrieving"))
+        db.add(AgentFeedback(run_id="run-1", user_id=USER_A, rating=5))
+        await db.commit()
+
+    mgr = DatabaseSessionManager()
+    await mgr.clear_session("s1", USER_A)
+
+    async with factory() as db:
+        from sqlalchemy import select
+        assert (await db.execute(select(AgentRun).where(AgentRun.id == "run-1"))).scalar_one_or_none() is None
+        assert (await db.execute(select(AgentStep).where(AgentStep.run_id == "run-1"))).scalar_one_or_none() is None
+        assert (await db.execute(select(AgentFeedback).where(AgentFeedback.run_id == "run-1"))).scalar_one_or_none() is None
+        assert (await db.execute(select(ChatMessage).where(ChatMessage.session_id == "s1"))).scalars().all() == []
+        assert (await db.execute(select(ChatSession).where(ChatSession.id == "s1"))).scalar_one_or_none() is None
+
+
+@pytest.mark.asyncio
+async def test_clear_session_other_user_does_not_delete(factory):
+    """B 不能删除 A 的会话（clear_session 内部校验归属）。"""
+    mgr = DatabaseSessionManager()
+    await mgr.clear_session("s1", USER_B)  # 不属于 B：不删除
+    out = await mgr.get_session("s1", USER_A)  # A 的会话仍在
+    assert out["history"] == [("问", "答")]
 
 
 @pytest.mark.asyncio

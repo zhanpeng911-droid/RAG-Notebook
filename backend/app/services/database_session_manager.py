@@ -14,8 +14,11 @@
 import asyncio
 from typing import Dict, List, Tuple, Optional
 
+from sqlalchemy import delete, select
+
 from app.db.db_config import AsyncSessionLocal
 from app.models.chat_history import ChatSession, ChatMessage
+from app.models.agent_run import AgentFeedback, AgentRun, AgentStep
 from app.core.logger_handler import logger
 
 
@@ -140,18 +143,33 @@ class DatabaseSessionManager:
         return session_data.get("history", [])
 
     async def clear_session(self, session_id: str, user_id: str):
-        """清除会话"""
+        """清除会话及其关联数据（Agent 运行/步骤/反馈 + 聊天消息）。
+
+        AgentRun/AgentStep/AgentFeedback 与会话只是普通字段关联（无外键级联），
+        必须在此显式删除，否则会留下孤儿数据。全部在同一事务内完成：
+        先删关联 Agent 数据，再删消息与会话；会话必须属于当前用户。
+        """
         async with AsyncSessionLocal() as db:
             # 查找会话，验证属于该用户
             session = await db.run_sync(
-                lambda session: session.query(ChatSession).filter(ChatSession.id == session_id, ChatSession.user_id == user_id).first()
+                lambda s: s.query(ChatSession).filter(
+                    ChatSession.id == session_id, ChatSession.user_id == user_id
+                ).first()
             )
 
             if session:
-                # 删除会话（级联删除消息）
+                # 该会话下的运行 ID（AgentRun.session_id 为普通字段）
+                run_ids = select(AgentRun.id).where(AgentRun.session_id == session_id)
+                await db.execute(delete(AgentFeedback).where(AgentFeedback.run_id.in_(run_ids)))
+                await db.execute(delete(AgentStep).where(AgentStep.run_id.in_(run_ids)))
+                await db.execute(delete(AgentRun).where(AgentRun.session_id == session_id))
+                # 删除消息与会话
+                await db.execute(delete(ChatMessage).where(ChatMessage.session_id == session_id))
                 await db.delete(session)
                 await db.commit()
-                logger.info(f"【数据库会话管理】会话 {session_id} 已清除，属于用户: {user_id}")
+                logger.info(
+                    f"【数据库会话管理】会话 {session_id} 及其关联数据已清除，属于用户: {user_id}"
+                )
 
     async def get_all_session_ids(self, user_id: Optional[str] = None) -> List[str]:
         """获取所有会话 ID，如果提供了 user_id，则只返回该用户的会话"""
