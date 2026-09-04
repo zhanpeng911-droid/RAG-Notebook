@@ -20,7 +20,12 @@ from rest_framework.views import APIView
 
 from ..utils.cache_utils import cache_user_info, clear_user_cache
 from ..utils.rate_limit_utils import rate_limit
-from .authentications import JWTAuthentication, JWTTokenGenerator
+from .authentications import (
+    JWTAuthentication,
+    JWTTokenGenerator,
+    RevocationServiceUnavailable,
+)
+from .blacklist import RevocationUnavailable
 from .fatherClass import AuthenticatedView
 from .serializers import (
     LoginSerializer,
@@ -159,16 +164,27 @@ class ResetPasswordView(AuthenticatedView):
 
         serializer = ResetPasswordSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
-            # 获取旧token并添加到黑名单
+            # 旧 token 撤销先行：撤销失败则整体失败关闭（503），不进入密码修改，
+            # 避免"密码已改但旧会话未撤销"的误导性成功
             auth_header = request.headers.get('Authorization')
+            old_token = None
             if auth_header:
                 try:
                     auth_type, token = auth_header.split(' ', 1)
                     if auth_type.lower() == 'bearer':
-                        jwttoken.blacklist_token(token)
+                        old_token = token
                 except ValueError:
                     pass
-            
+
+            try:
+                if old_token:
+                    jwttoken.blacklist_token(old_token)
+            except RevocationUnavailable:
+                return Response(
+                    {"detail": "撤销服务不可用，密码未修改，请稍后重试"},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+
             user = serializer.validated_data.get('user')  # 从序列化器中获取用户对象
             user.set_password(serializer.validated_data.get('new_password'))  # 设置新密码
             user.save()  # 保存用户对象
@@ -228,8 +244,13 @@ class TokenRefreshView(APIView):
         
         try:
             new_token, expire_time = jwttoken.refresh_token(token)
-            # 将旧token添加到黑名单
-            jwttoken.blacklist_token(token)
+            # 撤销旧 token；撤销失败则不返回"刷新成功"（失败关闭）
+            try:
+                jwttoken.blacklist_token(token)
+            except RevocationUnavailable:
+                return Response({
+                    "detail": "刷新失败：撤销服务不可用，请稍后重试"
+                }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
             return Response({
                 "message": "Token刷新成功",
                 "token": new_token,
@@ -239,6 +260,10 @@ class TokenRefreshView(APIView):
             return Response({
                 "detail": str(e)
             }, status=status.HTTP_401_UNAUTHORIZED)
+        except RevocationServiceUnavailable:
+            return Response({
+                "detail": "撤销服务不可用，请稍后再试"
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         except Exception:
             return Response({
                 "detail": "Token刷新失败"
@@ -323,16 +348,26 @@ class UserUpdateView(AuthenticatedView):
         """
         serializer = UserUpdateSerializer(data=request.data, instance=request.user, context={'request': request})
         if serializer.is_valid():
-            # 获取旧token并添加到黑名单
+            # 旧 token 撤销先行（失败关闭，503）
             auth_header = request.headers.get('Authorization')
+            old_token = None
             if auth_header:
                 try:
                     auth_type, token = auth_header.split(' ', 1)
                     if auth_type.lower() == 'bearer':
-                        jwttoken.blacklist_token(token)
+                        old_token = token
                 except ValueError:
                     pass
-            
+
+            try:
+                if old_token:
+                    jwttoken.blacklist_token(old_token)
+            except RevocationUnavailable:
+                return Response(
+                    {"detail": "撤销服务不可用，资料未更新，请稍后重试"},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+
             user = serializer.save()  # 调用序列化器的update方法更新用户
             # 清除用户缓存
             clear_user_cache(user.uuid)
@@ -364,14 +399,24 @@ class UserLogOutView(AuthenticatedView):
         :param request: post请求
         :return: Response对象，包含注销成功信息
         """
-        # 获取旧token并添加到黑名单
+        # 获取旧token并添加到黑名单（撤销失败不得伪报"注销成功"）
         auth_header = request.headers.get('Authorization')
+        old_token = None
         if auth_header:
             try:
                 auth_type, token = auth_header.split(' ', 1)
                 if auth_type.lower() == 'bearer':
-                    jwttoken.blacklist_token(token)
+                    old_token = token
             except ValueError:
                 pass
+
+        try:
+            if old_token:
+                jwttoken.blacklist_token(old_token)
+        except RevocationUnavailable:
+            return Response(
+                {"detail": "注销失败：撤销服务不可用，请稍后重试"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
         return Response({"message": "用户注销成功"}, status=status.HTTP_200_OK)

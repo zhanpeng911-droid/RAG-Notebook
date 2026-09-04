@@ -37,10 +37,12 @@
 
 | 项 | 值 |
 |----|----|
-| Redis/Cache key | `blacklist:{jti}` |
+| Redis/Cache key | `blacklist:{jti}`（Django 新写入；旧版 `:1:blacklist:{jti}` 过渡期兼容读取） |
 | Django cache 前缀 | 可能为 `:1:blacklist:{jti}`（django-redis 默认） |
 | FastAPI 检查 | 同时查 `blacklist:{jti}` 与 `:1:blacklist:{jti}` |
 | TTL | token 剩余有效期（秒） |
+| 生产共享 Redis | `REDIS_CACHE_URL` 必填，**禁止自动降级 LocMemCache**（settings.py 强制） |
+| 撤销失败语义 | **失败关闭**：Redis 不可用时认证相关请求返回 503，不得静默放行已撤销 token，也不得伪报"已撤销成功" |
 
 ## 时钟偏差
 
@@ -53,9 +55,14 @@
 | 签名无效 / 无法解码 | 401 |
 | 过期 | 401 |
 | 在黑名单 | 401 `Token has been revoked` |
-| 黑名单 Redis 不可用且检查开启 | 503 |
+| 黑名单 Redis 不可用且检查开启 | 503（两服务一致，失败关闭） |
 | payload 无 `user_id` | 401 |
+| 注销/刷新/改密码时撤销写入失败 | 503，不得返回"成功" |
 
 ## 集成验证
 
-见 `backend/tests/test_jwt_contract.py`：用与 Django 相同的 payload/算法签发，FastAPI `decode_django_jwt` 必须成功解析。
+- 双服务共享真实测试 Redis 的撤销契约：`backend/tests/test_jwt_contract.py`
+  （需要 `REDIS_TEST_URL` 环境变量指向共享测试 Redis，未配置时跳过；CI 集成 job 注入）。
+  覆盖：Django 写入的 `blacklist:{jti}` 与旧版 `:1:blacklist:{jti}` 都能被 FastAPI 撤销检查拒绝。
+- FastAPI 撤销失败关闭：`backend/tests/test_auth_utils.py`。
+- Django 撤销失败关闭与视图 503：`DjangoUserService/apps/user/tests.py`（RevocationFailClosedTests）。

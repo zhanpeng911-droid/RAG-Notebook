@@ -143,33 +143,34 @@ DATABASES = {
     }
 }
 
-# 缓存设置：Redis 可用时用 Redis，否则降级到本地内存
-_redis_url = os.getenv('REDIS_CACHE_URL')
-if _redis_url:
-    try:
-        import redis
-        _r = redis.from_url(_redis_url, socket_connect_timeout=1)
-        _r.ping()
-        CACHES = {
-            'default': {
-                'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-                'LOCATION': _redis_url,
-            }
+# 缓存设置：撤销/限流必须跨进程共享（Redis）。
+# 生产环境强制固定共享 Redis，禁止自动降级 LocMemCache——
+# 否则已撤销 token 会在本进程被放行、FastAPI 也无法共享撤销结果。
+REDIS_CACHE_URL = os.getenv('REDIS_CACHE_URL', '')
+if DJANGO_ENV in {"prod", "production"}:
+    if not REDIS_CACHE_URL:
+        raise ImproperlyConfigured(
+            "生产环境必须配置 REDIS_CACHE_URL（共享 Redis），禁止降级 LocMemCache。"
+        )
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': REDIS_CACHE_URL,
         }
-    except Exception as cache_exc:
-        # 降级 LocMem 会导致 token 吊销/限流按进程隔离，必须显式暴露
-        import logging
-        _logger = logging.getLogger(__name__)
-        _logger.error("Redis 缓存不可用，降级为 LocMemCache（黑名单/限流将按进程隔离）: %s", cache_exc)
-        CACHES = {
-            'default': {
-                'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-            }
+    }
+elif REDIS_CACHE_URL:
+    # 开发/测试显式配置 Redis 时使用；启动失败不再永久降级（由调用方失败关闭）
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': REDIS_CACHE_URL,
         }
+    }
 else:
     CACHES = {
         'default': {
             'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'Notebook-django-dev',
         }
     }
 

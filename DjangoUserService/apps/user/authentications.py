@@ -15,15 +15,24 @@ import uuid
 
 import jwt
 from django.conf import settings
-from django.core.cache import cache
 from rest_framework.authentication import BaseAuthentication
-from rest_framework.exceptions import AuthenticationFailed
+from rest_framework.exceptions import APIException, AuthenticationFailed
 
+from .blacklist import RevocationUnavailable, is_blacklisted
+from .blacklist import blacklist_token as _blacklist
 from .models import User, UserStatusChoice
 
 # 从jwt模块导入异常类
 ExpiredSignatureError = jwt.ExpiredSignatureError
 InvalidTokenError = getattr(jwt, 'InvalidTokenError', Exception)
+
+
+class RevocationServiceUnavailable(APIException):
+    """撤销服务（Redis）不可用 —— 认证请求失败关闭，返回 503。"""
+    status_code = 503
+    default_detail = "撤销服务不可用，请稍后再试"
+    default_code = "revocation_unavailable"
+
 
 class JWTAuthentication(BaseAuthentication):
     """JWT认证类，用于验证用户Token"""
@@ -63,10 +72,13 @@ class JWTAuthentication(BaseAuthentication):
         except Exception:
             raise AuthenticationFailed('无效的Token')
         
-        # 检查Token是否在黑名单中
+        # 检查Token是否在黑名单中（Redis 不可用时失败关闭，返回 503）
         jti = payload.get('jti')
-        if JWTTokenGenerator._is_blacklisted(jti):
-            raise AuthenticationFailed('Token已被撤销')
+        try:
+            if is_blacklisted(jti):
+                raise AuthenticationFailed('Token已被撤销')
+        except RevocationUnavailable:
+            raise RevocationServiceUnavailable()
         
         # 从payload中获取用户ID
         user_id = payload.get('user_id')
@@ -96,8 +108,8 @@ class JWTTokenGenerator:
 
     @staticmethod
     def _is_blacklisted(jti: str | None) -> bool:
-        """检查 token jti 是否已进入黑名单"""
-        return bool(jti and cache.get(f'blacklist:{jti}'))
+        """检查 token jti 是否已进入黑名单（失败关闭：不可用时抛异常）"""
+        return is_blacklisted(jti)
 
     @staticmethod
     def generate_token(user) -> tuple[str, int]:
@@ -162,42 +174,21 @@ class JWTTokenGenerator:
              
         except ExpiredSignatureError:
             raise AuthenticationFailed('Token已过期，请重新登录')
+        except RevocationUnavailable:
+            # 撤销检查不可用：失败关闭，返回 503 而非把异常伪装成 401
+            raise RevocationServiceUnavailable()
         except AuthenticationFailed:
             raise
         except Exception:
             raise AuthenticationFailed('Token刷新失败')
     
     @staticmethod
-    def blacklist_token(token):
+    def blacklist_token(token) -> bool:
         """
-        将Token添加到黑名单
-        :param token: 要黑名单的Token
+        将Token添加到黑名单（共享 Redis，失败关闭）。
+
+        返回 True 表示已写入并确认；False 表示无需撤销（无 jti/无法解码）。
+        Redis 不可用时抛 RevocationUnavailable，调用方必须返回 503，
+        不得伪报"已撤销成功"。
         """
-        try:
-            # 解码Token获取jti和过期时间
-            payload = jwt.decode(
-                token,
-                settings.SECRET_KEY,
-                algorithms=['HS256'],
-                options={'verify_exp': False}
-            )
-            
-            jti = payload.get('jti')
-            exp = payload.get('exp')
-            
-            if jti and exp:
-                # 计算Token剩余有效期
-                current_time = int(time.time())
-                ttl = exp - current_time if exp > current_time else 0
-                
-                # 将jti添加到Redis黑名单，设置过期时间为Token剩余有效期
-                cache.set(f'blacklist:{jti}', '1', ttl)
-                # 验证是否成功添加到黑名单
-                if not cache.get(f'blacklist:{jti}'):
-                    # 如果添加失败，尝试使用更长的过期时间
-                    cache.set(f'blacklist:{jti}', '1', 60 * 60 * 24)  # 默认24小时
-        except Exception as e:
-            # 记录异常信息，便于调试
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"黑名单Token失败: {e!s}")
+        return _blacklist(token)
