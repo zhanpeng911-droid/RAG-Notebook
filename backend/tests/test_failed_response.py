@@ -4,6 +4,7 @@
 register_exception_handlers 用假 app 断言注册数量。
 """
 import json
+import importlib
 
 import pytest
 from fastapi import HTTPException
@@ -159,3 +160,69 @@ def test_register_exception_handlers_covers_expected_types():
     assert "SQLAlchemyError" in names
     assert "RAGException" in names
     assert "Exception" in names
+
+
+# ---------- 生产环境脱敏（实际加载环境配置，复现 prod/production 混用根因） ----------
+
+@pytest.fixture
+def reload_fr_with_env(monkeypatch):
+    """按给定环境变量重新加载 failed_response 模块，验证后恢复默认。
+
+    直接 reload 模块让模块级 settings/DEBUG_MODE 从真实环境重新计算，
+    避免只 monkeypatch 最终 DEBUG_MODE 常量而漏掉根因。
+    """
+    from app.config import validator
+
+    def _apply(**env):
+        for key in ("ENV", "DEBUG_MODE", "LOG_LEVEL"):
+            monkeypatch.delenv(key, raising=False)
+        for key, value in env.items():
+            monkeypatch.setenv(key, str(value))
+        validator.get_settings.cache_clear()
+        importlib.reload(fr)
+
+    yield _apply
+
+    validator.get_settings.cache_clear()
+    importlib.reload(fr)
+
+
+@pytest.mark.parametrize("env", ["prod", "production", "PRODUCTION"])
+def test_production_forces_debug_off_even_if_debug_true(reload_fr_with_env, env):
+    reload_fr_with_env(ENV=env, DEBUG_MODE=True)
+
+    assert fr.DEBUG_MODE is False
+
+    exc = RuntimeError("秘密串 sk-" + "c" * 40)
+    import asyncio
+    resp = asyncio.run(fr.general_exception_handler(_request(), exc))
+    body = _body(resp)
+    assert body["data"] is None
+    assert "sk-" not in json.dumps(body)
+
+    val_resp = asyncio.run(fr.validation_exception_handler(
+        _request(), RequestValidationError(
+            [{"loc": ("body", "age"), "msg": "field required", "type": "missing"}])))
+    val_body = _body(val_resp)
+    assert val_body["data"] is None  # 不返回 raw_errors / path
+
+
+def test_dev_keeps_debug_details_when_debug_true(reload_fr_with_env):
+    reload_fr_with_env(ENV="dev", DEBUG_MODE=True)
+    assert fr.DEBUG_MODE is True
+
+    import asyncio
+    resp = asyncio.run(fr.general_exception_handler(_request(), RuntimeError("崩溃")))
+    body = _body(resp)
+    assert body["data"] is not None
+    assert body["data"]["error_type"] == "RuntimeError"
+
+
+def test_dev_debug_off_masks_details(reload_fr_with_env):
+    reload_fr_with_env(ENV="dev", DEBUG_MODE=False)
+    assert fr.DEBUG_MODE is False
+
+    import asyncio
+    resp = asyncio.run(fr.general_exception_handler(_request(), RuntimeError("崩溃")))
+    assert _body(resp)["data"] is None
+

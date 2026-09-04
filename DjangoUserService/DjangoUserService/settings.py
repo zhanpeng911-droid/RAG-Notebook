@@ -30,12 +30,33 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: keep the secret key used in production secret!
 # 该密钥同时用于 JWT 签发/校验，必须与 backend(FastAPI) 的 SECRET_KEY 完全一致（见 docs/JWT_CONTRACT.md）。
 # 缺失时立即失败，避免以 None 密钥静默签发不可校验的 token。
+DJANGO_ENV = os.getenv('DJANGO_ENV', 'dev').strip().lower()
+
+_JWT_PLACEHOLDER_MARKERS = (
+    "replace-me", "change-me", "changeme", "your-secret",
+    "example-secret", "notasecret", "ci-test-secret",
+    "test-secret-key", "test-secret",
+)
+
 SECRET_KEY = os.getenv('JWT_SECRET_KEY')
 if not SECRET_KEY:
     raise ImproperlyConfigured(
         "JWT_SECRET_KEY 环境变量未设置：请在 DjangoUserService/.env 中配置，"
         "且必须与 backend(FastAPI) 的 SECRET_KEY 保持一致（详见 docs/JWT_CONTRACT.md）。"
     )
+
+# 生产环境拒绝占位符与过短密钥；开发和测试配置（DJANGO_ENV != production）不误判为生产。
+# 两服务不得各自生成密钥：Django 与 backend 必须使用同一 JWT_SECRET_KEY / SECRET_KEY。
+if DJANGO_ENV in {"prod", "production"}:
+    if len(SECRET_KEY.encode("utf-8")) < 32:
+        raise ImproperlyConfigured(
+            "JWT_SECRET_KEY 过短（生产要求至少 32 字节随机秘密）。"
+            "生成方式：python -c \"import secrets; print(secrets.token_urlsafe(48))\""
+        )
+    if any(marker in SECRET_KEY.lower() for marker in _JWT_PLACEHOLDER_MARKERS):
+        raise ImproperlyConfigured(
+            "JWT_SECRET_KEY 疑似占位符，生产环境禁止使用占位符密钥，请配置随机生成的秘密。"
+        )
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"

@@ -2,7 +2,7 @@
 启动配置验证 —— 使用 pydantic-settings 定义配置模型，启动时校验关键配置。
 
 校验项：
-- SECRET_KEY: JWT 密钥不能为空
+- SECRET_KEY: JWT 密钥不能为空（生产环境还拒绝占位符与过短值）
 - MYSQL_HOST: MySQL 主机地址
 - REDIS_HOST: Redis 主机地址
 - LLM_TYPE: 必须是 ALIYUN/OLLAMA/OPENAI 之一
@@ -18,12 +18,26 @@ import sys
 from functools import lru_cache
 from typing import List
 
-from pydantic_settings import BaseSettings
-from pydantic_settings import SettingsConfigDict
-from pydantic import field_validator
+from pydantic import ValidationError, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import URL
 
 
 ALLOWED_LLM_TYPES = {"ALIYUN", "OLLAMA", "OPENAI"}
+
+# JWT 生产密钥约束：至少 32 字节，且不得是已知占位符
+JWT_MIN_SECRET_LENGTH = 32
+JWT_PLACEHOLDER_MARKERS = (
+    "replace-me",
+    "change-me",
+    "changeme",
+    "your-secret",
+    "example-secret",
+    "notasecret",
+    "ci-test-secret",
+    "test-secret-key",
+    "test-secret",
+)
 
 
 class AppSettings(BaseSettings):
@@ -32,6 +46,8 @@ class AppSettings(BaseSettings):
     # ==================== 环境配置 ====================
     ENV: str = "dev"
     DEBUG_MODE: bool = True
+    LOG_LEVEL: str = "INFO"
+    """日志级别。异常处理器与统一日志使用。"""
 
     # ==================== JWT 配置 ====================
     SECRET_KEY: str = ""
@@ -150,6 +166,14 @@ class AppSettings(BaseSettings):
         extra="allow",
     )
 
+    @field_validator("ENV", mode="before")
+    @classmethod
+    def normalize_env(cls, v) -> str:
+        """统一环境标识：去除首尾空白并小写，避免 prod/production 混用判错。"""
+        if v is None:
+            return "dev"
+        return str(v).strip().lower()
+
     @field_validator("LLM_TYPE")
     @classmethod
     def validate_llm_type(cls, v: str) -> str:
@@ -158,13 +182,29 @@ class AppSettings(BaseSettings):
         return v
 
     @property
-    def mysql_url(self) -> str:
-        """构建 MySQL 异步连接 URL"""
-        return (
-            f"mysql+aiomysql://{self.MYSQL_USER}:{self.MYSQL_PASSWORD}"
-            f"@{self.MYSQL_HOST}:{self.MYSQL_PORT}/{self.MYSQL_DATABASE}"
-            f"?charset=utf8mb4"
+    def mysql_url(self) -> URL:
+        """构建 MySQL 异步连接 URL（字段构造，自动转义密码中的特殊字符）。
+
+        禁止手拼 f-string：密码含 @:/%# 时会被误解析。
+        """
+        return URL.create(
+            "mysql+aiomysql",
+            username=self.MYSQL_USER,
+            password=self.MYSQL_PASSWORD,
+            host=self.MYSQL_HOST,
+            port=self.MYSQL_PORT,
+            database=self.MYSQL_DATABASE,
+            query={"charset": "utf8mb4"},
         )
+
+    @property
+    def mysql_url_string(self) -> str:
+        """给 Alembic 等字符串消费者的渲染版本。
+
+        用 render_as_string(hide_password=False) 保留真实密码并转义特殊字符，
+        不能 str(mysql_url)——那会把密码掩码成 ***。
+        """
+        return self.mysql_url.render_as_string(hide_password=False)
 
     @property
     def jwt_blacklist_redis_url(self) -> str:
@@ -201,12 +241,36 @@ def validate_startup_config() -> AppSettings:
 
     try:
         settings = get_settings()
-    except Exception as e:
-        print(f"[CONFIG ERROR] 配置加载失败: {e}")
+    except ValidationError as e:
+        # 只列字段名与缺失/非法原因，不打印含输入值的完整配置异常
+        fields = []
+        for err in e.errors():
+            loc = ".".join(str(x) for x in err.get("loc", []))
+            fields.append(loc or "(根)")
+        print("[CONFIG ERROR] 配置校验失败，以下字段非法: " + ", ".join(fields))
+        print("请检查 .env 对应字段；错误详情仅写入服务端日志，勿在生产泄露输入值")
+        sys.exit(1)
+    except Exception:
+        print("[CONFIG ERROR] 配置加载失败，请检查 .env 与依赖配置")
         sys.exit(1)
 
     if not settings.SECRET_KEY:
         errors.append("SECRET_KEY 不能为空，请在 .env 中配置 JWT 密钥")
+
+    if settings.is_production:
+        secret = settings.SECRET_KEY
+        if secret:
+            secret_bytes = len(secret.encode("utf-8"))
+            if secret_bytes < JWT_MIN_SECRET_LENGTH:
+                errors.append(
+                    f"SECRET_KEY 过短（{secret_bytes} 字节），生产环境要求至少 "
+                    f"{JWT_MIN_SECRET_LENGTH} 字节的随机秘密"
+                )
+            low = secret.lower()
+            if any(marker in low for marker in JWT_PLACEHOLDER_MARKERS):
+                errors.append("SECRET_KEY 疑似占位符，生产环境禁止使用占位符密钥")
+        # 生产密钥生成说明（不打印任何输入值）：
+        #   python -c "import secrets; print(secrets.token_urlsafe(48))"
 
     if not settings.MYSQL_HOST:
         errors.append("MYSQL_HOST 不能为空，请在 .env 中配置 MySQL 主机地址")
@@ -221,8 +285,8 @@ def validate_startup_config() -> AppSettings:
         print("=" * 60)
         print("[CONFIG ERROR] 启动配置验证失败，请修复以下问题:")
         print("=" * 60)
-        for i, err in enumerate(errors, 1):
-            print(f"  {i}. {err}")
+        for i, msg in enumerate(errors, 1):
+            print(f"  {i}. {msg}")
         print("=" * 60)
         print("请检查 .env 文件，参考 .env.example 模板")
         sys.exit(1)

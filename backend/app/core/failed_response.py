@@ -11,6 +11,9 @@
 - SQLAlchemyError: 数据库通用错误
 - RAGException: RAG 统一业务异常
 - Exception: 兜底处理所有未捕获异常
+
+生产环境（ENV=prod/production）强制关闭调试响应：不返回 traceback、
+raw_errors、SQL、路径或原始异常文本；详情只进脱敏日志并关联 request_id。
 """
 import re
 import logging
@@ -22,28 +25,19 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from starlette import status
-from pydantic_settings import BaseSettings
+
+from app.config.validator import get_settings
+from app.core.logger_handler import RequestIdFilter
 
 if TYPE_CHECKING:
     # 运行时延迟导入以避免循环依赖，仅供类型检查器解析注解
     from app.core.exceptions import RAGException
 
 
-class Settings(BaseSettings):
-    """配置类 —— 从环境变量读取，用于控制 DEBUG 模式和日志级别"""
-    ENV: str = "dev"           # 环境标识：dev / test / prod
-    DEBUG_MODE: bool = True    # 开发环境默认 True，生产环境强制 False
-    LOG_LEVEL: str = "INFO"    # 日志级别
+settings = get_settings()
 
-    class Config:
-        env_file = ".env"
-        extra = "allow"
-
-
-settings = Settings()
-
-# 生产环境强制关闭 DEBUG_MODE，防止敏感信息泄露
-DEBUG_MODE = settings.DEBUG_MODE if settings.ENV != "prod" else False
+# 生产环境强制关闭 DEBUG_MODE，防止敏感信息泄露（is_production 兼容 prod/production）
+DEBUG_MODE = settings.DEBUG_MODE and not settings.is_production
 
 
 def setup_logger():
@@ -55,12 +49,13 @@ def setup_logger():
         return logger
 
     formatter = logging.Formatter(
-        fmt="%(asctime)s - %(name)s - %(levelname)s - [%(path)s] - %(message)s",
+        fmt="%(asctime)s - %(name)s - %(levelname)s - rid=%(request_id)s - [%(path)s] - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
     )
 
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
+    console_handler.addFilter(RequestIdFilter())
     logger.addHandler(console_handler)
 
     return logger

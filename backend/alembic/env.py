@@ -29,7 +29,8 @@ target_metadata = Base.metadata
 
 
 def get_url() -> str:
-    return get_settings().mysql_url
+    # mysql_url_string 显式渲染真实密码（转义特殊字符）；str(mysql_url) 会掩码密码
+    return get_settings().mysql_url_string
 
 
 def run_migrations_offline() -> None:
