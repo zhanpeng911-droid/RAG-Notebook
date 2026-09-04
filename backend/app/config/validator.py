@@ -79,6 +79,9 @@ class AppSettings(BaseSettings):
     RATE_LIMIT_ENABLED: bool = True
     """限流总开关（bool）。个人开发环境可设 false 关闭。默认 true。"""
 
+    TRUSTED_PROXY_IPS: str = ""
+    """可信反向代理 IP（逗号分隔）。为空时限流不信任 X-Forwarded-For，只用直接对端。"""
+
     # 是否允许前端传入 llm_config.api_key；生产默认 false
     ALLOW_CLIENT_LLM_KEY: bool | None = None
     """是否允许前端传明文 API Key。None 时按 ENV 自动判断（prod 禁止，dev 允许）。"""

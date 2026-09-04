@@ -81,7 +81,7 @@ async def add_vector_multiple(
         knowledge_service: KnowledgeService = Depends(get_knowledge_service),
         space_id: Optional[str] = Query(None, description="归属空间ID"),
         db: AsyncSession = Depends(get_db),
-        _: None = Depends(rate_limit(limit=3, window=60))
+        _: None = Depends(rate_limit(limit=3, window=60, fail_closed=True))
 ):
     """上传多个文件，将文件保存到向量数据库，仅支持TXT和PDF"""
     await _ensure_space_member(space_id, user_id, db)
@@ -96,7 +96,7 @@ async def add_vector_multiple_stream(
         knowledge_service: KnowledgeService = Depends(get_knowledge_service),
         space_id: Optional[str] = Query(None, description="归属空间ID"),
         db: AsyncSession = Depends(get_db),
-        _: None = Depends(rate_limit(limit=3, window=60))
+        _: None = Depends(rate_limit(limit=3, window=60, fail_closed=True))
 ):
     """上传多个文件，流式返回处理进度，仅支持TXT、PDF、MD、PPTX、DOCX"""
     await _ensure_space_member(space_id, user_id, db)
@@ -454,7 +454,7 @@ async def get_embedding_health(
 @knowledge_router.post("/embedding-test")
 async def test_embedding(
         user_id: str = Depends(get_current_user_id),
-        _: None = Depends(rate_limit(limit=3, window=60))
+        _: None = Depends(rate_limit(limit=3, window=60, fail_closed=True))
 ):
     """
     测试 embedding 服务连通性。
@@ -587,7 +587,7 @@ async def add_vector_multiple_v2(
         user_id: str = Depends(get_current_user_id),
         space_id: Optional[str] = Query(None, description="归属空间ID"),
         db: AsyncSession = Depends(get_db),
-        _: None = Depends(rate_limit(limit=3, window=60))
+        _: None = Depends(rate_limit(limit=3, window=60, fail_closed=True))
 ):
     """
     上传多个文件（v2 解耦版本）。

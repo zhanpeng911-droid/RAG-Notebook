@@ -16,6 +16,7 @@ from fastapi import FastAPI
 async def client(monkeypatch):
     from app.router.health import health_router
     import app.router.health as hmod
+    from app.utils.auth_utils import get_current_user_id
 
     # 默认打桩为可用
     async def _mysql_ok():
@@ -27,10 +28,18 @@ async def client(monkeypatch):
     monkeypatch.setattr(hmod, "check_mysql_connection", _mysql_ok)
     monkeypatch.setattr(hmod, "check_redis_connection", _redis_ok)
 
+    # 深度检查需运维身份：统一放行 + 重置模块级短缓存，避免跨用例污染
+    monkeypatch.setattr(hmod, "_is_ops_user", lambda user_id: True)
+    hmod._model_cache.update({"value": None, "at": 0.0})
+    hmod._vector_cache.update({"value": None, "at": 0.0})
+
     app = FastAPI()
     app.include_router(health_router, prefix="/api/v1")
     from app.core.failed_response_register import register_exception_handlers
     register_exception_handlers(app)
+
+    # /model 与 /vector-store 需认证：覆盖 get_current_user_id
+    app.dependency_overrides[get_current_user_id] = lambda: "ops-user-1"
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport,
@@ -204,3 +213,44 @@ async def test_safe_check_redis_timeout(monkeypatch):
         return True
     monkeypatch.setattr("app.router.health.check_redis_connection", _slow)
     assert await _safe_check_redis(timeout=0.05) is False
+
+
+# ---------- 深度检查鉴权与脱敏 ----------
+
+@pytest.mark.asyncio
+async def test_deep_check_anonymous_rejected():
+    """匿名不能执行深度探测（/model 会触发收费 embedding 调用）。"""
+    from app.router.health import health_router
+    from fastapi import FastAPI
+    import httpx
+
+    app = FastAPI()
+    app.include_router(health_router, prefix="/api/v1")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                 base_url="http://test") as c:
+        r = await c.get("/api/v1/health/model")
+        assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_vector_store_exception_no_secret_leak(client, monkeypatch):
+    def _boom():
+        raise RuntimeError("secret-value-ABC123")
+    from app.rag import vector_store as vs_mod
+    monkeypatch.setattr(vs_mod, "VectorStoreService", _boom)
+    r = await client.get("/api/v1/health/vector-store")
+    assert r.status_code == 503
+    assert "secret-value-ABC123" not in r.text
+
+
+@pytest.mark.asyncio
+async def test_model_exception_no_secret_leak(client, monkeypatch):
+    from types import SimpleNamespace as NS
+
+    def _boom(t):
+        raise RuntimeError("sk-abcdefghijklmnopqrstuvwxyz1234567890")
+    fake_embed = NS(embed_query=_boom)
+    monkeypatch.setattr("app.utils.factory.embed_model", fake_embed)
+    r = await client.get("/api/v1/health/model")
+    assert r.status_code == 503
+    assert "sk-abcdefghijklmnopqrstuvwxyz1234567890" not in r.text

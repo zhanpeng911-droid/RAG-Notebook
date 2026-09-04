@@ -203,11 +203,19 @@ async def test_blacklist_check_unavailable_redis_returns_503():
 
 
 class FakeRedis:
-    """最小化 Redis 模拟：实现限流依赖用到的 incr/expire/ttl"""
+    """最小化 Redis 模拟：实现限流依赖用到的 eval(INCR+EXPIRE)/incr/expire/ttl"""
 
     def __init__(self):
         self.data = {}
         self.ttls = {}
+
+    async def eval(self, script, numkeys, key, window):
+        # 模拟原子脚本：INCR + 首次/丢失 TTL 时 EXPIRE
+        self.data[key] = self.data.get(key, 0) + 1
+        ttl = self.ttls.get(key, -1)
+        if self.data[key] == 1 or ttl == -1:
+            self.ttls[key] = window
+        return self.data[key]
 
     async def incr(self, key):
         self.data[key] = self.data.get(key, 0) + 1
@@ -227,6 +235,7 @@ def _fake_request(path="/chat/agent/query"):
         url=SimpleNamespace(path=path),
         headers={},
         client=SimpleNamespace(host="127.0.0.1"),
+        scope={"route": None},
     )
 
 
@@ -237,7 +246,6 @@ async def test_rate_limit_rejects_request_over_limit(monkeypatch):
 
     fake = FakeRedis()
     monkeypatch.setattr(rl, "connect_redis", AsyncMock(return_value=fake))
-    monkeypatch.setattr(rl, "is_redis_available", lambda: True)
     monkeypatch.setenv("RATE_LIMIT_ENABLED", "true")
 
     dependency = rl.rate_limit(limit=2, window=60)
@@ -258,7 +266,6 @@ async def test_rate_limit_sets_window_ttl_on_first_request(monkeypatch):
 
     fake = FakeRedis()
     monkeypatch.setattr(rl, "connect_redis", AsyncMock(return_value=fake))
-    monkeypatch.setattr(rl, "is_redis_available", lambda: True)
     monkeypatch.setenv("RATE_LIMIT_ENABLED", "true")
 
     dependency = rl.rate_limit(limit=5, window=60)
@@ -269,13 +276,12 @@ async def test_rate_limit_sets_window_ttl_on_first_request(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_rate_limit_self_heals_orphan_key_without_ttl(monkeypatch):
-    """INCR 与 EXPIRE 之间中断产生的无 TTL key 必须被自动修复，避免用户被永久锁死"""
+    """已有计数但丢失 TTL 的 key 必须被原子脚本修复，避免用户被永久锁死"""
     from app.core import rate_limit as rl
 
     fake = FakeRedis()
     fake.data["rate_limit:chat:agent:query:ip:127.0.0.1"] = 3  # 已存在但丢失 TTL 的 key
     monkeypatch.setattr(rl, "connect_redis", AsyncMock(return_value=fake))
-    monkeypatch.setattr(rl, "is_redis_available", lambda: True)
     monkeypatch.setenv("RATE_LIMIT_ENABLED", "true")
 
     dependency = rl.rate_limit(limit=10, window=60)
@@ -287,10 +293,10 @@ async def test_rate_limit_self_heals_orphan_key_without_ttl(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_rate_limit_degrades_when_redis_unavailable(monkeypatch):
-    """Redis 不可用时降级放行，不影响正常请求"""
+    """便宜读取在 Redis 不可用时降级放行，不影响正常请求"""
     from app.core import rate_limit as rl
 
-    monkeypatch.setattr(rl, "is_redis_available", lambda: False)
+    monkeypatch.setattr(rl, "connect_redis", AsyncMock(return_value=None))
     monkeypatch.setenv("RATE_LIMIT_ENABLED", "true")
 
     dependency = rl.rate_limit(limit=1, window=60)

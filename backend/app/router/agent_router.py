@@ -56,7 +56,7 @@ class AgentFeedbackRequest(BaseModel):
 async def agent_query_stream(
         request: AgentQueryRequest,
         user_id: str = Depends(get_current_user_id),
-        _: None = Depends(rate_limit(limit=10, window=60))
+        _: None = Depends(rate_limit(limit=10, window=60, fail_closed=True))
 ):
     """
     Agent 流式查询 —— 以 SSE 事件流的形式返回 Agent 执行过程和答案。
@@ -169,7 +169,7 @@ async def agent_query(
         request: AgentQueryRequest,
         user_id: str = Depends(get_current_user_id),
         db: AsyncSession = Depends(get_db),
-        _: None = Depends(rate_limit(limit=10, window=60))
+        _: None = Depends(rate_limit(limit=10, window=60, fail_closed=True))
 ):
     """
     Agent 非流式查询 —— 等待 Agent 完成后返回完整结果。
