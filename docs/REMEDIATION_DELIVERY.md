@@ -114,3 +114,41 @@
    属 P2，登记待做）。
 6. **心跳/超时回收**：4C 采用终态条件写防止覆盖；长时间未更新的运行自动回收
    （心跳/lease）未实施，登记待做（与 5B 删除清理任务一起）。
+
+---
+
+## 返修复验记录（2026-09-04，按 docs/REMEDIATION_REWORK_PLAN.md）
+
+承接验收返修方案（`REMEDIATION_REWORK_PLAN.md`），基线 `6e161cf`。以下为返修批次与对第一轮交付的状态更正。
+
+### 返修提交
+
+| 返修项 | Commit | 内容 | 状态 |
+|---|---|---|---|
+| R1/F01 | `ca028fb` | Alembic 006 迁移 ENUM 扩到含 `deleting`；真实 MySQL 8.0.12 验证空库 upgrade、旧值保留、deleting 可写、危险 downgrade 被拒 | ✅ |
+| R2A/F02 | `ca028fb` | 删除重试始终尝试向量清理（含 DELETING/INDEX_FAILED）；批量入口对齐 | ✅ |
+| F04/R2D | `ca028fb` | `publish_indexed`/`mark_index_failed_if_indexing` 原子条件写；worker 在 deleting 后不得改回 indexed | ✅ |
+| R4/F03 | `97c6196` | ChatSession tombstone（deleted_at）+ 迁移 007；add_message 不再自动重建已删会话；列表/详情排除已删 | ✅ |
+| F10/R7 | `97c6196` | http_exception_handler 保留 Retry-After / WWW-Authenticate 响应头 | ✅ |
+| F05/R5 | `44c9b57` | 前端 onCompleted await 后重新核对 authEpoch | ✅ |
+| F06/R6A | `44c9b57` | 检索纳入整体预算（asyncio.wait_for 剩余预算） | ✅ |
+| F08/R6B | `44c9b57` | sseClient 处理 timeout/cancelled → onError（可见失败） | ✅ |
+| F09/R3 | `44c9b57` | Celery retry 前重置 pending_index（失败可再 claim）；耗尽才保持 index_failed | ✅ |
+| F07/R8 | `da3225f` | 全栈健康检查/API 走 E2E_BASE_URL 统一入口；缺账号直接 fail 不 skip | ✅ |
+
+### 第一轮交付状态更正（11.3 要求）
+
+- **5A/5B**：删除一致性原交付未覆盖"deleting 未入 MySQL ENUM"（F01）、"删除重试不清理"（F02）、"在途 worker 改回 indexed"（F04）——本次经 R1/R2A/F04 返修；5B 统一执行/有界上传/代际发布仍属未完成（纳入 R2C/R3，见下）。
+- **4C**：总预算未覆盖检索（F06）、SSE timeout 不可见（F08）——本次经 R6A/R6B 返修；心跳/过期运行回收仍未实施（R6C，登记延期）。
+- **1B**：SSE 完成回调 await 后未复核身份（F05）——本次返修；前端统一清理的异步竞态进一步加固项见 R5（本轮未实施 composable 级回归 fixture）。
+- **3B**：当前候选 SHA 的 Actions 运行记录缺失——不登记为已通过；fullstack job 需在 CI 对当前 SHA 重跑。
+- **7D**：只承认 FastAPI docs 路径修正；前端拆分/性能/评测（7A/7B/7C）未实施。
+
+### 仍未完成（R2C/R3/R6C/R5/R8 后续）
+
+1. **R2C 统一执行服务 + 代际发布 + 读取可见性过滤**：稳定 chunk ID 仍是 `v1` 固定版本，未实现 generation 切换、读取端过滤 active_generation、N→M 旧尾部清理。删除一致性是部分闭环，不能宣称完整。
+2. **R3 有界上传 / 生产后台索引**：`await file.read()` 全量读入仍未改为分块；生产默认后台索引未切换。
+3. **R6C 心跳/过期运行回收**：未实施。
+4. **R5 composable 级回归**：前端 store/HTTP 加固 + 交错竞态测试未实施（本轮只修了 F05）。
+5. **R8A 隔离 Compose / 确定性 provider / 迁移种子采集脚本**：fullstack job 依赖现有 compose（固定容器名/端口），未用独立 project + 专用端口；真实 MySQL 迁移/Chroma 并发/头像重建/恢复演练待 CI。
+6. **R0 conftest 全局 sys.modules mock 加固**：当前全量连续多次通过（989/991/993），视觉单跑 19 通过且全跑一致；按 fixture 作用域管理的重构登记为后续优化。
