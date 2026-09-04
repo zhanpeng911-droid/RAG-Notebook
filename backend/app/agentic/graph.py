@@ -127,13 +127,31 @@ class AgentGraph:
                     llm_config=self.llm_config,
                 )
 
-                evidences = await retrieval_service.retrieve(
-                    query=state.query,
-                    scope=plan.scope,
-                    top_k=plan.top_k,
-                    use_hyde=plan.use_hyde,
-                    use_rerank=plan.use_rerank,
-                )
+                # 检索必须受整体预算约束（F06）：检索/embedding 永久挂起时
+                # 不能拖过总时限；用剩余预算作检索超时
+                remaining = self.guardrails.remaining_budget()
+                if remaining <= 0:
+                    logger.warning("【Agent】检索前预算已耗尽")
+                    state.error = "处理超时"
+                    yield self._create_event(AgentPhase.TIMEOUT, state=state, error="处理超时")
+                    return
+
+                try:
+                    evidences = await asyncio.wait_for(
+                        retrieval_service.retrieve(
+                            query=state.query,
+                            scope=plan.scope,
+                            top_k=plan.top_k,
+                            use_hyde=plan.use_hyde,
+                            use_rerank=plan.use_rerank,
+                        ),
+                        timeout=max(remaining, 0.5),
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("【Agent】检索超时（整体预算约束）")
+                    state.error = "处理超时"
+                    yield self._create_event(AgentPhase.TIMEOUT, state=state, error="检索超时")
+                    return
 
                 state.evidences = evidences
                 yield self._create_event(

@@ -159,8 +159,16 @@ async def _index_document_async(task, document_id: str, user_id: str):
             except Exception as commit_err:
                 logger.error(f"【后台索引】写入失败状态也失败: {commit_err}")
 
-            # 重试（如果还有次数）
+            # 重试（如果还有次数）：先提交可领取状态（pending_index），
+            # 使 Celery retry 能再次 claim；否则失败状态永远无法被再次领取（F09）
             if task.request.retries < task.max_retries:
+                try:
+                    await repo.update_status(
+                        document_id, DocumentIndexStatus.PENDING_INDEX
+                    )
+                    await session.commit()
+                except Exception as reset_err:
+                    logger.error(f"【后台索引】重试前重置为 pending 失败: {reset_err}")
                 raise task.retry(exc=e)
 
 

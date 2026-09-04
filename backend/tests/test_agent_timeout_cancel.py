@@ -70,6 +70,39 @@ async def test_graph_budget_exhausted_yields_timeout_not_completed(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_retrieval_bounded_by_overall_budget(monkeypatch):
+    """检索永久挂起时必须在整体预算内截断并发出 timeout，不能拖过总时限（F06）。"""
+    from app.agentic.planner import planner
+
+    graph = graph_mod.AgentGraph(user_id="user-a")
+    monkeypatch.setattr(graph_mod.Guardrails, "MAX_TOTAL_TIME", 0.5)
+
+    class FakePlan:
+        query_type = NS(value="simple")
+        scope = "all"
+        top_k = 3
+        use_hyde = False
+        use_rerank = False
+
+    monkeypatch.setattr(planner, "create_plan", lambda *a, **k: FakePlan())
+
+    class HangRetrieval:
+        async def retrieve(self, **k):
+            await asyncio.sleep(10)  # 挂起，远超预算
+            return []
+
+    monkeypatch.setattr(graph_mod, "RetrievalService", lambda **k: HangRetrieval())
+
+    start = time.monotonic()
+    events = [e async for e in graph.run("测试")]
+    elapsed = time.monotonic() - start
+
+    types = [e["type"] for e in events]
+    assert "timeout" in types
+    assert elapsed < 5  # 不能拖 10 秒；受整体预算约束
+
+
+@pytest.mark.asyncio
 async def test_graph_normal_flow_still_completes(monkeypatch):
     """正常预算下流程不变：completed 事件照常发出。"""
     from app.agentic.planner import planner

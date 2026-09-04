@@ -342,6 +342,9 @@ export function useChatWorkspace() {
             // Agent 完成事件：等待相关笔记请求后再入栈，避免快照丢失异步结果
             completedCitations = Array.isArray(json.citations) ? json.citations : []
             await relatedNotesPromise
+            // await 之后必须再次核对身份：等待期间可能已登出/切换账号，
+            // 不得把旧账号数据写入新账号的全局问答历史（F05）
+            if (isStaleAuth()) return
             const lastMsg = messages.value[messages.value.length - 1]
             if (lastMsg?.role === 'assistant') {
               pushQaSnapshot({

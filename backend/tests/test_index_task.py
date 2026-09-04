@@ -195,10 +195,15 @@ async def test_index_loader_exception_failed_and_retry(env):
     async with env.factory() as s:
         repo = DocumentIndexRepository(s)
         doc = await repo.get_by_id(doc_id, "u1")
-        assert doc.status == DocumentIndexStatus.INDEX_FAILED
+        # F09：可重试错误在 retry 前回到 pending_index（可再次 claim），而非卡死在 index_failed
+        assert doc.status == DocumentIndexStatus.PENDING_INDEX
         assert "sk-***" in doc.error_message      # 敏感信息已脱敏
         assert "embedding down" in doc.error_message
         assert doc.retry_count == 1
+
+        # 重试后可以再次 claim（失败状态不再无法领取）
+        assert await repo.claim_for_indexing(doc_id) is True
+        await s.commit()
 
 
 @pytest.mark.asyncio
@@ -223,7 +228,9 @@ async def test_index_exception_without_retries_left_stops(env):
     async with env.factory() as s:
         repo = DocumentIndexRepository(s)
         doc = await repo.get_by_id(doc_id, "u1")
+        # 重试次数耗尽：保持 index_failed（终态，不再可领取）
         assert doc.status == DocumentIndexStatus.INDEX_FAILED
+        assert await repo.claim_for_indexing(doc_id) is False
 
 
 # ---------- 批量补偿 ----------

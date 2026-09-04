@@ -153,6 +153,34 @@ describe('sseClient.createSSEStream', () => {
     expect(onError.mock.calls[0][0].message).toBe('生成失败')
   })
 
+  it('timeout 事件映射到 onError（明确超时失败，不静默结束，F08）', async () => {
+    const onError = vi.fn()
+    const onFinally = vi.fn()
+    global.fetch = vi.fn().mockResolvedValue(
+      sseResponse(['data: {"type":"timeout","error":"处理超时"}\n\n'])
+    )
+
+    createSSEStream('/api/v1/x', {}, { onError, onFinally })
+    await flush()
+
+    expect(onError).toHaveBeenCalledTimes(1)
+    expect(onError.mock.calls[0][0].message).toBe('处理超时')
+    expect(onFinally).toHaveBeenCalledTimes(1)
+  })
+
+  it('cancelled 事件映射到 onError（取消可见，不伪装网络错误）', async () => {
+    const onError = vi.fn()
+    global.fetch = vi.fn().mockResolvedValue(
+      sseResponse(['data: {"type":"cancelled","error":"请求已取消"}\n\n'])
+    )
+
+    createSSEStream('/api/v1/x', {}, { onError })
+    await flush()
+
+    expect(onError).toHaveBeenCalledTimes(1)
+    expect(onError.mock.calls[0][0].message).toBe('请求已取消')
+  })
+
   it('HTTP 非 2xx 响应触发 onError（优先取 detail）', async () => {
     const onError = vi.fn()
     const onFinally = vi.fn()

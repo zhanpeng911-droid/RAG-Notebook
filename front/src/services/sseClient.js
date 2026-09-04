@@ -111,6 +111,13 @@ export function createSSEStream(url, body, handlers) {
                 await handlers.onCompleted?.(json)
                 handlers.onDone?.({ session_id: json.session_id })
                 break
+              case 'timeout':
+                // 明确超时失败（可重试），映射到 onError，不能静默结束（F08）
+                handlers.onError?.(new Error(json.error || '处理超时，请重试'))
+                break
+              case 'cancelled':
+                handlers.onError?.(new Error(json.error || '请求已取消'))
+                break
             }
           } catch (e) {
             if (e.message === 'Stream error') throw e
