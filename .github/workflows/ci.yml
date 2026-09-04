@@ -269,7 +269,6 @@ jobs:
         working-directory: front
         env:
           E2E_BASE_URL: http://127.0.0.1:3000
-          E2E_FULL_STACK: "true"
           E2E_PASSWORD: E2e-secret-123
         run: npx playwright test --config=playwright.full.config.js --project=chromium
       - name: Dump container logs on failure

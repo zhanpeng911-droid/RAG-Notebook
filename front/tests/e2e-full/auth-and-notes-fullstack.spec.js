@@ -16,15 +16,23 @@ import { test, expect } from '@playwright/test';
 
 // ==================== 环境变量 ====================
 
-const E2E_ENABLED = process.env.E2E_FULL_STACK === 'true';
 const USERNAME = process.env.E2E_USERNAME || '';
 const PASSWORD = process.env.E2E_PASSWORD || '';
-// 统一端口：FastAPI=8002、Django=8001；经 Docker Nginx 时由 E2E_BASE_URL 走统一入口
+// Docker 验收经统一入口 E2E_BASE_URL（health 与 API 都用同一基址）；
+// 本地 Vite 直连模式由显式 FASTAPI_URL 提供，不让 8002 默认值悄悄覆盖 Docker 模式。
+const E2E_BASE_URL = process.env.E2E_BASE_URL || '';
 const FASTAPI_URL = process.env.E2E_FASTAPI_URL || 'http://127.0.0.1:8002';
 const DJANGO_URL = process.env.E2E_DJANGO_URL || 'http://127.0.0.1:8001';
+const API_BASE = E2E_BASE_URL || FASTAPI_URL;
 
-test.skip(!E2E_ENABLED, 'E2E_FULL_STACK 未设置，跳过 full-stack 测试（需要真实后端服务）');
-test.skip(E2E_ENABLED && (!USERNAME || !PASSWORD), '需要显式设置 E2E_USERNAME 和 E2E_PASSWORD，仓库中不提供默认测试账号');
+// 缺配置直接失败（不 skip）：选择了 full 配置就必须提供测试账号（F07）
+test.beforeAll(() => {
+  if (!USERNAME || !PASSWORD) {
+    throw new Error(
+      'full 配置必须显式提供 E2E_USERNAME / E2E_PASSWORD，缺配置直接失败而非全量 skip'
+    );
+  }
+});
 
 // ==================== 唯一测试数据 ====================
 
@@ -41,7 +49,7 @@ async function waitForBackend(timeoutMs = 10000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
-      const res = await fetch(`${FASTAPI_URL}/api/v1/health/live`, { signal: AbortSignal.timeout(3000) });
+      const res = await fetch(`${API_BASE}/api/v1/health/live`, { signal: AbortSignal.timeout(3000) });
       if (res.ok) return true;
     } catch { /* 继续重试 */ }
     await new Promise((r) => setTimeout(r, 1000));
@@ -52,10 +60,10 @@ async function waitForBackend(timeoutMs = 10000) {
 async function checkServices() {
   const errors = [];
   try {
-    const res = await fetch(`${FASTAPI_URL}/api/v1/health/live`, { signal: AbortSignal.timeout(5000) });
+    const res = await fetch(`${API_BASE}/api/v1/health/live`, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) errors.push(`FastAPI /api/v1/health/live 返回 ${res.status}`);
   } catch (e) {
-    errors.push(`FastAPI 不可达 (${FASTAPI_URL}): ${e.message}`);
+    errors.push(`FastAPI 不可达 (${API_BASE}): ${e.message}`);
   }
   try {
     const res = await fetch(`${DJANGO_URL}/user/detail/`, { signal: AbortSignal.timeout(5000) });
