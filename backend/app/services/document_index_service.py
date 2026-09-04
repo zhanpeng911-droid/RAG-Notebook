@@ -241,9 +241,32 @@ async def save_uploaded_file(
         await repo.update_status(doc.id, DocumentIndexStatus.PENDING_INDEX)
         await session.commit()
 
-        # 上传时立即尝试同步索引 —— embedding 可用就当场完成
+        # 上传时立即尝试同步索引 —— embedding 可用就当场完成。
+        # 以 _sync_index 返回的落库状态为准：禁止把"没有抛异常"当作索引成功。
         try:
-            await _sync_index(doc.id, user_id)
+            sync_status = await _sync_index(doc.id, user_id)
+        except Exception as e:
+            # _sync_index 已在 DB 置为 index_failed 并提交
+            error_msg = str(e)[:200]
+            logger.warning(f"【文档索引】上传时同步索引失败，落库 index_failed: id={doc.id}, error={error_msg}")
+            # 尝试后台重试（仅调度，不伪装成已成功入队）
+            scheduled = False
+            try:
+                from app.tasks.index_task import index_document_task
+                index_document_task.delay(doc.id, user_id)
+                scheduled = True
+            except Exception:
+                scheduled = False
+            return {
+                "document_id": doc.id,
+                "filename": filename,
+                "status": DocumentIndexStatus.INDEX_FAILED.value,
+                "message": "文件已保存，但索引失败" + ("，已提交后台重试" if scheduled else ""),
+                "retry_scheduled": scheduled,
+                "duplicate": False,
+            }
+
+        if sync_status == DocumentIndexStatus.INDEXED:
             logger.info(f"【文档索引】上传时同步索引完成: id={doc.id}")
             return {
                 "document_id": doc.id,
@@ -252,29 +275,23 @@ async def save_uploaded_file(
                 "message": "文件上传成功，已完成索引",
                 "duplicate": False,
             }
-        except Exception as e:
-            error_msg = str(e)[:200]
-            logger.warning(f"【文档索引】上传时索引失败，标记为 pending: id={doc.id}, error={error_msg}")
-            # 索引失败，提交 Celery 后台重试
-            try:
-                from app.tasks.index_task import index_document_task
-                index_document_task.delay(doc.id, user_id)
-            except Exception:
-                pass
-            return {
-                "document_id": doc.id,
-                "filename": filename,
-                "status": "pending_index",
-                "message": f"文件已保存，索引失败: {error_msg}",
-                "duplicate": False,
-            }
+
+        # 空文档/空切片等通常不可自动重试的失败：DB 已落 index_failed
+        return {
+            "document_id": doc.id,
+            "filename": filename,
+            "status": DocumentIndexStatus.INDEX_FAILED.value,
+            "message": "文件已保存，但索引失败（文件内容为空或无法解析）",
+            "retry_scheduled": False,
+            "duplicate": False,
+        }
 
 
-async def _sync_index(document_id: str, user_id: str):
+async def _sync_index(document_id: str, user_id: str) -> DocumentIndexStatus:
     """
     同步索引（当 Celery 不可用时的降级方案）。
 
-    在当前请求中直接执行索引，而不是交给后台任务。
+    返回最终落库状态（indexed / index_failed），不再用"没有抛异常"当作成功。
     创建独立的数据库会话，避免与调用者的会话状态冲突。
     """
     from app.db.db_config import AsyncSessionLocal
@@ -289,7 +306,7 @@ async def _sync_index(document_id: str, user_id: str):
 
             doc = await repo.get_by_id(document_id, user_id)
             if not doc:
-                return
+                return DocumentIndexStatus.INDEX_FAILED
 
             from app.rag.vector_store import VectorStoreService
             store = VectorStoreService()
@@ -305,7 +322,7 @@ async def _sync_index(document_id: str, user_id: str):
                     error_message="文档加载为空"
                 )
                 await session.commit()
-                return
+                return DocumentIndexStatus.INDEX_FAILED
 
             # 注入元数据
             for d in documents:
@@ -323,7 +340,7 @@ async def _sync_index(document_id: str, user_id: str):
                     error_message="文档切片为空"
                 )
                 await session.commit()
-                return
+                return DocumentIndexStatus.INDEX_FAILED
 
             # 写入向量数据库
             await asyncio.to_thread(store.vectors_store.add_documents, split_docs)
@@ -340,6 +357,7 @@ async def _sync_index(document_id: str, user_id: str):
             await session.commit()
 
             logger.info(f"【文档索引】同步索引完成: id={document_id}, chunks={len(split_docs)}")
+            return DocumentIndexStatus.INDEXED
 
         except Exception as e:
             logger.error(f"【文档索引】同步索引失败: id={document_id}, error={e}")
@@ -397,11 +415,13 @@ async def reindex_document(document_id: str, user_id: str) -> dict:
             logger.warning(f"【文档索引】提交 Celery 任务失败: {e}")
             # 降级为同步索引
             try:
-                await _sync_index(document_id, user_id)
-                return {"success": True, "message": "已同步完成重新索引"}
+                sync_status = await _sync_index(document_id, user_id)
+                if sync_status == DocumentIndexStatus.INDEXED:
+                    return {"success": True, "message": "已同步完成重新索引"}
+                return {"success": False, "message": "重新索引失败，请查看状态后重试"}
             except Exception as sync_err:
                 logger.error(f"【文档索引】同步索引也失败: {sync_err}")
-                return {"success": False, "message": f"索引失败: {str(sync_err)[:200]}"}
+                return {"success": False, "message": "索引失败，请稍后重试"}
 
 
 async def get_user_index_status(user_id: str, space_id: str = None) -> List[dict]:

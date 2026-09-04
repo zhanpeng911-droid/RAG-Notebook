@@ -500,10 +500,17 @@ async function uploadFiles() {
       const progress = uploadProgressList.value.find(p => p.filename === item.filename)
       if (!progress) continue
 
-      const failed = item.status === 'error'
+      // 状态与后端落库一致：indexed=可检索，index_failed=失败，error=上传失败
+      const failed = item.status === 'error' || item.status === 'index_failed'
       progress.status = failed ? 'failed' : 'completed'
       progress.percentage = failed ? 0 : 100
-      progress.message = item.message || (failed ? '\u4e0a\u4f20\u5931\u8d25' : '\u6587\u4ef6\u5df2\u4fdd\u5b58\uff0c\u7b49\u5f85\u7d22\u5f15')
+      const statusText = {
+        indexed: '\u5df2\u5b8c\u6210\u7d22\u5f15\uff0c\u53ef\u68c0\u7d22',
+        pending_index: '\u6587\u4ef6\u5df2\u4fdd\u5b58\uff0c\u6b63\u5728\u7d22\u5f15',
+        index_failed: '\u6587\u4ef6\u5df2\u4fdd\u5b58\uff0c\u7d22\u5f15\u5931\u8d25',
+        error: '\u4e0a\u4f20\u5931\u8d25',
+      }
+      progress.message = statusText[item.status] || item.message || '\u6587\u4ef6\u5df2\u4fdd\u5b58\uff0c\u7b49\u5f85\u7d22\u5f15'
     }
     successCount.value = results.filter(item => item.status !== 'error').length
     failedCount.value = results.filter(item => item.status === 'error').length

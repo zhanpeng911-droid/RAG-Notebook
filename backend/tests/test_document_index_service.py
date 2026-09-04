@@ -176,15 +176,76 @@ async def test_upload_invalid_type_raises(env):
 # ---------- 索引失败的补偿降级 ----------
 
 @pytest.mark.asyncio
-async def test_sync_failure_falls_back_to_celery_delay(env):
+async def test_sync_failure_reports_index_failed_and_schedules_retry(env):
     async def broken(*a, **k):
         raise RuntimeError("chroma down")
     env.store.get_file_document = broken
 
     out = await dis.save_uploaded_file(_upload("fail.txt"), "u-sync")
-    assert out["status"] == "pending_index"
-    assert "chroma down" in out["message"]
+    # 响应状态必须与 DB 一致：index_failed（不再伪报 pending_index）
+    assert out["status"] == "index_failed"
+    assert out["retry_scheduled"] is True
     assert len(env.delays) == 1                  # 提交了后台任务
+    # 原始 provider 错误不进入响应文案（只进脱敏日志）
+    assert "chroma down" not in out["message"]
+
+    rows = await dis.get_user_index_status("u-sync")
+    row = next(x for x in rows if x["id"] == out["document_id"])
+    assert row["status"] == "index_failed"       # DB 与响应一致
+
+
+@pytest.mark.asyncio
+async def test_upload_reports_failed_when_docs_empty(env):
+    async def empty_loader(path, md5=None, user_id=None):
+        return []
+    env.store.get_file_document = empty_loader
+
+    out = await dis.save_uploaded_file(_upload("empty.txt"), "u-empty2")
+    assert out["status"] == "index_failed"
+    assert out["retry_scheduled"] is False       # 内容为空不可自动重试
+    assert env.delays == []
+
+    rows = await dis.get_user_index_status("u-empty2")
+    row = next(x for x in rows if x["id"] == out["document_id"])
+    assert row["status"] == "index_failed"
+    assert row["error_message"] == "文档加载为空"
+
+
+@pytest.mark.asyncio
+async def test_upload_reports_failed_when_split_empty(env):
+    env.store.split_documents_sync = lambda docs: []
+
+    out = await dis.save_uploaded_file(_upload("split.txt"), "u-split")
+    assert out["status"] == "index_failed"
+    assert out["retry_scheduled"] is False
+    assert env.delays == []
+
+    rows = await dis.get_user_index_status("u-split")
+    row = next(x for x in rows if x["id"] == out["document_id"])
+    assert row["status"] == "index_failed"
+    assert row["error_message"] == "文档切片为空"
+
+
+@pytest.mark.asyncio
+async def test_upload_celery_unavailable_no_fake_schedule(env, monkeypatch):
+    async def broken(*a, **k):
+        raise RuntimeError("provider down")
+    env.store.get_file_document = broken
+
+    import app.tasks.index_task as it_mod
+
+    def _raise_delay(*a, **k):
+        raise RuntimeError("broker down")
+
+    class BoomTask:
+        delay = staticmethod(_raise_delay)
+
+    monkeypatch.setattr(it_mod, "index_document_task", BoomTask())
+
+    out = await dis.save_uploaded_file(_upload("fail2.txt"), "u-celery")
+    assert out["status"] == "index_failed"
+    assert out["retry_scheduled"] is False       # 不伪装成已入队
+    assert "后台重试" not in out["message"]
 
 
 @pytest.mark.asyncio

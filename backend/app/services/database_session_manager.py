@@ -112,7 +112,8 @@ class DatabaseSessionManager:
                 title_summary = user_message[:30].strip()
                 if len(user_message) > 30:
                     title_summary += "..."
-                session.title = title_summary
+                # SQLAlchemy 经典声明式 Column 赋值，mypy 误报为 Column[str]
+                session.title = title_summary  # type: ignore[assignment]
 
             # 添加用户消息
             user_msg = ChatMessage(
@@ -163,7 +164,8 @@ class DatabaseSessionManager:
                 sessions = await db.run_sync(
                     lambda session: session.query(ChatSession).all()
                 )
-            return [session.id for session in sessions]
+            # run_sync 的 Query 结果未经 ORM 注解，mypy 把字段推断为 Column[str]
+            return [session.id for session in sessions]  # type: ignore[misc]
 
     async def get_user_sessions(self, user_id: str) -> List[Dict]:
         """获取用户所有会话详细信息"""
