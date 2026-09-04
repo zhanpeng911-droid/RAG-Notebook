@@ -10,7 +10,13 @@ from typing import Optional, List
 from sqlalchemy import select, update, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.agent_run import AgentRun, AgentStep, AgentFeedback, AgentRunStatus
+from app.models.agent_run import (
+    AgentRun,
+    AgentStep,
+    AgentFeedback,
+    AgentRunStatus,
+    TERMINAL_RUN_STATUSES,
+)
 from app.core.logger_handler import logger
 
 
@@ -74,7 +80,7 @@ class AgentRunRepository:
         if total_time_ms is not None:
             values["total_time_ms"] = total_time_ms
 
-        if status in (AgentRunStatus.COMPLETED, AgentRunStatus.FAILED):
+        if status in TERMINAL_RUN_STATUSES:
             values["completed_at"] = datetime.now(timezone.utc).replace(tzinfo=None)
 
         if values:
@@ -82,6 +88,40 @@ class AgentRunRepository:
                 update(AgentRun).where(AgentRun.id == run_id).values(**values)
             )
             await self.session.flush()
+
+    async def update_run_terminal(
+        self,
+        run_id: str,
+        status: str,
+        answer: str = None,
+        error_message: str = None,
+        citation_count: int = None,
+        total_time_ms: int = None,
+    ) -> bool:
+        """条件写终态：只有运行尚未进入终态时才写入，防止迟到的取消/超时
+        覆盖已完成的运行结果（进程崩溃后由恢复任务保证能收敛到终态）。"""
+        terminal_values = tuple(s.value for s in TERMINAL_RUN_STATUSES)
+        values = {
+            "status": status,
+            "completed_at": datetime.now(timezone.utc).replace(tzinfo=None),
+        }
+        if answer is not None:
+            values["answer"] = answer
+        if error_message is not None:
+            values["error_message"] = error_message
+        if citation_count is not None:
+            values["citation_count"] = citation_count
+        if total_time_ms is not None:
+            values["total_time_ms"] = total_time_ms
+
+        result = await self.session.execute(
+            update(AgentRun)
+            .where(AgentRun.id == run_id)
+            .where(AgentRun.status.not_in(terminal_values))
+            .values(**values)
+        )
+        await self.session.flush()
+        return result.rowcount > 0
 
     async def get_run(self, run_id: str, user_id: str) -> Optional[AgentRun]:
         """获取运行记录"""

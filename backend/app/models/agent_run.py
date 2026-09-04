@@ -19,6 +19,14 @@ class AgentRunStatus(str, PyEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
+
+
+# 终态集合：一旦进入这些状态，不再被迟到的写覆盖
+TERMINAL_RUN_STATUSES = frozenset(
+    {AgentRunStatus.COMPLETED, AgentRunStatus.FAILED,
+     AgentRunStatus.TIMEOUT, AgentRunStatus.CANCELLED}
+)
 
 
 class AgentRun(Base):

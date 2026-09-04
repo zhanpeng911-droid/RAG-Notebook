@@ -7,6 +7,7 @@ Agent 路由 —— 提供 Agentic RAG 的 API 接口。
 - GET  /chat/agent/runs/{run_id} —— 查询 Agent 运行记录
 - POST /chat/agent/feedback      —— 提交答案反馈
 """
+import asyncio
 import uuid
 import time
 from typing import Optional
@@ -110,49 +111,77 @@ async def agent_query_stream(
         import json
         start_time = time.time()
 
-        async for event in run_agent_stream(
-            query=request.query,
-            user_id=user_id,
-            space_id=request.space_id,
-            session_id=session_id,
-            llm_config=request.llm_config,
-        ):
-            # 更新运行记录
-            event_type = event.get("type")
-            if event_type == "completed":
-                total_ms = int((time.time() - start_time) * 1000)
-                async with AsyncSessionLocal() as event_db:
-                    event_repo = AgentRunRepository(event_db)
-                    await event_repo.update_run(
-                        run.id,
-                        status="completed",
-                        answer=event.get("answer"),
-                        total_time_ms=total_ms,
-                        citation_count=len(event.get("citations", [])),
-                    )
-                    await event_db.commit()
-                # 把问答写入会话历史
-                try:
-                    from app.services import session_manager as sm
-                    await sm.session_manager.add_message(session_id, user_id, request.query, event.get("answer", ""))
-                except Exception as msg_err:
-                    logger.warning(f"写入会话历史失败: {msg_err}")
-            elif event_type == "error":
-                total_ms = int((time.time() - start_time) * 1000)
-                async with AsyncSessionLocal() as event_db:
-                    event_repo = AgentRunRepository(event_db)
-                    await event_repo.update_run(
-                        run.id,
-                        status="failed",
-                        error_message=event.get("error"),
-                        total_time_ms=total_ms,
-                    )
-                    await event_db.commit()
+        try:
+            async for event in run_agent_stream(
+                query=request.query,
+                user_id=user_id,
+                space_id=request.space_id,
+                session_id=session_id,
+                llm_config=request.llm_config,
+            ):
+                # 更新运行记录（终态一律条件写，避免迟到事件覆盖已完成结果）
+                event_type = event.get("type")
+                if event_type == "completed":
+                    total_ms = int((time.time() - start_time) * 1000)
+                    async with AsyncSessionLocal() as event_db:
+                        event_repo = AgentRunRepository(event_db)
+                        await event_repo.update_run_terminal(
+                            run.id,
+                            "completed",
+                            answer=event.get("answer"),
+                            total_time_ms=total_ms,
+                            citation_count=len(event.get("citations", [])),
+                        )
+                        await event_db.commit()
+                    # 把问答写入会话历史
+                    try:
+                        from app.services import session_manager as sm
+                        await sm.session_manager.add_message(session_id, user_id, request.query, event.get("answer", ""))
+                    except Exception as msg_err:
+                        logger.warning(f"写入会话历史失败: {msg_err}")
+                elif event_type == "error":
+                    total_ms = int((time.time() - start_time) * 1000)
+                    async with AsyncSessionLocal() as event_db:
+                        event_repo = AgentRunRepository(event_db)
+                        await event_repo.update_run_terminal(
+                            run.id,
+                            "failed",
+                            error_message=event.get("error"),
+                            total_time_ms=total_ms,
+                        )
+                        await event_db.commit()
+                elif event_type == "timeout":
+                    # 结构化超时：正确地落库为 timeout，不再记为 completed
+                    total_ms = int((time.time() - start_time) * 1000)
+                    async with AsyncSessionLocal() as event_db:
+                        event_repo = AgentRunRepository(event_db)
+                        await event_repo.update_run_terminal(
+                            run.id,
+                            "timeout",
+                            error_message=event.get("error", "处理超时"),
+                            total_time_ms=total_ms,
+                        )
+                        await event_db.commit()
 
-            # 添加 run_id 和 session_id 到事件
-            event["run_id"] = run.id
-            event["session_id"] = session_id
-            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                # 添加 run_id 和 session_id 到事件
+                event["run_id"] = run.id
+                event["session_id"] = session_id
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except (asyncio.CancelledError, GeneratorExit):
+            # 客户端断开：短暂、受限地保存终态（cancelled）后传播取消
+            total_ms = int((time.time() - start_time) * 1000)
+            try:
+                async with AsyncSessionLocal() as cancel_db:
+                    await AgentRunRepository(cancel_db).update_run_terminal(
+                        run.id,
+                        "cancelled",
+                        error_message="客户端取消",
+                        total_time_ms=total_ms,
+                    )
+                    await cancel_db.commit()
+            except Exception as cancel_err:
+                logger.warning(f"【Agent】取消后写入终态失败: {cancel_err}")
+            raise
 
     return StreamingResponse(
         event_generator(),
@@ -210,9 +239,16 @@ async def agent_query(
 
     total_ms = int((time.time() - start_time) * 1000)
     logger.info(f"【Agent非流式】result answer preview: {str(result.get('answer',''))[:100]}")
-    await repo.update_run(
+    # 结构化超时正确地落库为 timeout，不计为 completed
+    if result.get("timed_out"):
+        final_status = "timeout"
+    elif result.get("error"):
+        final_status = "failed"
+    else:
+        final_status = "completed"
+    await repo.update_run_terminal(
         run.id,
-        status="completed" if not result.get("error") else "failed",
+        final_status,
         answer=result.get("answer"),
         error_message=result.get("error"),
         total_time_ms=total_ms,
@@ -220,7 +256,7 @@ async def agent_query(
     )
     await db.commit()
 
-    if not result.get("error"):
+    if not result.get("error") and result.get("answer"):
         try:
             from app.services import session_manager as sm
             await sm.session_manager.add_message(

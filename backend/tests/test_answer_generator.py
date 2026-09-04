@@ -75,11 +75,14 @@ async def test_generate_with_citations_and_judge():
 # ---------- 降级 ----------
 
 @pytest.mark.asyncio
-async def test_generate_timeout_returns_graceful_message():
+async def test_generate_timeout_returns_structured_failure():
     gen = AnswerGenerator()
     gen._chat_model = StubModel(errors=[asyncio.TimeoutError()])
     out = await gen.generate("q", [_ev()])
-    assert "超时" in out["answer"]
+    # 结构化超时：timed_out=True、无"抱歉"答案，不计为 completed
+    assert out["timed_out"] is True
+    assert out["error"] == "generation_timeout"
+    assert out["answer"] is None
     assert out["quality_scores"] is None
 
 

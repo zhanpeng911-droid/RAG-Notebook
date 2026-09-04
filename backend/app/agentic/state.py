@@ -22,6 +22,8 @@ class AgentPhase(str, Enum):
     CITATION = "citation"
     COMPLETED = "completed"
     ERROR = "error"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
 
 
 @dataclass

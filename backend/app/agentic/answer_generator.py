@@ -11,6 +11,7 @@ from typing import List, Dict, Any, Optional
 import asyncio
 import json
 import re
+import time
 
 from app.core.logger_handler import logger
 from app.rag.retrieval_service import Evidence
@@ -50,6 +51,7 @@ class AnswerGenerator:
         query: str,
         evidences: List[Evidence],
         include_citations: bool = True,
+        deadline: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         生成带引用的答案。
@@ -57,12 +59,27 @@ class AnswerGenerator:
         :param query: 用户查询
         :param evidences: 证据列表
         :param include_citations: 是否在答案中包含引用标记
-        :return: {"answer": str, "citations": list}
+        :param deadline: 单调时钟总 deadline（monotonic），用剩余预算而不是
+                         每阶段重新获得完整预算；None 表示用默认单次超时
+        :return: {"answer", "citations", "quality_scores", "timed_out", "error"}
         """
         if not evidences:
             return {
                 "answer": "抱歉，我没有找到足够的证据来回答您的问题。",
                 "citations": [],
+                "quality_scores": None,
+                "timed_out": False,
+            }
+
+        # 预算不足则直接结构化失败，不启动模型请求
+        gen_timeout = self._remaining_timeout(deadline, default=30.0)
+        if gen_timeout <= 0:
+            return {
+                "answer": None,
+                "citations": [],
+                "quality_scores": None,
+                "timed_out": True,
+                "error": "generation_timeout",
             }
 
         # 创建引用
@@ -81,26 +98,31 @@ class AnswerGenerator:
             from langchain_core.messages import HumanMessage
             response = await asyncio.wait_for(
                 chat_model.ainvoke([HumanMessage(content=prompt)]),
-                timeout=30.0,
+                timeout=gen_timeout,
             )
 
             answer = response.content
 
-            # LLM-as-judge 质量评分（失败不影响主流程）
-            quality_scores = await self._judge_answer(query, context, answer)
+            # LLM-as-judge 质量评分（非必要；预算不足时跳过，失败不影响主流程）
+            quality_scores = None
+            if self._remaining_timeout(deadline, default=15.0) >= 3.0:
+                quality_scores = await self._judge_answer(query, context, answer)
 
             return {
                 "answer": answer,
                 "citations": citation_manager.format_citations_for_display(citations),
                 "quality_scores": quality_scores,
+                "timed_out": False,
             }
 
         except asyncio.TimeoutError:
             logger.error("【答案生成】超时")
             return {
-                "answer": "抱歉，生成答案超时，请稍后再试。",
-                "citations": citation_manager.format_citations_for_display(citations),
+                "answer": None,
+                "citations": [],
                 "quality_scores": None,
+                "timed_out": True,
+                "error": "generation_timeout",
             }
         except Exception as e:
             import traceback
@@ -109,7 +131,14 @@ class AnswerGenerator:
                 "answer": "抱歉，生成答案时出现错误。",
                 "citations": [],
                 "quality_scores": None,
+                "timed_out": False,
             }
+
+    def _remaining_timeout(self, deadline: Optional[float], default: float) -> float:
+        """单调 deadline 的剩余预算；无 deadline 时返回默认单次超时。"""
+        if deadline is None:
+            return float(default)
+        return deadline - time.monotonic()
 
     async def _judge_answer(
         self,

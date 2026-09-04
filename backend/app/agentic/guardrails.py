@@ -25,10 +25,12 @@ class Guardrails:
 
     def __init__(self):
         self.start_time: Optional[float] = None
+        self.deadline: Optional[float] = None
 
     def start(self):
-        """开始计时"""
-        self.start_time = time.time()
+        """开始计时（单调时钟，设置统一 deadline）"""
+        self.start_time = time.monotonic()
+        self.deadline = self.start_time + self.MAX_TOTAL_TIME
 
     def check_timeout(self) -> bool:
         """
@@ -36,16 +38,21 @@ class Guardrails:
 
         :return: True 表示未超时，False 表示已超时
         """
-        if self.start_time is None:
+        if self.deadline is None:
             return True
-        elapsed = time.time() - self.start_time
-        return elapsed < self.MAX_TOTAL_TIME
+        return time.monotonic() < self.deadline
+
+    def remaining_budget(self) -> float:
+        """剩余时间预算（秒）。已超时返回 <= 0。"""
+        if self.deadline is None:
+            return self.MAX_TOTAL_TIME
+        return self.deadline - time.monotonic()
 
     def get_elapsed_time(self) -> float:
-        """获取已用时间"""
+        """获取已用时间（秒）"""
         if self.start_time is None:
             return 0.0
-        return time.time() - self.start_time
+        return time.monotonic() - self.start_time
 
     def check_retrieval_rounds(self, current_round: int) -> bool:
         """

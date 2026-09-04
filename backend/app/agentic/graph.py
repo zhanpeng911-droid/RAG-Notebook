@@ -7,6 +7,7 @@ Agent 状态图 —— 编排 Agentic RAG 的完整工作流。
          → (不足) 改写查询并补检索（最多 1~2 次）
          → SSE 流式输出答案、引用和摘要
 """
+import asyncio
 from typing import AsyncGenerator, Dict, Any
 
 from app.core.logger_handler import logger
@@ -196,6 +197,14 @@ class AgentGraph:
                     state.increment_round()
 
             # 生成答案（事件附带证据评估结果摘要）
+            # 生成前检查总预算：预算耗尽则结构化超时失败，不再进入生成——
+            # 否则"检索超时仍生成答案并记为 completed"会掩盖真实超时
+            if self.guardrails.remaining_budget() <= 0:
+                logger.warning("【Agent】总预算耗尽，进入答案生成前超时")
+                state.error = "处理超时"
+                yield self._create_event(AgentPhase.TIMEOUT, state=state, error="处理超时")
+                return
+
             yield self._create_event(
                 AgentPhase.GENERATING_ANSWER,
                 state=state,
@@ -207,7 +216,15 @@ class AgentGraph:
                 # 使用清洗后的原始查询生成答案（检索用改写词，答案生成防注入）
                 query=state.original_query,
                 evidences=state.evidences,
+                deadline=self.guardrails.deadline,
             )
+
+            if result.get("timed_out"):
+                # 生成阶段超时：结构化失败（timeout），不计为 completed
+                logger.warning("【Agent】答案生成超时")
+                state.error = "生成超时"
+                yield self._create_event(AgentPhase.TIMEOUT, state=state, error="生成超时")
+                return
 
             state.answer = result["answer"]
             state.citations = result["citations"]
@@ -223,6 +240,11 @@ class AgentGraph:
                 quality_scores=quality_scores,
             )
 
+        except asyncio.CancelledError:
+            # 客户端取消：不当作普通错误，向上传播（由路由持久化 cancelled 状态）
+            state.error = "已取消"
+            logger.info("【Agent】请求被客户端取消")
+            raise
         except Exception as e:
             logger.error(f"【Agent】执行失败: {e}", exc_info=True)
             state.error = str(e)
@@ -260,7 +282,7 @@ class AgentGraph:
             if quality_scores is not None:
                 event["quality_scores"] = quality_scores
 
-        if phase == AgentPhase.ERROR:
+        if phase in (AgentPhase.ERROR, AgentPhase.TIMEOUT, AgentPhase.CANCELLED):
             event["error"] = error or (state.error if state else "未知错误")
 
         return event
@@ -301,10 +323,13 @@ async def run_agent(
         "quality_scores": None,
         "phases": [],
         "error": None,
+        "timed_out": False,
     }
 
     async for event in graph.run(query):
         result["phases"].append(event)
+        if event.get("type") == "timeout":
+            result["timed_out"] = True
         if event.get("answer"):
             result["answer"] = event["answer"]
         if event.get("citations"):
