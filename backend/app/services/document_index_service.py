@@ -340,10 +340,8 @@ async def _sync_index(document_id: str, user_id: str) -> DocumentIndexStatus:
                 doc.file_path, md5=doc.md5, user_id=user_id
             )
             if not documents:
-                await repo.update_status(
-                    document_id,
-                    DocumentIndexStatus.INDEX_FAILED,
-                    error_message="文档加载为空"
+                await repo.mark_index_failed_if_indexing(
+                    document_id, "文档加载为空"
                 )
                 await session.commit()
                 return DocumentIndexStatus.INDEX_FAILED
@@ -358,10 +356,8 @@ async def _sync_index(document_id: str, user_id: str) -> DocumentIndexStatus:
             # 切片
             split_docs = store.split_documents_sync(documents)
             if not split_docs:
-                await repo.update_status(
-                    document_id,
-                    DocumentIndexStatus.INDEX_FAILED,
-                    error_message="文档切片为空"
+                await repo.mark_index_failed_if_indexing(
+                    document_id, "文档切片为空"
                 )
                 await session.commit()
                 return DocumentIndexStatus.INDEX_FAILED
@@ -375,12 +371,11 @@ async def _sync_index(document_id: str, user_id: str) -> DocumentIndexStatus:
             # 保存 MD5 记录
             await store.save_md5_hex(doc.md5, doc.filename, doc.original_filename, user_id)
 
-            # 更新状态为 indexed
-            await repo.update_status(
-                document_id,
-                DocumentIndexStatus.INDEXED,
-                chunk_count=len(split_docs)
-            )
+            # 条件发布 indexed：仅当仍处于 indexing（未被 deleting/删除抢占）
+            if not await repo.publish_indexed(document_id, chunk_count=len(split_docs)):
+                logger.warning(
+                    f"【文档索引】同步索引完成但文档已被删除/deleting，不发布: id={document_id}"
+                )
             await session.commit()
 
             logger.info(f"【文档索引】同步索引完成: id={document_id}, chunks={len(split_docs)}")
@@ -389,10 +384,8 @@ async def _sync_index(document_id: str, user_id: str) -> DocumentIndexStatus:
         except Exception as e:
             logger.error(f"【文档索引】同步索引失败: id={document_id}, error={e}")
             try:
-                await repo.update_status(
-                    document_id,
-                    DocumentIndexStatus.INDEX_FAILED,
-                    error_message=str(e)[:500]
+                await repo.mark_index_failed_if_indexing(
+                    document_id, str(e)[:500]
                 )
                 await session.commit()
             except Exception:
@@ -513,12 +506,23 @@ async def delete_index_record(document_id: str, user_id: str, delete_file: bool 
         saved_md5 = doc.md5
         saved_status = doc.status
 
-        # 先置为 DELETING：并发索引任务无法再 claim，读取侧可见"删除中"
-        await repo.update_status(document_id, DocumentIndexStatus.DELETING)
-        await session.commit()
+        # 可能已写向量的状态都纳入清理：indexed/indexing/deleting，
+        # 以及 index_failed（可能发生"向量写成功、SQL 提交失败"的残余）。
+        # deleting 重试也必须再次尝试向量清理（F02）。
+        may_have_vectors = saved_status in (
+            DocumentIndexStatus.INDEXED,
+            DocumentIndexStatus.INDEXING,
+            DocumentIndexStatus.DELETING,
+            DocumentIndexStatus.INDEX_FAILED,
+        )
 
-        # 如果文档已索引或正在索引，清理向量和旧 MD5 记录
-        if saved_status in (DocumentIndexStatus.INDEXED, DocumentIndexStatus.INDEXING) and saved_md5:
+        # 先置为 DELETING（已是 deleting 则跳过）：并发索引任务无法再 claim，
+        # 读取侧可见"删除中"
+        if saved_status != DocumentIndexStatus.DELETING:
+            await repo.update_status(document_id, DocumentIndexStatus.DELETING)
+            await session.commit()
+
+        if may_have_vectors and saved_md5:
             try:
                 from app.rag.vector_store import VectorStoreService
                 store = VectorStoreService()
@@ -626,7 +630,13 @@ async def clean_user_index_records(user_id: str, space_id: str = None) -> dict:
         deleted_count = 0
         for doc in docs:
             # 如果已索引或正在索引，清理向量
-            if doc.status in (DocumentIndexStatus.INDEXED, DocumentIndexStatus.INDEXING) and doc.md5:
+            # 可能已写向量的状态都清理（含 deleting 重试、index_failed 残余）
+            if doc.status in (
+                DocumentIndexStatus.INDEXED,
+                DocumentIndexStatus.INDEXING,
+                DocumentIndexStatus.DELETING,
+                DocumentIndexStatus.INDEX_FAILED,
+            ) and doc.md5:
                 if store:
                     try:
                         where_clause = {"$and": [{"user_id": user_id}, {"md5": doc.md5}]}

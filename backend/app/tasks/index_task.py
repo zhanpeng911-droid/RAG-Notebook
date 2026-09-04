@@ -98,11 +98,7 @@ async def _index_document_async(task, document_id: str, user_id: str):
             if not documents:
                 error_msg = "文档加载为空（可能是不支持的文件格式或文件损坏）"
                 logger.error(f"【后台索引】{error_msg}, id={document_id}")
-                await repo.update_status(
-                    document_id,
-                    DocumentIndexStatus.INDEX_FAILED,
-                    error_message=error_msg
-                )
+                await repo.mark_index_failed_if_indexing(document_id, error_msg)
                 await session.commit()
                 return
 
@@ -118,11 +114,7 @@ async def _index_document_async(task, document_id: str, user_id: str):
             if not split_docs:
                 error_msg = "文档切片为空（可能是文件内容过少）"
                 logger.error(f"【后台索引】{error_msg}, id={document_id}")
-                await repo.update_status(
-                    document_id,
-                    DocumentIndexStatus.INDEX_FAILED,
-                    error_message=error_msg
-                )
+                await repo.mark_index_failed_if_indexing(document_id, error_msg)
                 await session.commit()
                 return
 
@@ -140,18 +132,11 @@ async def _index_document_async(task, document_id: str, user_id: str):
             # 保存 MD5 记录
             await store.save_md5_hex(doc.md5, doc.filename, doc.original_filename, user_id)
 
-            # 再次检查记录是否还存在（并发安全：删除和索引可能同时发生）
-            still_exists = await repo.get_by_id(document_id, user_id)
-            if not still_exists:
-                logger.warning(f"【后台索引】文档在索引过程中被删除，不写入状态: id={document_id}")
-                return
-
-            # 更新状态为 indexed
-            await repo.update_status(
-                document_id,
-                DocumentIndexStatus.INDEXED,
-                chunk_count=len(split_docs)
-            )
+            # 条件发布 indexed：仅当仍处于 indexing（未被 deleting/删除抢占）
+            if not await repo.publish_indexed(document_id, chunk_count=len(split_docs)):
+                logger.warning(
+                    f"【后台索引】索引完成但文档已被删除/deleting，不发布: id={document_id}"
+                )
             await session.commit()
 
             logger.info(
@@ -165,10 +150,9 @@ async def _index_document_async(task, document_id: str, user_id: str):
             logger.error(f"【后台索引】文档索引失败: id={document_id}, error={error_msg}")
 
             try:
-                await repo.update_status(
-                    document_id,
-                    DocumentIndexStatus.INDEX_FAILED,
-                    error_message=error_msg[:500]
+                # 条件失败写回：仅仍处于 indexing 时置 index_failed（不覆盖 deleting/删除）
+                await repo.mark_index_failed_if_indexing(
+                    document_id, error_msg[:500]
                 )
                 await repo.increment_retry(document_id)
                 await session.commit()

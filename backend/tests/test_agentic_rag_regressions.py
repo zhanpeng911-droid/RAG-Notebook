@@ -255,13 +255,19 @@ def test_knowledge_router_clean_passes_space_id():
 
 
 def test_index_task_handles_deleted_document():
-    """index_task 在文档被删除时应安全退出，不抛异常"""
+    """index_task 在文档被删除时应安全退出，不抛异常、不把状态改回 indexed。
+
+    删除防护从 get_by_id 重查升级为原子条件发布（publish_indexed）：
+    WHERE status=indexing 才置 indexed，删除/deleting 已抢占时发布被阻止。
+    """
     task_path = Path(__file__).resolve().parents[1] / "app" / "tasks" / "index_task.py"
     source = task_path.read_text(encoding="utf-8")
 
-    # 必须有检查文档是否还存在的逻辑
-    assert "still_exists" in source or "文档在索引过程中被删除" in source
-    # 必须有"可能已被删除"的警告日志
+    # 必须有原子条件发布（替代旧的 still_exists 重查，更强）
+    assert "publish_indexed" in source
+    # 必须有"已被删除/deleting，不发布"的警告日志
+    assert "已被删除/deleting，不发布" in source
+    # 必须有"可能已被删除"的警告日志（领取/文件检查路径）
     assert "可能已被删除" in source
 
 

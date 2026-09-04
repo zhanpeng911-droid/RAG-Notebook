@@ -423,18 +423,26 @@ async def test_sync_index_claim_race_exits_without_indexing(env):
 
 
 @pytest.mark.asyncio
-async def test_delete_vector_failure_keeps_deleting_record(env):
+async def test_delete_vector_failure_keeps_deleting_record_and_retries(env):
     made = await dis.save_uploaded_file(_upload("delkeep.txt"), "u-delkeep")
     doc_id = made["document_id"]
 
-    # 向量删除失败 → 保留 deleting 记录，不删 SQL
+    # 向量删除失败 → 保留 deleting 记录，不删 SQL；重试必须再次尝试清理（F02）
+    attempts = []
+
     def _boom_delete(where=None, ids=None):
+        attempts.append(where)
         raise RuntimeError("chroma down")
     env.store.vectors_store.delete = _boom_delete
 
     out = await dis.delete_index_record(doc_id, "u-delkeep")
     assert out["success"] is False
-    assert "deleting" in out["message"]
+    assert len(attempts) == 1
+
+    # deleting 重试也执行向量清理（不能只看第二次 success）
+    out2 = await dis.delete_index_record(doc_id, "u-delkeep")
+    assert out2["success"] is False
+    assert len(attempts) == 2
 
     rows = await dis.get_user_index_status("u-delkeep")
     row = next(x for x in rows if x["id"] == doc_id)
@@ -442,10 +450,45 @@ async def test_delete_vector_failure_keeps_deleting_record(env):
 
     # 向量恢复后再次删除 → 成功
     env.store.vectors_store.delete = lambda where=None, ids=None: None
-    out2 = await dis.delete_index_record(doc_id, "u-delkeep")
-    assert out2["success"] is True
+    out3 = await dis.delete_index_record(doc_id, "u-delkeep")
+    assert out3["success"] is True
     rows2 = await dis.get_user_index_status("u-delkeep")
     assert all(x["id"] != doc_id for x in rows2)
+
+
+@pytest.mark.asyncio
+async def test_publish_indexed_blocked_after_deleting(env):
+    """已领取 worker 在文档被删除/deleting 后不得把状态改回 indexed（F04）。"""
+    made = await dis.save_uploaded_file(_upload("pub.txt"), "u-pub")
+    doc_id = made["document_id"]
+
+    import app.db.db_config as db_cfg
+    from app.repositories.document_index_repository import DocumentIndexRepository
+
+    # 模拟 worker 领取（pending → indexing）
+    async with db_cfg.AsyncSessionLocal() as s:
+        repo = DocumentIndexRepository(s)
+        await repo.update_status(doc_id, DocumentIndexStatus.PENDING_INDEX)
+        await s.commit()
+    async with db_cfg.AsyncSessionLocal() as s:
+        repo = DocumentIndexRepository(s)
+        assert await repo.claim_for_indexing(doc_id)
+        await s.commit()
+
+    # 删除先到：置为 deleting
+    async with db_cfg.AsyncSessionLocal() as s:
+        repo = DocumentIndexRepository(s)
+        await repo.update_status(doc_id, DocumentIndexStatus.DELETING)
+        await s.commit()
+
+    # worker 完成向量写后条件发布：被阻止，状态保持 deleting
+    async with db_cfg.AsyncSessionLocal() as s:
+        repo = DocumentIndexRepository(s)
+        ok = await repo.publish_indexed(doc_id, chunk_count=5)
+        await s.commit()
+        assert ok is False
+        doc = await repo.get_by_id(doc_id, "u-pub")
+        assert doc.status == DocumentIndexStatus.DELETING
 
 
 # ---------- 路径安全（批次5B） ----------

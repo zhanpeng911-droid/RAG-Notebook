@@ -135,6 +135,43 @@ class DocumentIndexRepository:
         await self.session.flush()
         return result.rowcount > 0
 
+    async def publish_indexed(self, doc_id: str, chunk_count: int) -> bool:
+        """条件发布：仅当仍处于 indexing（未被 deleting/删除抢占）时置为 indexed。
+
+        防止已领取 worker 在删除之后仍把状态改回 indexed（F04）。
+        """
+        result = await self.session.execute(
+            update(DocumentIndex)
+            .where(DocumentIndex.id == doc_id)
+            .where(DocumentIndex.status == DocumentIndexStatus.INDEXING)
+            .values(
+                status=DocumentIndexStatus.INDEXED,
+                chunk_count=chunk_count,
+                indexed_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            )
+        )
+        await self.session.flush()
+        return result.rowcount > 0
+
+    async def mark_index_failed_if_indexing(self, doc_id: str, error_message: str) -> bool:
+        """条件失败写回：仅当仍处于 indexing 时置为 index_failed。
+
+        删除/deleting 已抢占时不覆盖其状态。
+        """
+        result = await self.session.execute(
+            update(DocumentIndex)
+            .where(DocumentIndex.id == doc_id)
+            .where(DocumentIndex.status == DocumentIndexStatus.INDEXING)
+            .values(
+                status=DocumentIndexStatus.INDEX_FAILED,
+                error_message=error_message,
+                updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            )
+        )
+        await self.session.flush()
+        return result.rowcount > 0
+
     async def increment_retry(self, doc_id: str) -> None:
         """增加重试次数"""
         result = await self.session.execute(
