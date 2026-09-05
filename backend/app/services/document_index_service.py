@@ -368,6 +368,52 @@ async def _cleanup_superseded_generations(store, user_id: str, md5: str,
             logger.warning(f"【文档索引】旧版固定 ID 向量清理失败: {e}")
 
 
+class _ExecutionRepository:
+    """执行清单仓库（K1）——登记/关闭/查询未关闭执行。"""
+
+    def __init__(self, session):
+        self.session = session
+
+    async def open_execution(self, *, document_id: str, user_id: str,
+                             generation: int, token: str) -> None:
+        from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+        self.session.add(DocumentIndexExecution(
+            execution_id=str(uuid.uuid4()),
+            document_id=document_id, user_id=user_id,
+            generation=generation, token=token,
+            status=ExecutionStatus.WRITING,
+        ))
+        await self.session.flush()
+
+    async def close_execution(self, *, document_id: str, generation: int,
+                              token: str, status: str, reason: str) -> bool:
+        from datetime import datetime, timezone
+        from sqlalchemy import update
+        from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+        result = await self.session.execute(
+            update(DocumentIndexExecution)
+            .where(DocumentIndexExecution.document_id == document_id)
+            .where(DocumentIndexExecution.generation == generation)
+            .where(DocumentIndexExecution.token == token)
+            .where(DocumentIndexExecution.status == ExecutionStatus.WRITING)
+            .values(status=status, closed_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                    close_reason=reason)
+        )
+        await self.session.flush()
+        return result.rowcount > 0
+
+    async def has_open_executions(self, document_id: str) -> bool:
+        from sqlalchemy import select
+        from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+        result = await self.session.execute(
+            select(DocumentIndexExecution.execution_id).where(
+                DocumentIndexExecution.document_id == document_id,
+                DocumentIndexExecution.status != ExecutionStatus.CLOSED,
+            ).limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
+
 async def execute_index_document(document_id: str, user_id: str) -> dict:
     """统一索引执行服务（R2C）：HTTP 同步模式与 Celery worker 共用唯一实现。
 
@@ -398,6 +444,13 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
                 await session.commit()
                 return {"status": current or DocumentIndexStatus.INDEX_FAILED,
                         "retryable": False, "error": None}
+
+            # K1：同一事务登记执行清单（writing）——写入者生命周期的持久状态
+            execution_repo = _ExecutionRepository(session)
+            execution_token = str(uuid.uuid4())
+            await execution_repo.open_execution(
+                document_id=document_id, user_id=user_id,
+                generation=generation, token=execution_token)
             await session.commit()
 
             # 检查文件是否存在（此时必然处于 indexing，失败写回由本执行方持有）
@@ -406,6 +459,9 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
                 logger.error(f"【文档索引】{error_msg}, id={document_id}")
                 await repo.mark_index_failed_if_indexing(
                     document_id, error_msg, generation=generation)
+                await execution_repo.close_execution(
+                    document_id=document_id, generation=generation,
+                    token=execution_token, status="closed", reason=error_msg[:200])
                 await session.commit()
                 return {"status": DocumentIndexStatus.INDEX_FAILED,
                         "retryable": False, "error": error_msg}
@@ -425,6 +481,9 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
                     await session.commit()
                     return {"status": current or DocumentIndexStatus.INDEX_FAILED,
                             "retryable": False, "error": None}
+                await execution_repo.close_execution(
+                    document_id=document_id, generation=generation,
+                    token=execution_token, status="closed", reason="文档加载为空")
                 await session.commit()
                 return {"status": DocumentIndexStatus.INDEX_FAILED,
                         "retryable": False, "error": "文档加载为空"}
@@ -472,6 +531,9 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
                     f"【文档索引】索引完成但文档已被删除/deleting 或代次已过期，不发布: id={document_id}"
                 )
                 current = await repo.get_status(document_id, user_id)
+                await execution_repo.close_execution(
+                    document_id=document_id, generation=generation,
+                    token=execution_token, status="closed", reason="publish_rejected")
                 await session.commit()
                 return {"status": current or DocumentIndexStatus.INDEX_FAILED,
                         "retryable": False, "error": None}
@@ -487,6 +549,10 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
                     generation=generation, reason="superseded_generation",
                     legacy_chunk_count=legacy_chunk_count,
                 )
+                # K1：发布成功即确定关闭写入者（同一事务）
+                await execution_repo.close_execution(
+                    document_id=document_id, generation=generation,
+                    token=execution_token, status="closed", reason="published")
             await session.commit()
 
             logger.info(
@@ -500,6 +566,15 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
             from app.tasks.index_task import _sanitize_error_message
             error_msg = _sanitize_error_message(str(e))
             logger.error(f"【文档索引】索引执行失败: id={document_id}, error={error_msg}")
+            # K1：异常路径结果不确定（远端可能已写入）→ 保持 unknown
+            try:
+                await execution_repo.close_execution(
+                    document_id=document_id, generation=generation or 0,
+                    token=execution_token or "", status="unknown",
+                    reason=error_msg[:200])
+                await session.commit()
+            except Exception:
+                await session.rollback()
             written = False
             try:
                 written = await repo.mark_index_failed_if_indexing(
@@ -693,14 +768,19 @@ async def _delete_single_record(doc_id: str, user_id: str, delete_file: bool, st
             await repo.update_status(doc_id, DocumentIndexStatus.DELETING)
             await session.commit()
 
-        # 向量清理：凡具备资源标识（md5）一律尝试 —— pending（F09 重试路径）
-        # 也可能已有部分向量，不能凭"当前是 pending"推断从未写过向量（S03）；
-        # 向量清理按 user_id+md5 定位，幂等，宁多勿漏
-        if saved_md5 and store is not None:
+        # 向量清理（K2 精确目标）：按 user+document_id 定位本资源向量
+        # （切片元数据携带 document_id），不按 user+md5 盲删——同内容其它
+        # 文档/空间的资源不受影响；pre-008 旧版固定 ID 按 chunk_count 清单补删
+        if store is not None:
             try:
-                where_clause = {"$and": [{"user_id": user_id}, {"md5": saved_md5}]}
+                where_clause = {"$and": [{"user_id": user_id},
+                                         {"document_id": doc_id}]}
                 await asyncio.to_thread(store.vectors_store.delete, where=where_clause)
-                logger.info(f"【文档索引】已删除向量: user_id={user_id}, md5={saved_md5}")
+                if int(doc.chunk_count or 0) > 0:
+                    legacy_ids = [f"{user_id}:{doc_id}:v1:{i}"
+                                  for i in range(int(doc.chunk_count))]
+                    await asyncio.to_thread(store.vectors_store.delete, ids=legacy_ids)
+                logger.info(f"【文档索引】已删除向量: user_id={user_id}, document_id={doc_id}")
             except Exception as e:
                 # 向量清理未完成：保留 deleting 记录（可重试），不得先删 SQL 记录导致
                 # "向量仍可检索但记录已删除"的复活/残留

@@ -119,54 +119,15 @@ def process_cleanup_tasks_task(self, limit: int = 20):
 
 async def _process_cleanup_tasks_async(limit: int) -> int:
     import asyncio as _aio
-    from datetime import datetime, timedelta, timezone
-    from uuid import uuid4 as _uuid4
-    from sqlalchemy import select, update
+    from sqlalchemy import select
     from app.db.db_config import AsyncSessionLocal
-    from app.models.cleanup_task import DocumentCleanupTask, CleanupTaskStatus
-    from app.repositories.cleanup_task_repository import CLAIM_LEASE_MINUTES
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    from app.repositories.cleanup_task_repository import CleanupTaskRepository
 
     async with AsyncSessionLocal() as session:
-        # 第一阶段：有界选取到期任务 ID（next_retry_at, created_at, id 公平序）
-        due_ids = list((await session.execute(
-            select(DocumentCleanupTask.id)
-            .where(DocumentCleanupTask.status.in_([
-                CleanupTaskStatus.PENDING, CleanupTaskStatus.FAILED,
-                CleanupTaskStatus.CLAIMED,
-            ]))
-            .where((DocumentCleanupTask.next_retry_at.is_(None))
-                   | (DocumentCleanupTask.next_retry_at <= now))
-            .where((DocumentCleanupTask.status != CleanupTaskStatus.CLAIMED)
-                   | (DocumentCleanupTask.lease_expires_at.is_(None))
-                   | (DocumentCleanupTask.lease_expires_at <= now))
-            .order_by(DocumentCleanupTask.next_retry_at.asc(),
-                      DocumentCleanupTask.created_at.asc(),
-                      DocumentCleanupTask.id.asc())
-            .limit(max(1, min(int(limit), 200)))
-        )).scalars().all())
-        if not due_ids:
-            return 0
-
-        # 第二阶段：条件写令牌与租约（复核状态与租约，防止覆盖其它 worker 的新领取）
-        token = str(_uuid4())
-        await session.execute(
-            update(DocumentCleanupTask)
-            .where(DocumentCleanupTask.id.in_(due_ids))
-            .where(DocumentCleanupTask.status.in_([
-                CleanupTaskStatus.PENDING, CleanupTaskStatus.FAILED,
-                CleanupTaskStatus.CLAIMED,
-            ]))
-            .where((DocumentCleanupTask.status != CleanupTaskStatus.CLAIMED)
-                   | (DocumentCleanupTask.lease_expires_at.is_(None))
-                   | (DocumentCleanupTask.lease_expires_at <= now))
-            .values(status=CleanupTaskStatus.CLAIMED, claim_token=token,
-                    lease_expires_at=now + timedelta(minutes=CLAIM_LEASE_MINUTES))
-        )
-        tasks = list((await session.execute(
-            select(DocumentCleanupTask).where(DocumentCleanupTask.claim_token == token)
-        )).scalars().all())
+        # K3：领取统一走仓库实现（两阶段物化 + 状态/租约复核），worker 不再自持 SQL
+        repo = CleanupTaskRepository(session)
+        tasks = await repo.claim_due_tasks(limit=limit)
         await session.commit()
 
     if not tasks:
@@ -181,7 +142,6 @@ async def _process_cleanup_tasks_async(limit: int) -> int:
 
     from app.repositories.cleanup_task_repository import CleanupTaskRepository
 
-    VERIFY_GRACE = timedelta(seconds=60)  # 首次核验为空后的迟到写入宽限窗口
 
     done = 0
     async with AsyncSessionLocal() as session:
@@ -267,21 +227,15 @@ async def _process_cleanup_tasks_async(limit: int) -> int:
                     if residual:
                         raise RuntimeError(f"旧代次仍有 {residual} 条向量未清空")
 
-                # 评审 #2：一次查空不算完成——首空记录时间并安排宽限复核，
-                # 宽限后仍为空才 done（迟到写入会被第二次核验捕获并重试）
-                now2 = datetime.now(timezone.utc).replace(tzinfo=None)
-                if task.verified_empty_at is None:
-                    await repo.mark_verified_empty(
-                        task.id, token, now2, VERIFY_GRACE)
-                    continue
-                if now2 - task.verified_empty_at < VERIFY_GRACE:
-                    await repo.mark_verified_empty(
-                        task.id, token, task.verified_empty_at, VERIFY_GRACE)
-                    continue
-                if await repo.mark_done(task.id, token):
+                # K1：写入者未确定关闭（writing/unknown）→ 不得判 done。
+                # 查空只是观测（verified_empty_at 保留为观测字段）；
+                # 关闭证明来自执行清单。关闭 + 核验为空 → done。
+                if await repo.has_open_executions(task.document_id):
+                    raise RuntimeError("存在未关闭的写入执行（waiting_writer），暂缓完成")
+                if await repo.mark_done(task.id, task.claim_token):
                     done += 1
             except Exception as e:
-                outcome = await repo.mark_failed(task.id, token, str(e))
+                outcome = await repo.mark_failed(task.id, task.claim_token, str(e))
                 logger.warning(
                     f"【清理任务】执行失败（{outcome}）: doc={task.document_id}, "
                     f"gen={task.generation}, reason={task.reason}, error={e}"

@@ -6,9 +6,11 @@ from app.models.space import Space
 from app.models.space_document import SpaceDocument
 from app.models.audit_log import AuditLog
 from app.models.cleanup_task import DocumentCleanupTask, CleanupTaskStatus
+from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
 
 __all__ = [
     "Base", "ChatSession", "ChatMessage", "Note", "ReviewRecord",
     "Organization", "OrganizationMember", "Space", "SpaceDocument", "AuditLog",
     "DocumentCleanupTask", "CleanupTaskStatus",
+    "DocumentIndexExecution", "ExecutionStatus",
 ]

@@ -247,7 +247,7 @@ class DocumentProcessor:
                             # C4：切片携带资源身份，删除清理可精确到文档
                             doc.metadata['document_id'] = document_id
                     stable_ids = [
-                        f"kb:{user_id}:{md5_hex}:g{int(generation)}:{i}"
+                        f"{user_id}:{document_id}:g{int(generation)}:{i}"
                         for i in range(len(document))
                     ]
                     await asyncio.to_thread(

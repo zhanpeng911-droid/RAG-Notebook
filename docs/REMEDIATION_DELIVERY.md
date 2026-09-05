@@ -321,3 +321,15 @@ indexing 并继续写向量；C2 IN(SELECT...LIMIT) 结构；C4 删除无持久�
 functional 14；mypy 门禁 0 错误；ruff 通过。交付状态维持评审口径：C1 协议完整（代码+单测），
 C2 待真实集成，C3 部分完成（三项点名），C4 队列缺陷已修复、真实 Chroma 迟到写入/两阶段
 核验待集成验证。
+
+### 收口补充返修第一批（K1/K3 部分接线，提交中）
+
+- 已实现：迁移 012 `document_index_executions`（执行清单，已应用真实 MySQL）；执行器
+  登记/关闭（发布关闭、publish_rejected 关闭、确定性失败关闭、异常 unknown）；v1 ID
+  统一为 `{user}:{document_id}:g{n}:{i}`；删除编排向量清理改 document_id 精确目标；
+  清理领取统一走仓库（worker 不再自持 SQL）；document_deleted 的 md5 盲删收编为
+  精确目标+遗留归属检查。
+- **行为测试 2 红 + 2 旧用例适配待修（下一批首项，未完成不得申请验收）**：
+  T01（open execution 下 done 门槛未生效）、T09（遗留向量仍被清理）；
+  test_index_delete_orchestration 2 用例待按精确目标契约适配。
+- K4 全入口/兼容回填、K5 真实集成证据均未实施。

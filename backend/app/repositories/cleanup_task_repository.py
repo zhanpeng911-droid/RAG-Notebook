@@ -95,22 +95,36 @@ class CleanupTaskRepository:
 
     async def mark_verified_empty(self, task_id: str, token: str,
                                   verified_at, grace: timedelta) -> bool:
-        """首次核验为空：记录时间并安排宽限后复核（不改 done——防迟到写入）。"""
+        """核验为空：登记观测并释放租约回 pending（是否 done 由写入者关闭协议决定）。"""
         result = await self.session.execute(
             update(DocumentCleanupTask)
             .where(DocumentCleanupTask.id == task_id)
             .where(DocumentCleanupTask.claim_token == token)
+            .where(DocumentCleanupTask.status == CleanupTaskStatus.CLAIMED)
             .values(verified_empty_at=verified_at, status=CleanupTaskStatus.PENDING,
                     next_retry_at=verified_at + grace, claim_token=None,
                     lease_expires_at=None, updated_at=_now())
         )
         return result.rowcount > 0
 
+    async def has_open_executions(self, document_id: str) -> bool:
+        """K1：该文档是否存在未关闭（writing/unknown）的执行——
+        写入者未确定关闭前，清理任务不得判 done。"""
+        from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+        result = await self.session.execute(
+            select(DocumentIndexExecution.execution_id).where(
+                DocumentIndexExecution.document_id == document_id,
+                DocumentIndexExecution.status != ExecutionStatus.CLOSED,
+            ).limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
     async def mark_done(self, task_id: str, token: str) -> bool:
         result = await self.session.execute(
             update(DocumentCleanupTask)
             .where(DocumentCleanupTask.id == task_id)
             .where(DocumentCleanupTask.claim_token == token)
+            .where(DocumentCleanupTask.status == CleanupTaskStatus.CLAIMED)
             .values(status=CleanupTaskStatus.DONE, updated_at=_now())
         )
         return result.rowcount > 0
@@ -121,6 +135,7 @@ class CleanupTaskRepository:
             select(DocumentCleanupTask).where(
                 DocumentCleanupTask.id == task_id,
                 DocumentCleanupTask.claim_token == token,
+                DocumentCleanupTask.status == CleanupTaskStatus.CLAIMED,
             )
         )
         task = result.scalar_one_or_none()
