@@ -61,10 +61,10 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.agent_maintenance_task.reclaim_stale_agent_runs_task",
         "schedule": 300.0,  # 每 5 分钟执行一次
     },
-    "cleanup-superseded-vectors-every-10-minutes": {
-        "task": "app.tasks.index_task.cleanup_superseded_vectors_task",
-        "schedule": 600.0,  # 每 10 分钟执行一次（旧代次向量兜底回收）
-        "args": (50,),
+    "process-cleanup-tasks-every-5-minutes": {
+        "task": "app.tasks.index_task.process_cleanup_tasks_task",
+        "schedule": 300.0,  # 每 5 分钟执行一次（持久清理队列，公平领取）
+        "args": (20,),
     },
 }
 

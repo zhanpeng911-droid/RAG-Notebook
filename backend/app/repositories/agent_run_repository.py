@@ -226,16 +226,27 @@ class AgentRunRepository:
         仅更新仍为 started 的行，不触碰已有终态的运行。
         """
         lease_expr = func.coalesce(AgentRun.heartbeat_at, AgentRun.created_at)
-        stale_ids = (
+        # C2 两阶段：MySQL 8.0 不支持 IN(SELECT...LIMIT)（错误 1235），
+        # 先有界取回实际 ID 列表（最旧优先），再独立 UPDATE 且重新复核
+        # 状态与租约（SELECT 与 UPDATE 之间心跳刷新/终态提交获胜则少收，
+        # 属正常结果；重复回收幂等）。
+        bounded_limit = max(1, min(int(limit), 500))
+        ids_result = await self.session.execute(
             select(AgentRun.id)
             .where(AgentRun.status == AgentRunStatus.STARTED.value)
             .where(lease_expr < cutoff)
-            .order_by(AgentRun.created_at.asc())
-            .limit(limit)
+            .order_by(AgentRun.created_at.asc(), AgentRun.id.asc())
+            .limit(bounded_limit)
         )
+        stale_ids = list(ids_result.scalars().all())
+        if not stale_ids:
+            return 0
+
         result = await self.session.execute(
             update(AgentRun)
             .where(AgentRun.id.in_(stale_ids))
+            .where(AgentRun.status == AgentRunStatus.STARTED.value)
+            .where(lease_expr < cutoff)
             .values(
                 status=AgentRunStatus.TIMEOUT.value,
                 error_message="运行超时未更新，已被回收任务置为 timeout",

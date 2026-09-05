@@ -146,6 +146,38 @@ class DocumentIndexRepository:
         await self.session.flush()
         return gen_result.scalar_one_or_none()
 
+    async def claim_upload_generation(self, doc_id: str) -> Optional[int]:
+        """v1 上传领取执行代次（C1 止血）：仅可执行状态可领取。
+
+        可领取状态：uploaded / parsed / pending_index / index_failed。
+        deleting（删除中）与 indexing（他人执行中）与 indexed（已发布，
+        同内容重传无需重做）一律拒绝——返回 None，调用方不得改写状态。
+        原子递增 generation 并置 indexing，杜绝"先读后赋值"覆盖。
+        """
+        result = await self.session.execute(
+            update(DocumentIndex)
+            .where(DocumentIndex.id == doc_id)
+            .where(DocumentIndex.status.in_([
+                DocumentIndexStatus.UPLOADED,
+                DocumentIndexStatus.PARSED,
+                DocumentIndexStatus.PENDING_INDEX,
+                DocumentIndexStatus.INDEX_FAILED,
+            ]))
+            .values(
+                status=DocumentIndexStatus.INDEXING,
+                generation=DocumentIndex.generation + 1,
+                updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            )
+        )
+        if result.rowcount == 0:
+            await self.session.flush()
+            return None
+        gen_result = await self.session.execute(
+            select(DocumentIndex.generation).where(DocumentIndex.id == doc_id)
+        )
+        await self.session.flush()
+        return gen_result.scalar_one_or_none()
+
     async def publish_indexed(self, doc_id: str, chunk_count: int,
                               generation: Optional[int] = None) -> bool:
         """条件发布：仅当仍处于 indexing（未被 deleting/删除抢占）时置为 indexed。
@@ -276,16 +308,6 @@ class DocumentIndexRepository:
         await self.session.delete(doc)
         await self.session.flush()
         return True
-
-    async def get_recent_indexed_documents(self, limit: int = 50) -> List[DocumentIndex]:
-        """获取最近的 indexed 文档（供周期性旧代次向量回收扫描，R2D）。"""
-        result = await self.session.execute(
-            select(DocumentIndex)
-            .where(DocumentIndex.status == DocumentIndexStatus.INDEXED)
-            .order_by(DocumentIndex.updated_at.desc())
-            .limit(limit)
-        )
-        return list(result.scalars().all())
 
     async def get_pending_documents(self, limit: int = 10) -> List[DocumentIndex]:
         """获取待索引的文档（用于批量索引）"""

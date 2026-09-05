@@ -11,9 +11,12 @@ from datetime import datetime, timedelta, timezone
 
 from app.tasks.celery_app import celery_app
 from app.core.logger_handler import logger
+from app.config.validator import get_settings
 
-# started 运行的最长容忍时长（分钟）：远大于单次执行上限，避免误回收慢请求
-STALE_RUN_MAX_AGE_MINUTES = 15
+
+def _stale_after_minutes() -> int:
+    """started 运行的租约期限（分钟）：来自配置，远大于单次执行上限。"""
+    return get_settings().AGENT_RUN_STALE_AFTER_MINUTES
 
 
 def _run_async(coro):
@@ -28,9 +31,9 @@ def _run_async(coro):
 
 
 @celery_app.task(ignore_result=True)
-def reclaim_stale_agent_runs_task(max_age_minutes: int = STALE_RUN_MAX_AGE_MINUTES):
-    """回收过期运行：started 且创建时间早于 cutoff 的运行置为 timeout。"""
-    _run_async(_reclaim_stale_async(max_age_minutes))
+def reclaim_stale_agent_runs_task(max_age_minutes: int = None):
+    """回收过期运行：lease（COALESCE(heartbeat_at, created_at)）超过期限的运行置为 timeout。"""
+    _run_async(_reclaim_stale_async(max_age_minutes or _stale_after_minutes()))
 
 
 async def _reclaim_stale_async(max_age_minutes: int) -> int:

@@ -137,8 +137,12 @@ async def agent_query_stream(
 
     async def event_generator():
         import json
+        from app.services.agent_heartbeat import RunHeartbeat
+        from app.config.validator import get_settings
         start_time = time.time()
-        last_heartbeat = 0.0
+        # C2：独立心跳任务，不依赖 SSE 事件产出
+        heartbeat = RunHeartbeat(run.id, get_settings().AGENT_HEARTBEAT_INTERVAL_SECONDS)
+        heartbeat.start()
 
         try:
             async for event in run_agent_stream(
@@ -200,17 +204,6 @@ async def agent_query_stream(
                         )
                         await event_db.commit()
 
-                # R6C 心跳：执行中定期更新 heartbeat_at（节流 10s），
-                # 使回收任务能区分"仍在执行"与"进程崩溃后遗留"
-                if time.time() - last_heartbeat > 10:
-                    try:
-                        async with AsyncSessionLocal() as hb_db:
-                            await AgentRunRepository(hb_db).touch_run_heartbeat(run.id)
-                            await hb_db.commit()
-                        last_heartbeat = time.time()
-                    except Exception as hb_err:
-                        logger.warning(f"【Agent】心跳更新失败: {hb_err}")
-
                 # 添加 run_id 和 session_id 到事件
                 event["run_id"] = run.id
                 event["session_id"] = session_id
@@ -230,6 +223,8 @@ async def agent_query_stream(
             except Exception as cancel_err:
                 logger.warning(f"【Agent】取消后写入终态失败: {cancel_err}")
             raise
+        finally:
+            await heartbeat.stop()
 
     return StreamingResponse(
         event_generator(),
@@ -290,13 +285,20 @@ async def agent_query(
     await db.commit()
 
     start_time = time.time()
-    result = await run_agent(
-        query=request.query,
-        user_id=user_id,
-        space_id=request.space_id,
-        session_id=session_id,
-        llm_config=request.llm_config,
-    )
+    from app.services.agent_heartbeat import RunHeartbeat
+    from app.config.validator import get_settings
+    heartbeat = RunHeartbeat(run.id, get_settings().AGENT_HEARTBEAT_INTERVAL_SECONDS)
+    heartbeat.start()
+    try:
+        result = await run_agent(
+            query=request.query,
+            user_id=user_id,
+            space_id=request.space_id,
+            session_id=session_id,
+            llm_config=request.llm_config,
+        )
+    finally:
+        await heartbeat.stop()
 
     total_ms = int((time.time() - start_time) * 1000)
     logger.info(f"【Agent非流式】result answer preview: {str(result.get('answer',''))[:100]}")

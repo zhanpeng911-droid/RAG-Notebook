@@ -107,54 +107,133 @@ def _sanitize_error_message(msg: str) -> str:
 
 
 @celery_app.task(bind=True, max_retries=1, ignore_result=True)
-def cleanup_superseded_vectors_task(self, limit: int = 50):
-    """周期回收旧代次向量（R2D 持久清理，评审 P0 兜底）。
+def process_cleanup_tasks_task(self, limit: int = 20):
+    """公平领取并执行持久清理任务（C4）。
 
-    发布指针提交成功后若"尽力而为"的内联清理失败，旧代次向量会残留
-    （读取侧代次过滤保证其不可见，但不占空间）。本任务按 updated_at 倒序
-    扫描最近的 indexed 文档，幂等执行 generation < active_generation 的
-    元数据过滤清理；legacy（无 generation 元数据）残留仅在发布时刻已知
-    精确数量，仍以内联清理为准，扫描期不猜测。
+    队列 = document_cleanup_tasks 表（发布旧代次回收 + 删除后残余）。
+    两阶段有界领取（兼容 MySQL），条件写令牌与租约；清理在事务外执行；
+    成功要求按有界查询核验目标为空；失败指数退避，超限 blocked。
     """
-    _run_async(_cleanup_superseded_async(limit))
+    _run_async(_process_cleanup_tasks_async(limit))
 
 
-async def _cleanup_superseded_async(limit: int) -> int:
+async def _process_cleanup_tasks_async(limit: int) -> int:
+    import asyncio as _aio
+    from datetime import datetime, timedelta, timezone
+    from uuid import uuid4 as _uuid4
+    from sqlalchemy import select, update
     from app.db.db_config import AsyncSessionLocal
-    from app.repositories.document_index_repository import DocumentIndexRepository
-    from app.services.document_index_service import _cleanup_superseded_generations
+    from app.models.cleanup_task import DocumentCleanupTask, CleanupTaskStatus
+    from app.repositories.cleanup_task_repository import CLAIM_LEASE_MINUTES
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     async with AsyncSessionLocal() as session:
-        repo = DocumentIndexRepository(session)
-        docs = await repo.get_recent_indexed_documents(limit=limit)
+        # 第一阶段：有界选取到期任务 ID（next_retry_at, created_at, id 公平序）
+        due_ids = list((await session.execute(
+            select(DocumentCleanupTask.id)
+            .where(DocumentCleanupTask.status.in_([
+                CleanupTaskStatus.PENDING, CleanupTaskStatus.FAILED,
+                CleanupTaskStatus.CLAIMED,
+            ]))
+            .where((DocumentCleanupTask.next_retry_at.is_(None))
+                   | (DocumentCleanupTask.next_retry_at <= now))
+            .where((DocumentCleanupTask.status != CleanupTaskStatus.CLAIMED)
+                   | (DocumentCleanupTask.lease_expires_at.is_(None))
+                   | (DocumentCleanupTask.lease_expires_at <= now))
+            .order_by(DocumentCleanupTask.next_retry_at.asc(),
+                      DocumentCleanupTask.created_at.asc(),
+                      DocumentCleanupTask.id.asc())
+            .limit(max(1, min(int(limit), 200)))
+        )).scalars().all())
+        if not due_ids:
+            return 0
 
-    if not docs:
+        # 第二阶段：条件写令牌与租约
+        token = str(_uuid4())
+        await session.execute(
+            update(DocumentCleanupTask)
+            .where(DocumentCleanupTask.id.in_(due_ids))
+            .values(status=CleanupTaskStatus.CLAIMED, claim_token=token,
+                    lease_expires_at=now + timedelta(minutes=CLAIM_LEASE_MINUTES))
+        )
+        tasks = list((await session.execute(
+            select(DocumentCleanupTask).where(DocumentCleanupTask.claim_token == token)
+        )).scalars().all())
+        await session.commit()
+
+    if not tasks:
         return 0
 
-    cleaned = 0
     try:
         from app.rag.vector_store import VectorStoreService
         store = VectorStoreService()
     except Exception as e:
-        logger.warning(f"【向量回收】VectorStoreService 初始化失败，本轮跳过: {e}")
+        logger.warning(f"【清理任务】向量服务不可用，任务保留待下轮: {e}")
         return 0
 
-    for doc in docs:
-        if not doc.md5 or not doc.active_generation:
-            continue
-        try:
-            await _cleanup_superseded_generations(
-                store, doc.user_id, doc.md5, doc.id,
-                active_generation=doc.active_generation,
-                legacy_chunk_count=0,
-            )
-            cleaned += 1
-        except Exception as e:
-            logger.warning(f"【向量回收】清理失败（下轮重试）: id={doc.id}, error={e}")
+    from app.repositories.cleanup_task_repository import CleanupTaskRepository
 
-    if cleaned:
-        logger.info(f"【向量回收】本轮对 {cleaned}/{len(docs)} 个 indexed 文档执行了旧代次清理")
-    return cleaned
+    done = 0
+    async with AsyncSessionLocal() as session:
+        repo = CleanupTaskRepository(session)
+        for task in tasks:
+            try:
+                if task.reason == "document_deleted":
+                    # 文档已删：按 user+md5 全量删除并核验为空（覆盖迟到写入）
+                    await _aio.to_thread(
+                        store.vectors_store.delete,
+                        where={"$and": [{"user_id": task.user_id}, {"md5": task.md5}]},
+                    )
+                    remain = await _aio.to_thread(
+                        store.vectors_store.get,
+                        where={"$and": [{"user_id": task.user_id}, {"md5": task.md5}]},
+                        include=[],
+                    )
+                    residual = len(remain.get("ids", [])) if isinstance(remain, dict) else 1
+                    if residual:
+                        raise RuntimeError(
+                            f"删除后仍有 {residual} 条向量残留（可能迟到写入，继续重试）"
+                        )
+                else:
+                    # superseded_generation：清理 generation < 目标代次 + legacy 前缀
+                    await _aio.to_thread(
+                        store.vectors_store.delete,
+                        where={"$and": [
+                            {"user_id": task.user_id},
+                            {"md5": task.md5},
+                            {"generation": {"$lt": int(task.generation)}},
+                        ]},
+                    )
+                    if task.legacy_chunk_count and task.legacy_chunk_count > 0:
+                        legacy_ids = [f"{task.user_id}:{task.document_id}:v1:{i}"
+                                      for i in range(task.legacy_chunk_count)]
+                        await _aio.to_thread(store.vectors_store.delete, ids=legacy_ids)
+                    remain = await _aio.to_thread(
+                        store.vectors_store.get,
+                        where={"$and": [
+                            {"user_id": task.user_id},
+                            {"md5": task.md5},
+                            {"generation": {"$lt": int(task.generation)}},
+                        ]},
+                        include=[],
+                    )
+                    residual = len(remain.get("ids", [])) if isinstance(remain, dict) else 1
+                    if residual:
+                        raise RuntimeError(f"旧代次仍有 {residual} 条向量未清空")
+
+                if await repo.mark_done(task.id, token):
+                    done += 1
+            except Exception as e:
+                outcome = await repo.mark_failed(task.id, token, str(e))
+                logger.warning(
+                    f"【清理任务】执行失败（{outcome}）: doc={task.document_id}, "
+                    f"gen={task.generation}, reason={task.reason}, error={e}"
+                )
+        await session.commit()
+
+    logger.info(f"【清理任务】本轮 {done}/{len(tasks)} 条核验完成")
+    return done
 
 
 @celery_app.task(bind=True, max_retries=1, ignore_result=True)

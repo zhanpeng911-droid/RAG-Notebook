@@ -53,6 +53,8 @@ class AppSettings(BaseSettings):
     SECRET_KEY: str = ""
     ALGORITHM: str = "HS256"
     JWT_BLACKLIST_CHECK_ENABLED: bool = True
+    AGENT_HEARTBEAT_INTERVAL_SECONDS: int = 10
+    AGENT_RUN_STALE_AFTER_MINUTES: int = 15
     JWT_BLACKLIST_REDIS_URL: str = ""
 
     # ==================== MySQL 配置 ====================

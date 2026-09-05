@@ -12,6 +12,7 @@ from types import SimpleNamespace as NS
 import pytest
 import pytest_asyncio
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import app.services.document_index_service as dis
@@ -146,12 +147,15 @@ async def test_reindex_uses_new_generation_and_cleans_old(env):
     row = await _row(env, doc_id)
     assert row.active_generation == 2
 
-    # 旧代次清理：按 generation < active_generation 过滤
-    cleanups = [c for c in env.box["delete_calls"] if c["where"]]
-    assert cleanups, "发布后未清理旧代次向量"
-    last = cleanups[-1]["where"]
-    assert {"generation": {"$lt": 2}} in last["$and"]
-    assert {"md5": md5} in last["$and"]
+    # C4：旧代次清理登记为持久任务（与发布同事务提交）
+    from app.models.cleanup_task import DocumentCleanupTask, CleanupTaskStatus
+    async with env.factory() as s:
+        tasks = (await s.execute(select(DocumentCleanupTask))).scalars().all()
+        assert len(tasks) == 2, "两次发布各应产生一条旧代次清理任务"
+        t2 = next(t for t in tasks if t.generation == 2)
+        assert t2.status == CleanupTaskStatus.PENDING
+        assert t2.reason == "superseded_generation"
+        assert t2.legacy_chunk_count == 1  # 首次发布的 chunk 数（旧代次 legacy 依据）
 
 
 @pytest.mark.asyncio

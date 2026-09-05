@@ -284,3 +284,25 @@ autouse fixture 注入默认假实现与内存库，文件级与顺序无关。
 > 多个提交、无对应远程 CI 记录，真实 MySQL 双连接竞态、真实 Chroma 迟到写/清理、
 > 隔离 Compose 与当前 SHA 的 Actions 产物待推送后取得。按原约束不自动推送，
 > 推送与 CI 复验需项目所有者执行。
+
+---
+
+## 收口方案实施记录（2026-09-05，按 docs/REMEDIATION_CLOSURE_PLAN.md，基线 cde21f4）
+
+修复前失败证据：`tests/test_closure_plan.py` 三用例（C1 复活：v1 上传把 deleting 改回
+indexing 并继续写向量；C2 IN(SELECT...LIMIT) 结构；C4 删除无持久清理任务）——修复前
+3 failed，修复后 3 passed。
+
+| 项 | 实现 | 状态 |
+|---|---|---|
+| C1 | 仓库新增 `claim_upload_generation`（仅 uploaded/parsed/pending_index/index_failed 可领取，原子递增代次；deleting/indexing/indexed 拒绝）；v1 上传改走同一领取协议：deleting/indexing → 409 且状态代次不变零向量写入；已发布同内容 → 幂等跳过 | ✅ 代码+单测（`test_v1_upload_on_deleting_doc_is_rejected`）；双 MySQL 连接并发领取待真实验证 |
+| C2 | `reclaim_stale_runs` 两阶段：先物化 ID 列表（ORDER BY created_at,id，limit 有界 ≤500，空列表短路），再独立 UPDATE 且复核 status+lease；新增独立心跳服务 `agent_heartbeat.RunHeartbeat`（流式/非流式均覆盖，独立短会话，finally 停止）；心跳周期/租约期限入配置 | ✅ 代码+单测（`test_reclaim_two_phase_structure`、`test_heartbeat_lease_and_limit`、`test_touch_run_heartbeat`）；真实 MySQL 1235 验证待集成 |
+| C4 | 新增 `document_cleanup_tasks` 表（迁移 010，已应用真实 MySQL）；发布事务内创建 superseded_generation 任务（与发布同事务，提交失败同回滚）；删除提交后创建 document_deleted 任务（generation=0 哨兵按 user+md5 全量核验）；Beat worker `process_cleanup_tasks_task` 公平领取（next_retry_at,created_at,id 两阶段有界）、清理事务外执行、成功需核验为空、失败指数退避超限 blocked；移除 recent-50 扫描 | ✅ 代码+单测；真实 Chroma 迟到写入验证待集成 |
+| C3 | 部分完成：写入侧 v1 single/multiple、v2 同步、Celery worker、重试已统一；读取侧 Agent 检索、chunk_id 直读已统一；删除侧全部入口走公共编排+持久任务。**未完成（点名）**：① `handle_add_vector_multiple_stream`（SSE 流式上传）仍在 `_process_slice_results` 直写向量且不建 document_index 行；② 用户知识列表/文档详情/分块列表三个读取入口未按 active 代次过滤原始 Chroma 结果；③ 存量旧随机 ID/v1 固定 ID 向量的 generation=0 兼容映射与回填命令未实施。 | ⚠️ 部分 |
+
+### 验证（本批提交）
+
+- 后端全量 **连续 2 次 1063 passed / 9 skipped**；functional 14；mypy 门禁 0 错误；ruff 通过；
+- 迁移 010 已应用真实 MySQL（head=010）。
+- 按方案 §9.3：C1/C2/C4 单测通过、真实集成证据未取得；C3 三项未完成入口已点名；
+  整体验收仍以方案 §9.3 双门槛为准。

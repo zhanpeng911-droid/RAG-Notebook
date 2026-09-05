@@ -193,6 +193,9 @@ class KnowledgeService:
         # 内容校验通过后才登记 document_index 行并分配执行代次，
         # 切片携带代次元数据，读取侧可见性过滤与旧代次回收对 v1/v2 一致生效
         generation, md5_hex = await self._allocate_v1_generation(file, user_id, space_id)
+        if generation is None:
+            # 同内容已发布（indexed）：幂等成功，不重写向量
+            return filename
 
         try:
             await store.get_document(
@@ -207,13 +210,16 @@ class KnowledgeService:
 
     @staticmethod
     async def _allocate_v1_generation(file, user_id: str, space_id: str = ""):
-        """为 v1 上传分配执行代次：按内容 md5 get-or-create document_index 行。
+        """为 v1 上传领取执行代次（C1）：条件领取，deleting/indexing 不可覆盖。
 
-        行状态置为 INDEXING、generation 递增；向量写入成功后由
-        _publish_v1_generation 条件发布（active_generation 推进）。
-        返回 (generation, md5_hex)。
+        - 行不存在：创建 UPLOADED 行后条件领取（generation → 1）；
+        - 行已 indexed：同内容重传无需重做，返回 (None, md5)（幂等跳过）；
+        - 行处于 deleting / indexing：抛 409 冲突，状态与代次保持不变。
+        向量写入成功后由 _publish_v1_generation 条件发布。
+        返回 (generation 或 None, md5_hex)。
         """
         import hashlib
+        from fastapi import HTTPException as _HTTPException
         from app.db.db_config import AsyncSessionLocal
         from app.repositories.document_index_repository import DocumentIndexRepository
         from app.models.document_index import DocumentIndexStatus
@@ -235,9 +241,19 @@ class KnowledgeService:
                     space_id=space_id or None,
                     status=DocumentIndexStatus.UPLOADED,
                 )
-            generation = (row.generation or 0) + 1
-            row.generation = generation
-            row.status = DocumentIndexStatus.INDEXING
+            elif row.status == DocumentIndexStatus.INDEXED:
+                # 同内容已发布：幂等跳过，不产生代次 churn
+                await session.commit()
+                return None, md5_hex
+
+            generation = await repo.claim_upload_generation(row.id)
+            if generation is None:
+                status_value = row.status.value if row.status else "unknown"
+                await session.rollback()
+                raise _HTTPException(
+                    status_code=409,
+                    detail=f"文档正在删除或索引中（当前状态 {status_value}），请稍后重试",
+                )
             await session.commit()
             return generation, md5_hex
 

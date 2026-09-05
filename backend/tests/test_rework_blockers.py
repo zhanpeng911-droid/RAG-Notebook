@@ -111,29 +111,27 @@ async def _seed_doc(env, user_id="u1", status=DocumentIndexStatus.PENDING_INDEX)
 
 @pytest.mark.asyncio
 async def test_publish_commit_precedes_vector_cleanup(env, monkeypatch):
-    """清理动作执行时，发布指针必须已经提交（另一连接可见 active_generation）。"""
-    import app.services.document_index_service as dis
+    """C4 契约：发布指针与清理任务同事务提交——提交成功后任务可见且待执行。"""
+    from app.models.cleanup_task import DocumentCleanupTask, CleanupTaskStatus
 
     doc_id, _ = await _seed_doc(env)
-    observations = []
 
-    orig_cleanup = dis._cleanup_superseded_generations
-
-    async def spy_cleanup(*a, **k):
-        # 清理执行瞬间，从独立连接读取发布状态
-        async with env.factory() as s:
-            repo = DocumentIndexRepository(s)
-            row = await repo.get_by_id(doc_id, "u1")
-            observations.append((row.status.value, row.active_generation))
-        return await orig_cleanup(*a, **k)
-
-    monkeypatch.setattr(dis, "_cleanup_superseded_generations", spy_cleanup)
-
-    result = await dis.execute_index_document(doc_id, "u1")
+    result = await dis_execute(env, doc_id, "u1")
     assert result["status"] == DocumentIndexStatus.INDEXED
-    assert observations, "发布后未执行旧代次清理"
-    # 清理发生时发布指针已持久化（另一连接可见），P0 顺序成立
-    assert observations[0] == ("indexed", 1)
+
+    async with env.factory() as s:
+        row = await DocumentIndexRepository(s).get_by_id(doc_id, "u1")
+        assert row.status == DocumentIndexStatus.INDEXED
+        assert row.active_generation == 1
+        tasks = (await s.execute(select(DocumentCleanupTask))).scalars().all()
+        assert len(tasks) == 1
+        assert tasks[0].status == CleanupTaskStatus.PENDING
+        assert tasks[0].reason == "superseded_generation"
+
+
+async def dis_execute(env, doc_id, user_id):
+    from app.services.document_index_service import execute_index_document
+    return await execute_index_document(doc_id, user_id)
 
 
 @pytest.mark.asyncio
