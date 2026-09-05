@@ -49,5 +49,7 @@ class DocumentCleanupTask(Base):
     claim_token = Column(String(64), nullable=True, comment="当前领取令牌")
     lease_expires_at = Column(DateTime(timezone=True), nullable=True, comment="领取租约到期")
     last_error = Column(Text, nullable=True, comment="最后一次失败原因（不含敏感正文）")
+    verified_empty_at = Column(DateTime(timezone=True), nullable=True,
+                               comment="首次核验为空时间（宽限后二次核验通过才 done）")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

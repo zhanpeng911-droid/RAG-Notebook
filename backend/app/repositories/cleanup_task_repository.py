@@ -93,6 +93,19 @@ class CleanupTaskRepository:
         )).scalars().all())
         return claimed
 
+    async def mark_verified_empty(self, task_id: str, token: str,
+                                  verified_at, grace: timedelta) -> bool:
+        """首次核验为空：记录时间并安排宽限后复核（不改 done——防迟到写入）。"""
+        result = await self.session.execute(
+            update(DocumentCleanupTask)
+            .where(DocumentCleanupTask.id == task_id)
+            .where(DocumentCleanupTask.claim_token == token)
+            .values(verified_empty_at=verified_at, status=CleanupTaskStatus.PENDING,
+                    next_retry_at=verified_at + grace, claim_token=None,
+                    lease_expires_at=None, updated_at=_now())
+        )
+        return result.rowcount > 0
+
     async def mark_done(self, task_id: str, token: str) -> bool:
         result = await self.session.execute(
             update(DocumentCleanupTask)
@@ -119,6 +132,7 @@ class CleanupTaskRepository:
             await self.session.execute(
                 update(DocumentCleanupTask)
                 .where(DocumentCleanupTask.id == task_id)
+                .where(DocumentCleanupTask.claim_token == token)  # 令牌条件：防覆盖新领取者
                 .values(status=CleanupTaskStatus.BLOCKED, attempt_count=attempts,
                         last_error=error[:500], updated_at=now)
             )
@@ -127,6 +141,7 @@ class CleanupTaskRepository:
         await self.session.execute(
             update(DocumentCleanupTask)
             .where(DocumentCleanupTask.id == task_id)
+            .where(DocumentCleanupTask.claim_token == token)  # 令牌条件
             .values(status=CleanupTaskStatus.FAILED, attempt_count=attempts,
                     next_retry_at=backoff, last_error=error[:500], updated_at=now)
         )

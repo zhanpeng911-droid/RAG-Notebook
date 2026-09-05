@@ -499,8 +499,9 @@ async def test_v1_upload_registers_generation(env, monkeypatch):
     recorded = {}
 
     async def fake_get_document(files=None, user_id=None, progress_callback=None,
-                                space_id="", generation=None):
+                                space_id="", generation=None, document_id=None):
         recorded["generation"] = generation
+        recorded["document_id"] = document_id
         return None
 
     env.store.get_document = fake_get_document
@@ -519,6 +520,7 @@ async def test_v1_upload_registers_generation(env, monkeypatch):
     out = await svc.handle_add_vector_single(_Up(), "u-v1", space_id="sp-x")
     assert out == "v1doc.txt"
     assert recorded["generation"] == 1  # 首次上传分配代次 1
+    assert recorded["document_id"]  # 切片携带资源身份（C4 精确清理依据）
 
     async with env.factory() as s:
         rows = (await s.execute(

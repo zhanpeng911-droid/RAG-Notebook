@@ -306,3 +306,18 @@ indexing 并继续写向量；C2 IN(SELECT...LIMIT) 结构；C4 删除无持久�
 - 迁移 010 已应用真实 MySQL（head=010）。
 - 按方案 §9.3：C1/C2/C4 单测通过、真实集成证据未取得；C3 三项未完成入口已点名；
   整体验收仍以方案 §9.3 双门槛为准。
+
+### 收口方案第二批（评审 `ca0688b` 复核后，5 项阻断修复）
+
+| 阻断项 | 修复 |
+|---|---|
+| 删除与清理任务登记不原子 | `document_deleted` 任务创建移入删除事务（begin_nested + 同 commit），中途崩溃不再丢失清理依据 |
+| 一次查空即 done 无法覆盖迟到写入 | 迁移 011 加 `verified_empty_at`：首次核验为空仅记录时间并安排 60s 宽限复核（任务回 pending 释放租约），宽限后二次核验仍为空才 done；迟到写入被第二次核验捕获回 failed 重试 |
+| 删除任务按 user+md5 盲删误伤重传 | 切片元数据新增 `document_id`（v2 执行器与 v1 processor 均注入）；document_deleted 任务改为 a) 按 user+document_id 精确删除 b) pre-008 v1 固定 ID 按 legacy_chunk_count 清单删除 c) 无 document_id 的遗留向量仅当同用户同 md5 下无其它文档时才允许 md5 清理，否则继续重试不误删 |
+| 清理领取缺并发条件复核 | 领取第二阶段 UPDATE 补状态+租约条件；mark_failed/mark_blocked 全部携带 claim_token 条件，不再覆盖新领取者 |
+| C1 只止血未统一 | v1 发布改 `_publish_v1_generation(...) -> bool`：发布被拒向上抛 409"文档正在删除中，上传未生效"，不再返回 filename 成功；发布成功时同事务登记 superseded 清理任务（与 v2 同协议）；切片元数据带 document_id |
+
+验证：迁移 011 已应用真实 MySQL（head=011）；后端全量连续 2 次 **1063 passed / 9 skipped**；
+functional 14；mypy 门禁 0 错误；ruff 通过。交付状态维持评审口径：C1 协议完整（代码+单测），
+C2 待真实集成，C3 部分完成（三项点名），C4 队列缺陷已修复、真实 Chroma 迟到写入/两阶段
+核验待集成验证。

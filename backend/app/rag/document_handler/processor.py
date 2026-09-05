@@ -113,7 +113,7 @@ class DocumentProcessor:
         """同步分割文档（用于多线程场景）"""
         return self.spliter.split_documents_sync(documents)
 
-    async def get_document(self, files: list = None, user_id: str = None, progress_callback=None, space_id: str = "", generation: int = None):
+    async def get_document(self, files: list = None, user_id: str = None, progress_callback=None, space_id: str = "", generation: int = None, document_id: str = None):
         """
         处理文档并将其转为向量存入向量数据库
         :param files: 上传的文件列表，如果为None则从数据文件夹读取
@@ -243,6 +243,9 @@ class DocumentProcessor:
                     # 重传覆盖同代次切片而非追加随机 ID（修复 N→M 重复）
                     for doc in document:
                         doc.metadata['generation'] = int(generation)
+                        if document_id:
+                            # C4：切片携带资源身份，删除清理可精确到文档
+                            doc.metadata['document_id'] = document_id
                     stable_ids = [
                         f"kb:{user_id}:{md5_hex}:g{int(generation)}:{i}"
                         for i in range(len(document))

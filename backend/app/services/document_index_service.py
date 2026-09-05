@@ -436,6 +436,7 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
                 d.metadata['md5'] = doc.md5
                 d.metadata['space_id'] = doc.space_id or ''
                 d.metadata['generation'] = int(generation)
+                d.metadata['document_id'] = document_id
 
             # 切片
             split_docs = store.split_documents_sync(documents)
@@ -743,8 +744,18 @@ async def _delete_single_record(doc_id: str, user_id: str, delete_file: bool, st
                 return {"success": False, "state": "deleting",
                         "message": "物理文件删除未完成，记录保留（deleting），可重试"}
 
-        # 删除 document_index 记录
+        # C4/评审 #1：删除记录与持久清理任务在同一事务提交——
+        # 中途崩溃不会出现"删除成功但清理依据永久丢失"
         try:
+            from app.repositories.cleanup_task_repository import CleanupTaskRepository
+            cleanup_repo = CleanupTaskRepository(session)
+            async with session.begin_nested():
+                await cleanup_repo.create_task(
+                    document_id=doc_id, user_id=user_id, md5=saved_md5,
+                    generation=0,  # 哨兵：文档已删
+                    reason="document_deleted",
+                    legacy_chunk_count=int(doc.chunk_count or 0),
+                )
             await repo.delete_by_id(doc_id, user_id)
             await session.commit()
         except Exception as e:
@@ -752,23 +763,6 @@ async def _delete_single_record(doc_id: str, user_id: str, delete_file: bool, st
             logger.error(f"【文档索引】删除记录失败: id={doc_id}, error={e}")
             return {"success": False, "state": "failed",
                     "message": f"记录删除失败: {str(e)[:200]}"}
-
-        # C4：删除后登记持久清理任务——覆盖"SQL 删除后旧 worker 迟到写入"
-        # 的窗口；worker 按 user+md5 全量核验为空才算完成（幂等重试）
-        try:
-            from app.db.db_config import AsyncSessionLocal as _ASL
-            from app.repositories.cleanup_task_repository import CleanupTaskRepository
-            async with _ASL() as task_session:
-                task_repo = CleanupTaskRepository(task_session)
-                async with task_session.begin_nested():
-                    await task_repo.create_task(
-                        document_id=doc_id, user_id=user_id, md5=saved_md5,
-                        generation=0,  # 哨兵：文档已删，按 user+md5 全量清理
-                        reason="document_deleted",
-                    )
-                await task_session.commit()
-        except Exception as e:
-            logger.error(f"【文档索引】清理任务登记失败（记录已删除）: id={doc_id}, error={e}")
 
         logger.info(f"【文档索引】已删除记录: id={doc_id}")
         return {"success": True, "state": "deleted", "message": "文档已删除"}

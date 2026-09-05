@@ -192,20 +192,30 @@ class KnowledgeService:
         # 评审 #6：v1 上传统一纳入 generation 体系——
         # 内容校验通过后才登记 document_index 行并分配执行代次，
         # 切片携带代次元数据，读取侧可见性过滤与旧代次回收对 v1/v2 一致生效
-        generation, md5_hex = await self._allocate_v1_generation(file, user_id, space_id)
+        generation, md5_hex, document_id = await self._allocate_v1_generation(
+            file, user_id, space_id)
         if generation is None:
             # 同内容已发布（indexed）：幂等成功，不重写向量
             return filename
 
         try:
             await store.get_document(
-                files=[file], user_id=user_id, space_id=space_id, generation=generation
+                files=[file], user_id=user_id, space_id=space_id,
+                generation=generation, document_id=document_id,
             )
         except Exception:
             # 写入失败：登记行条件标记失败，保留可重试依据（不留 indexed 幽灵行）
             await self._fail_v1_generation(file, user_id, generation)
             raise
-        await self._publish_v1_generation(store, user_id, md5_hex, generation)
+        published = await self._publish_v1_generation(
+            store, user_id, md5_hex, generation, document_id)
+        if not published:
+            # 评审 #5：发布被拒（删除获胜）不得返回上传成功
+            from fastapi import HTTPException as _HTTPException
+            raise _HTTPException(
+                status_code=409,
+                detail="文档正在删除中，上传未生效",
+            )
         return filename
 
     @staticmethod
@@ -244,7 +254,7 @@ class KnowledgeService:
             elif row.status == DocumentIndexStatus.INDEXED:
                 # 同内容已发布：幂等跳过，不产生代次 churn
                 await session.commit()
-                return None, md5_hex
+                return None, md5_hex, row.id
 
             generation = await repo.claim_upload_generation(row.id)
             if generation is None:
@@ -255,14 +265,20 @@ class KnowledgeService:
                     detail=f"文档正在删除或索引中（当前状态 {status_value}），请稍后重试",
                 )
             await session.commit()
-            return generation, md5_hex
+            return generation, md5_hex, row.id
 
     @staticmethod
-    async def _publish_v1_generation(store, user_id: str, md5_hex: str, generation: int) -> None:
-        """条件发布 v1 代次：行仍处于 INDEXING 且代次匹配时推进 active_generation。"""
+    async def _publish_v1_generation(store, user_id: str, md5_hex: str, generation: int,
+                                     document_id: str) -> bool:
+        """条件发布 v1 代次（评审 #5）：发布被拒向上传播，不吞成上传成功。
+
+        发布成功时在同一事务登记旧代次清理任务（C4 协议，与 v2 一致）。
+        返回是否发布成功。
+        """
         import asyncio as _aio
         from app.db.db_config import AsyncSessionLocal
         from app.repositories.document_index_repository import DocumentIndexRepository
+        from app.repositories.cleanup_task_repository import CleanupTaskRepository
 
         try:
             ids = await _aio.to_thread(
@@ -278,12 +294,21 @@ class KnowledgeService:
             repo = DocumentIndexRepository(session)
             row = await repo.get_by_md5(md5_hex, user_id)
             if row is None:
-                return
+                return False
             if not await repo.publish_indexed(row.id, chunk_count=chunk_count, generation=generation):
                 from app.core.logger_handler import logger
                 logger.warning(f"【知识库】v1 代次发布被拒（状态/代次已变化）: md5={md5_hex}, gen={generation}")
-                return
+                return False
+            # C4：与发布同事务登记旧代次清理任务
+            cleanup_repo = CleanupTaskRepository(session)
+            async with session.begin_nested():
+                await cleanup_repo.create_task(
+                    document_id=document_id, user_id=user_id, md5=md5_hex,
+                    generation=generation, reason="superseded_generation",
+                    legacy_chunk_count=0,
+                )
             await session.commit()
+            return True
 
     @staticmethod
     async def _fail_v1_generation(file, user_id: str, generation: int) -> None:

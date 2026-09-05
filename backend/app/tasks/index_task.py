@@ -149,11 +149,18 @@ async def _process_cleanup_tasks_async(limit: int) -> int:
         if not due_ids:
             return 0
 
-        # 第二阶段：条件写令牌与租约
+        # 第二阶段：条件写令牌与租约（复核状态与租约，防止覆盖其它 worker 的新领取）
         token = str(_uuid4())
         await session.execute(
             update(DocumentCleanupTask)
             .where(DocumentCleanupTask.id.in_(due_ids))
+            .where(DocumentCleanupTask.status.in_([
+                CleanupTaskStatus.PENDING, CleanupTaskStatus.FAILED,
+                CleanupTaskStatus.CLAIMED,
+            ]))
+            .where((DocumentCleanupTask.status != CleanupTaskStatus.CLAIMED)
+                   | (DocumentCleanupTask.lease_expires_at.is_(None))
+                   | (DocumentCleanupTask.lease_expires_at <= now))
             .values(status=CleanupTaskStatus.CLAIMED, claim_token=token,
                     lease_expires_at=now + timedelta(minutes=CLAIM_LEASE_MINUTES))
         )
@@ -174,26 +181,64 @@ async def _process_cleanup_tasks_async(limit: int) -> int:
 
     from app.repositories.cleanup_task_repository import CleanupTaskRepository
 
+    VERIFY_GRACE = timedelta(seconds=60)  # 首次核验为空后的迟到写入宽限窗口
+
     done = 0
     async with AsyncSessionLocal() as session:
         repo = CleanupTaskRepository(session)
         for task in tasks:
             try:
                 if task.reason == "document_deleted":
-                    # 文档已删：按 user+md5 全量删除并核验为空（覆盖迟到写入）
+                    # 评审 #3：精确到文档身份，不按 md5 盲删——
+                    # a) 携带 document_id 元数据的向量（当前写入协议）
                     await _aio.to_thread(
                         store.vectors_store.delete,
-                        where={"$and": [{"user_id": task.user_id}, {"md5": task.md5}]},
+                        where={"$and": [
+                            {"user_id": task.user_id},
+                            {"document_id": task.document_id},
+                        ]},
                     )
-                    remain = await _aio.to_thread(
+                    # b) 旧版固定 ID（pre-008 v2 文档，ID 含 doc_id，数量已知）
+                    if task.legacy_chunk_count and task.legacy_chunk_count > 0:
+                        legacy_ids = [f"{task.user_id}:{task.document_id}:v1:{i}"
+                                      for i in range(task.legacy_chunk_count)]
+                        await _aio.to_thread(store.vectors_store.delete, ids=legacy_ids)
+                    # c) 遗留向量（无 document_id 元数据，仅能按 md5 定位）：
+                    #    仅当同用户同 md5 下不存在其它文档时才允许 md5 清理，
+                    #    否则跳过 md5 清理（重传同内容的新资源不受旧任务影响）
+                    from app.models.document_index import DocumentIndex as _DI
+                    other_doc = (await session.execute(
+                        select(_DI.id).where(
+                            _DI.user_id == task.user_id,
+                            _DI.md5 == task.md5,
+                            _DI.id != task.document_id,
+                        ).limit(1)
+                    )).scalar_one_or_none()
+                    if other_doc is None:
+                        await _aio.to_thread(
+                            store.vectors_store.delete,
+                            where={"$and": [{"user_id": task.user_id}, {"md5": task.md5}]},
+                        )
+                    # 核验：文档范围必须为空；md5 范围仅在其他文档不存在时要求为空
+                    remain_doc = await _aio.to_thread(
                         store.vectors_store.get,
-                        where={"$and": [{"user_id": task.user_id}, {"md5": task.md5}]},
+                        where={"$and": [
+                            {"user_id": task.user_id},
+                            {"document_id": task.document_id},
+                        ]},
                         include=[],
                     )
-                    residual = len(remain.get("ids", [])) if isinstance(remain, dict) else 1
+                    residual = len(remain_doc.get("ids", [])) if isinstance(remain_doc, dict) else 1
+                    if other_doc is None:
+                        remain_md5 = await _aio.to_thread(
+                            store.vectors_store.get,
+                            where={"$and": [{"user_id": task.user_id}, {"md5": task.md5}]},
+                            include=[],
+                        )
+                        residual += len(remain_md5.get("ids", [])) if isinstance(remain_md5, dict) else 0
                     if residual:
                         raise RuntimeError(
-                            f"删除后仍有 {residual} 条向量残留（可能迟到写入，继续重试）"
+                            f"删除后仍有 {residual} 条向量残留（迟到写入或遗留格式，继续重试）"
                         )
                 else:
                     # superseded_generation：清理 generation < 目标代次 + legacy 前缀
@@ -222,6 +267,17 @@ async def _process_cleanup_tasks_async(limit: int) -> int:
                     if residual:
                         raise RuntimeError(f"旧代次仍有 {residual} 条向量未清空")
 
+                # 评审 #2：一次查空不算完成——首空记录时间并安排宽限复核，
+                # 宽限后仍为空才 done（迟到写入会被第二次核验捕获并重试）
+                now2 = datetime.now(timezone.utc).replace(tzinfo=None)
+                if task.verified_empty_at is None:
+                    await repo.mark_verified_empty(
+                        task.id, token, now2, VERIFY_GRACE)
+                    continue
+                if now2 - task.verified_empty_at < VERIFY_GRACE:
+                    await repo.mark_verified_empty(
+                        task.id, token, task.verified_empty_at, VERIFY_GRACE)
+                    continue
                 if await repo.mark_done(task.id, token):
                     done += 1
             except Exception as e:
