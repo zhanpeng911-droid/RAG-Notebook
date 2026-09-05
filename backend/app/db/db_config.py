@@ -54,6 +54,21 @@ AsyncSessionLocal = async_sessionmaker(
 )
 
 
+async def dispose_stale_connections() -> None:
+    """丢弃连接池中不属于当前事件循环的陈旧连接。
+
+    Celery 任务进程里每个任务都新建事件循环（Windows 下尤其），QueuePool
+    复用旧循环创建的 aiomysql 连接会以
+    'NoneType' object has no attribute 'send' 失败。任务入口在执行前调用
+    本函数，确保本次任务在当前循环上重建连接。处置失败不阻塞任务。
+    """
+    try:
+        await async_engine.dispose()
+    except Exception as e:
+        from app.core.logger_handler import logger
+        logger.warning(f"【数据库】清理陈旧连接池失败（任务将继续，按需重建连接）: {e}")
+
+
 async def init_db():
     """启动时校验数据库连通性。Schema 由 Alembic 管理，不在此 create_all。"""
     async with async_engine.connect() as conn:

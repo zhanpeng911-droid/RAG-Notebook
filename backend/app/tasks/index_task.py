@@ -14,9 +14,15 @@ from app.core.logger_handler import logger
 
 
 def _run_async(coro):
-    """在同步 Celery worker 中运行异步代码"""
+    """在同步 Celery worker 中运行异步代码。
+
+    每个任务新建事件循环；执行前先丢弃池中属于旧循环的连接，
+    避免跨循环复用导致 'NoneType' object has no attribute 'send'。
+    """
     loop = asyncio.new_event_loop()
     try:
+        from app.db.db_config import dispose_stale_connections
+        loop.run_until_complete(dispose_stale_connections())
         return loop.run_until_complete(coro)
     finally:
         loop.close()

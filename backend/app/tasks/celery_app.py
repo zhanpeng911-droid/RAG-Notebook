@@ -83,6 +83,8 @@ def generate_tags_task(self, note_id: str, user_id: str, content: str, llm_confi
     try:
         loop = asyncio.new_event_loop()
         try:
+            from app.db.db_config import dispose_stale_connections
+            loop.run_until_complete(dispose_stale_connections())
             loop.run_until_complete(
                 note_service._auto_tag_and_review(note_id, user_id, content, llm_config=llm_config)
             )

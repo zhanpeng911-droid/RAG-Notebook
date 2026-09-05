@@ -17,9 +17,11 @@ STALE_RUN_MAX_AGE_MINUTES = 15
 
 
 def _run_async(coro):
-    """在同步 Celery worker 中运行异步代码"""
+    """在同步 Celery worker 中运行异步代码（执行前清理跨循环陈旧连接）。"""
     loop = asyncio.new_event_loop()
     try:
+        from app.db.db_config import dispose_stale_connections
+        loop.run_until_complete(dispose_stale_connections())
         return loop.run_until_complete(coro)
     finally:
         loop.close()
