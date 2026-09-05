@@ -152,3 +152,81 @@
 4. **R5 composable 级回归**：前端 store/HTTP 加固 + 交错竞态测试未实施（本轮只修了 F05）。
 5. **R8A 隔离 Compose / 确定性 provider / 迁移种子采集脚本**：fullstack job 依赖现有 compose（固定容器名/端口），未用独立 project + 专用端口；真实 MySQL 迁移/Chroma 并发/头像重建/恢复演练待 CI。
 6. **R0 conftest 全局 sys.modules mock 加固**：当前全量连续多次通过（989/991/993），视觉单跑 19 通过且全跑一致；按 fixture 作用域管理的重构登记为后续优化。
+
+---
+
+## 第二轮返修记录（2026-09-05，按 docs/REMEDIATION_SECOND_REVIEW_PLAN.md）
+
+审查基线 `288f8fd`，复验方案提出 S01–S07 七组问题。本轮按方案 §9.1 批次逐项修复，
+每个实现提交附常驻回归；S01–S07 负向用例在修复前运行，25 failed / 12 passed
+（含既有用例），失败清单存档于实施会话（pytest 输出，见下方"修复前证据"）。
+
+### 返修提交
+
+| 阶段 / 问题 | Commit | 内容 |
+|---|---|---|
+| A / S01 | `5340b0c` | 会话服务接线：`get_session_manager()` 每次读取当前实例、未初始化明确 RuntimeError；包 `__init__` 不再导入与子模块同名变量（消除遮蔽）；agent 路由就绪前置检查（未就绪 503）；wiring 测试含独立子进程端到端 |
+| B / S02,S04 | `7617c64` | 索引状态条件迁移：worker 缺文件检查移到 claim 后；失败写回被拒即退出不重试；重试前条件重置（仅 index_failed）+ 提交成功才投递；人工重试/Beat 补偿条件化（先提交后投递）；`_sync_index` 发布被拒返回数据库真实状态；上传响应与落库一致 |
+| C / S03 | `a033ec8` | 统一删除编排 `_delete_single_record`：单删/批删共用，逐项 state=deleted/deleting/failed；向量/MD5/文件任一失败保留记录不删 SQL；pending 凭 md5 一律尝试向量清理；`/clean`、`/documents/{id}` 202/200/500 区分；`/delete/filename` 查询失败与删除失败不回退 v1；前端"删除中"状态与可重试提示 |
+| D1 / S05 | `03bee7b` | 会话删除原子屏障：`finalize_agent_run` 同一事务条件写终态 + completed 时父会话行锁内追加历史；Agent 两入口 tombstone 404 + 会话行锁与删除同屏障；add_message 校验与写入同事务加锁；clear_session 幂等重删清理竞态残留；run 详情/列表排除已删会话关联运行 |
+| D2 / S07 | `3aa4739` | 007 downgrade 存在 tombstone 时 RuntimeError 拒绝（照 006 模式）；注释写明 MySQL DDL 隐式提交的受控维护窗口约束 |
+| E / S06 | `9790a27` | 检索等待上限=剩余预算（删除 0.5s 下限）；judge 等待上限=min(剩余预算,15s)、不足 3s 跳过；provider 异常结构化失败（answer=None + error=generation_failed），graph 发 error 不发 completed |
+
+### 修复前证据
+
+阶段 0 固化的负向用例（`test_services_wiring.py`、`test_index_state_guards.py`、
+`test_index_delete_orchestration.py`、`test_session_barriers.py`、
+`test_migrations_guards.py`、`test_agent_timeout_cancel.py` 新增段）在修复前运行：
+**25 failed, 12 passed in 9.72s**，失败项与 S01–S07 一一对应（worker 重试覆盖 deleting、
+缺文件旁路写终态、pending 跳过向量清理、批删失败仍删 SQL、tombstone 会话可启动 Agent、
+检索 30ms 预算实际 500ms、judge 越过 deadline、007 无守卫等）。
+
+### 验证结果（候选 SHA `9790a27`）
+
+| 检查 | 命令 / 环境 | 结果 |
+|---|---|---|
+| 后端 CI 范围全量（连续 2 次） | `pytest tests/ --ignore=tests/functional` | **1031 passed, 9 skipped** |
+| functional 套件（发布前手动） | `pytest tests/functional` | **14 passed** |
+| 前端单测 | `npm run test:unit` | **71 passed（9 文件）** |
+| 前端 lint | `npm run lint` | 0 errors（4 个既有 v-html warning） |
+| Django | `manage.py test apps.user apps.file`（CI 等效环境：`.env` 被 gitignore，CI 无共享 Redis → `REDIS_CACHE_URL` 为空走进程内 cache） | **21 passed** |
+| mypy（CI 门禁范围） | `mypy app/core app/schemas app/utils app/config` | **0 错误** |
+| ruff | `ruff check app tests` | 通过（每个提交经 pre-commit 钩子） |
+
+环境边界说明：Django 21 例中 7 例（认证/上传链路）在"配置了 REDIS_CACHE_URL 但共享
+Redis 不可用"的环境下按设计 fail-closed 503 —— 属预期行为而非缺陷；CI 与本轮验证均
+在未配置共享 Redis 的等效环境下执行。第二轮复验方案 §1.1 的隔离探针（索引故障注入、
+会话初始化、并发交错、预算）已全部固化为上述常驻回归并通过。
+
+### 交付记录更正（方案 §9.3）
+
+- **R2A/F02**：单删顺序重试已修（第一轮）；本轮补齐批量/旧入口/重试后 pending 残余
+  （S03）——统一编排 + 逐项结果 + 失败保留，向量清理不再凭状态推断。R2D 的
+  generation/manifest/清理记录仍未实施，"仅清理一次向量"不等于 R2D 闭环。
+- **F04/F09**：成功发布条件化（第一轮）；本轮补齐失败、重试与旁路（S02）——所有入口
+  （worker 异常、缺文件、人工重试、Beat）均条件迁移，deleting 不可被改回，提交与投递
+  顺序一致。R3 仍剩有界上传/生产后台索引/统一重试预算。
+- **R4/F03**：tombstone 与顺序追加拒绝（第一轮）；本轮补齐服务接线（S01）、跨入口
+  屏障与并发提交（S05）、幂等重删、run 可见性（S07 回退保护）。真实 MySQL 双连接锁序
+  交错验证仍按 R8A 登记（SQLite 无法证明 MySQL 锁语义，本轮以行锁代码路径 + 逻辑交错
+  用例覆盖）。
+- **F06/R6A**：检索 wait_for（第一轮）；本轮补齐 judge/全链 deadline 与失败语义（S06）
+  ——检索下限移除、judge 受共同预算、provider 错误不发 completed。R6B 终态协议闭环、
+  R6C 心跳/回收仍登记。
+- **F05/F08/F10/F07**：保留第一轮已验证的单点，不升级为 R5/R6B/R7/R8 全部完成。
+- **验证口径更正**：此前"后端 993 连续 4 次全绿"为 CI 范围（`--ignore=tests/functional`）
+  口径；手动 functional 套件中 `test_rate_limit_returns_429` 自 `ded57b8`（移除
+  `is_redis_available`）起已失败，本轮修复并纳入验证。
+
+### 仍未完成（承接第二轮复验方案 §8，不因本轮缩减）
+
+1. **R2B→R2C→R2D**：执行 generation/attempt、发布指针、manifest、持久清理状态、
+   读取侧 active_generation 过滤——本轮修补必须接到统一执行服务，删除重复实现。
+2. **R3**：数据库统一重试预算、有界分块上传、生产默认后台索引。
+3. **R5**：前端 composable 级身份代次/竞态回归 fixture（本轮只修 F05 单点）。
+4. **R6B/R6C**：SSE 协议闭环、取消收尾、心跳/过期运行回收。
+5. **R7**：经 Nginx 的单文件/批量代理上传边界实测。
+6. **R8**：隔离 Compose（独立 project/专用端口/确定性 provider）、真实 MySQL 双连接
+   锁序、真实 Chroma 在途写与删除交错、当前 SHA 的 Actions fullstack 运行记录。
+7. **R0/R9**：conftest 全局 sys.modules mock 按 fixture 作用域加固；当前候选 SHA 的
+   CI 与真实集成产物采集。
