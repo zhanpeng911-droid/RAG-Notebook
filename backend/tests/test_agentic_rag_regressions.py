@@ -255,20 +255,28 @@ def test_knowledge_router_clean_passes_space_id():
 
 
 def test_index_task_handles_deleted_document():
-    """index_task 在文档被删除时应安全退出，不抛异常、不把状态改回 indexed。
+    """文档被删除时执行链必须安全退出，不把状态改回 indexed。
 
-    删除防护从 get_by_id 重查升级为原子条件发布（publish_indexed）：
-    WHERE status=indexing 才置 indexed，删除/deleting 已抢占时发布被阻止。
+    R2C 统一执行服务后，条件发布与删除防护逻辑位于
+    document_index_service.execute_index_document；index_task 只是 Celery 封装。
     """
-    task_path = Path(__file__).resolve().parents[1] / "app" / "tasks" / "index_task.py"
-    source = task_path.read_text(encoding="utf-8")
+    service_path = (
+        Path(__file__).resolve().parents[1] / "app" / "services" / "document_index_service.py"
+    )
+    source = service_path.read_text(encoding="utf-8")
 
-    # 必须有原子条件发布（替代旧的 still_exists 重查，更强）
+    # 必须有原子条件发布（状态 + 执行代次匹配，R2B）
     assert "publish_indexed" in source
     # 必须有"已被删除/deleting，不发布"的警告日志
-    assert "已被删除/deleting，不发布" in source
-    # 必须有"可能已被删除"的警告日志（领取/文件检查路径）
+    assert "不发布" in source
+    # 必须有"可能已被删除"的警告日志（领取路径）
     assert "可能已被删除" in source
+
+    task_path = Path(__file__).resolve().parents[1] / "app" / "tasks" / "index_task.py"
+    task_source = task_path.read_text(encoding="utf-8")
+    # worker 必须经统一执行服务执行（R2C），不得自建第二套实现
+    assert "execute_index_document" in task_source
+    assert "publish_indexed" not in task_source
 
 
 def test_index_task_has_sanitize_error_function():
@@ -284,9 +292,11 @@ def test_index_task_has_sanitize_error_function():
 
 
 def test_index_task_checks_file_exists():
-    """index_task 在索引前必须检查文件是否存在"""
-    task_path = Path(__file__).resolve().parents[1] / "app" / "tasks" / "index_task.py"
-    source = task_path.read_text(encoding="utf-8")
+    """索引执行前必须检查文件是否存在（R2C 后逻辑在统一执行服务内）"""
+    service_path = (
+        Path(__file__).resolve().parents[1] / "app" / "services" / "document_index_service.py"
+    )
+    source = service_path.read_text(encoding="utf-8")
 
     assert "os.path.exists(doc.file_path)" in source
     assert "文件已丢失" in source

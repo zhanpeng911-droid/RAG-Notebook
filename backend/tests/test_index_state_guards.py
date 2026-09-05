@@ -244,10 +244,16 @@ async def test_upload_response_matches_db_when_publish_rejected(env, monkeypatch
 
     monkeypatch.setattr(DocumentIndexRepository, "create", spy_create)
 
+    state = {"done": False}
+
     class _Up:
         filename = "race.txt"
+        size = 5
 
-        async def read(self):
+        async def read(self, size=-1):
+            if state["done"]:
+                return b""
+            state["done"] = True
             return b"hello"
 
         async def seek(self, pos):

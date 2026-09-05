@@ -205,3 +205,23 @@ class AgentRunRepository:
             .order_by(AgentStep.created_at.asc())
         )
         return list(result.scalars().all())
+
+    async def reclaim_stale_runs(self, cutoff: datetime, limit: int = 100) -> int:
+        """回收过期运行（R6C）：将超过 cutoff 仍处于 started 的运行条件置为 timeout。
+
+        正常运行生命周期只有数十秒（Guardrails.MAX_TOTAL_TIME=45s）；
+        进程崩溃/断电会留下永久 started 的孤儿运行。仅更新仍为 started 的行
+        （条件写），不触碰已有终态的运行；返回回收条数。
+        """
+        result = await self.session.execute(
+            update(AgentRun)
+            .where(AgentRun.status == AgentRunStatus.STARTED.value)
+            .where(AgentRun.created_at < cutoff)
+            .values(
+                status=AgentRunStatus.TIMEOUT.value,
+                error_message="运行超时未更新，已被回收任务置为 timeout",
+                completed_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            )
+        )
+        await self.session.flush()
+        return result.rowcount

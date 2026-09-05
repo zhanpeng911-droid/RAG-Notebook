@@ -41,7 +41,7 @@ def _stub_service(monkeypatch):
 # ---------- 配置 ----------
 
 def test_celery_config():
-    assert CELERY.conf.include == ["app.tasks.index_task"]
+    assert CELERY.conf.include == ["app.tasks.index_task", "app.tasks.agent_maintenance_task"]
     assert "batch-index-pending-every-5-minutes" in CELERY.conf.beat_schedule
     assert CELERY.conf.timezone == "Asia/Shanghai"
     assert CELERY.conf.task_track_started is True

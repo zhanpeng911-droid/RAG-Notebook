@@ -46,6 +46,10 @@ class DocumentIndex(Base):
         default=DocumentIndexStatus.UPLOADED,
         comment="索引状态"
     )
+    generation = Column(Integer, nullable=False, default=0, server_default="0",
+                        comment="当前执行代次（每次 claim 递增；0=从未执行）")
+    active_generation = Column(Integer, nullable=False, default=0, server_default="0",
+                               comment="已发布（对外可见）的代次；0 表示尚无已发布向量")
     chunk_count = Column(Integer, default=0, comment="切片数量")
     error_message = Column(Text, nullable=True, comment="索引失败时的错误信息")
     retry_count = Column(Integer, default=0, comment="重试次数")

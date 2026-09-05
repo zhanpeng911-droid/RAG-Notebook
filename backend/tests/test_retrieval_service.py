@@ -345,11 +345,22 @@ def embed_available(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_knowledge_vector_path_scores_and_filters(fake_vector_class,
-                                                        embed_available):
+                                                        embed_available,
+                                                        monkeypatch):
+    # 读取侧可见性过滤（R2D）：stub 掉 DB 查询，全部候选视为已发布代次
+    import app.services.document_index_service as dis
+
+    async def _active(user_id, md5s):
+        return {m: 1 for m in md5s}
+
+    monkeypatch.setattr(dis, "get_active_document_md5s", _active)
+
     docs = [
         _Doc("高分段落", {"md5": "M1", "original_filename": "r.pdf",
-                          "user_id": "u1", "space_id": "s1", "score": 0.87}),
-        _Doc("中分段落", {"original_filename": "r.pdf", "space_id": "s1"}),
+                          "user_id": "u1", "space_id": "s1", "score": 0.87,
+                          "generation": 1}),
+        _Doc("中分段落", {"original_filename": "r.pdf", "space_id": "s1",
+                          "md5": "M2", "generation": 1}),
         _Doc("其他空间文档", {"original_filename": "other.pdf",
                               "space_id": "s-else"}),
     ]
@@ -371,14 +382,23 @@ async def test_knowledge_vector_path_scores_and_filters(fake_vector_class,
 
 @pytest.mark.asyncio
 async def test_knowledge_hyde_unavailable_falls_back_to_original(fake_vector_class,
-                                                                 embed_available):
+                                                                 embed_available,
+                                                                 monkeypatch):
+    import app.services.document_index_service as dis
+
+    async def _active(user_id, md5s):
+        return {m: 1 for m in md5s}
+
+    monkeypatch.setattr(dis, "get_active_document_md5s", _active)
+
     """单测环境下 LLM 链不可构建，HyDE 必须按设计降级为原始查询。
 
     生产中该链由真实 langchain 构成；此处只验证 _generate_hyde 的
     失败兜底分支（443-445 行）与检索使用原始查询的行为。
     """
     r = _Retriever([_Doc("正文", {"original_filename": "f.pdf",
-                                  "space_id": "s1"})])
+                                  "space_id": "s1", "md5": "M9",
+                                  "generation": 1})])
     fake_vector_class["retriever"] = r
     out = await RetrievalService(user_id="u1")._retrieve_knowledge(
         "什么是一致性哈希", 3, space_id="s1", use_hyde=True)

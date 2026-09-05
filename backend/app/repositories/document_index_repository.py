@@ -117,11 +117,15 @@ class DocumentIndexRepository:
         await self.session.flush()
         logger.info(f"【文档索引】更新状态: id={doc_id}, status={status.value}")
 
-    async def claim_for_indexing(self, doc_id: str) -> bool:
+    async def claim_for_indexing(self, doc_id: str) -> Optional[int]:
         """原子抢占 INDEXING：仅当当前状态为 pending_index 时成功。
 
         两个 worker 同时领取同一文档时只有一个拿到（rowcount=1），
         另一个安全退出；已处于终态/正在索引的重复投递不再进入 INDEXING。
+
+        R2B：抢占同时递增执行代次并返回新代次；返回 None 表示未抢占到。
+        chunk ID 与向量元数据携带该代次，迟到/重复 worker 无法把旧代次
+        产物当作新代次发布。
         """
         result = await self.session.execute(
             update(DocumentIndex)
@@ -129,41 +133,61 @@ class DocumentIndexRepository:
             .where(DocumentIndex.status == DocumentIndexStatus.PENDING_INDEX)
             .values(
                 status=DocumentIndexStatus.INDEXING,
+                generation=DocumentIndex.generation + 1,
                 updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
             )
         )
+        if result.rowcount == 0:
+            await self.session.flush()
+            return None
+        gen_result = await self.session.execute(
+            select(DocumentIndex.generation).where(DocumentIndex.id == doc_id)
+        )
         await self.session.flush()
-        return result.rowcount > 0
+        return gen_result.scalar_one_or_none()
 
-    async def publish_indexed(self, doc_id: str, chunk_count: int) -> bool:
+    async def publish_indexed(self, doc_id: str, chunk_count: int,
+                              generation: Optional[int] = None) -> bool:
         """条件发布：仅当仍处于 indexing（未被 deleting/删除抢占）时置为 indexed。
 
         防止已领取 worker 在删除之后仍把状态改回 indexed（F04）。
+        R2B：提供 generation 时额外要求代次匹配（执行身份），并把
+        active_generation 推进到该代次——读取侧过滤与旧代次清理的依据。
         """
-        result = await self.session.execute(
+        values = {
+            "status": DocumentIndexStatus.INDEXED,
+            "chunk_count": chunk_count,
+            "indexed_at": datetime.now(timezone.utc).replace(tzinfo=None),
+            "updated_at": datetime.now(timezone.utc).replace(tzinfo=None),
+        }
+        stmt = (
             update(DocumentIndex)
             .where(DocumentIndex.id == doc_id)
             .where(DocumentIndex.status == DocumentIndexStatus.INDEXING)
-            .values(
-                status=DocumentIndexStatus.INDEXED,
-                chunk_count=chunk_count,
-                indexed_at=datetime.now(timezone.utc).replace(tzinfo=None),
-                updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
-            )
         )
+        if generation is not None:
+            stmt = stmt.where(DocumentIndex.generation == generation)
+            values["active_generation"] = generation
+        result = await self.session.execute(stmt.values(**values))
         await self.session.flush()
         return result.rowcount > 0
 
-    async def mark_index_failed_if_indexing(self, doc_id: str, error_message: str) -> bool:
+    async def mark_index_failed_if_indexing(self, doc_id: str, error_message: str,
+                                            generation: Optional[int] = None) -> bool:
         """条件失败写回：仅当仍处于 indexing 时置为 index_failed。
 
         删除/deleting 已抢占时不覆盖其状态。
+        R2B：提供 generation 时额外要求代次匹配（执行身份）。
         """
-        result = await self.session.execute(
+        stmt = (
             update(DocumentIndex)
             .where(DocumentIndex.id == doc_id)
             .where(DocumentIndex.status == DocumentIndexStatus.INDEXING)
-            .values(
+        )
+        if generation is not None:
+            stmt = stmt.where(DocumentIndex.generation == generation)
+        result = await self.session.execute(
+            stmt.values(
                 status=DocumentIndexStatus.INDEX_FAILED,
                 error_message=error_message,
                 updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
@@ -171,6 +195,19 @@ class DocumentIndexRepository:
         )
         await self.session.flush()
         return result.rowcount > 0
+
+    async def get_indexed_md5s(self, user_id: str, md5s: List[str]) -> dict:
+        """查询仍处于 indexed 状态的 md5 → active_generation 映射（R2D 读取侧过滤）。"""
+        if not md5s:
+            return {}
+        result = await self.session.execute(
+            select(DocumentIndex.md5, DocumentIndex.active_generation).where(
+                DocumentIndex.user_id == user_id,
+                DocumentIndex.md5.in_(md5s),
+                DocumentIndex.status == DocumentIndexStatus.INDEXED,
+            )
+        )
+        return {md5: (gen or 0) for md5, gen in result.all()}
 
     async def increment_retry(self, doc_id: str) -> None:
         """增加重试次数"""

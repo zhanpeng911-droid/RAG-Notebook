@@ -102,13 +102,19 @@ async def env(tmp_path, monkeypatch):
 
 
 def _upload(filename, content=b"hello"):
-    async def read():
+    """模拟 starlette UploadFile 的分块读取语义（R3 有界读取依赖）。"""
+    state = {"done": False}
+
+    async def read(size=-1):
+        if state["done"]:
+            return b""
+        state["done"] = True
         return content
 
     async def seek(pos):
         return None
 
-    return NS(filename=filename, read=read, seek=seek)
+    return NS(filename=filename, read=read, seek=seek, size=len(content))
 
 
 @pytest.fixture(autouse=True)
@@ -379,7 +385,8 @@ async def test_upload_writes_stable_chunk_ids(env):
     assert ids is not None and len(ids) == 1
     # 格式：{user_id}:{doc_id}:v1:{seq}
     assert ids[0].startswith("u-ids:")
-    assert ":v1:0" in ids[0]
+    # R2B：chunk ID 携带执行代次（首次 claim 后 generation=1）
+    assert ":g1:0" in ids[0]
 
 
 @pytest.mark.asyncio
@@ -394,7 +401,7 @@ async def test_claim_for_indexing_only_first_wins(env):
         await repo.update_status(doc_id, DocumentIndexStatus.PENDING_INDEX)
         await s.commit()
 
-    # 两个 worker 同时抢占：只有一个成功
+    # 两个 worker 同时抢占：只有一个成功（返回执行代次，R2B）
     async with db_cfg.AsyncSessionLocal() as s:
         repo = DocumentIndexRepository(s)
         first = await repo.claim_for_indexing(doc_id)
@@ -404,8 +411,8 @@ async def test_claim_for_indexing_only_first_wins(env):
         second = await repo.claim_for_indexing(doc_id)
         await s.commit()
 
-    assert first is True
-    assert second is False
+    assert first  # 真值代次（此前上传已 claim 过一次）
+    assert second is None
     async with db_cfg.AsyncSessionLocal() as s:
         repo = DocumentIndexRepository(s)
         doc = await repo.get_by_id(doc_id, "u-claim")

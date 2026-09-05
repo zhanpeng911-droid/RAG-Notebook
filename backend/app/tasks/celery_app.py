@@ -34,6 +34,7 @@ celery_app = Celery(
 # 会直接从 include 列表中导入模块，不依赖 Web 进程的 import 链。
 celery_app.conf.include = [
     "app.tasks.index_task",
+    "app.tasks.agent_maintenance_task",
 ]
 
 # Celery 配置
@@ -48,12 +49,17 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,    # 每次只预取 1 个任务（避免长任务饿死）
 )
 
-# Celery Beat 定时任务调度 —— 定期扫描 pending_index 文档进行补偿
+# Celery Beat 定时任务调度 —— 定期扫描 pending_index 文档进行补偿（R3），
+# 并回收长时间停留在 started 的孤儿 Agent 运行（R6C）
 celery_app.conf.beat_schedule = {
     "batch-index-pending-every-5-minutes": {
         "task": "app.tasks.index_task.batch_index_pending_task",
         "schedule": 300.0,  # 每 5 分钟执行一次
         "args": (10,),       # 每次最多处理 10 个
+    },
+    "reclaim-stale-agent-runs-every-5-minutes": {
+        "task": "app.tasks.agent_maintenance_task.reclaim_stale_agent_runs_task",
+        "schedule": 300.0,  # 每 5 分钟执行一次
     },
 }
 

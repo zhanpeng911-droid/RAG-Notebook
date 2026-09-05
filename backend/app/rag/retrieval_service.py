@@ -240,6 +240,11 @@ class RetrievalService:
                     if doc.metadata.get("space_id", "") == space_id
                 ]
 
+            # 读取侧可见性过滤（R2D）：候选进入 rerank/模型上下文之前，
+            # 批量验证所属文档仍为 indexed 且切片代次等于已发布代次，
+            # 防止已删除/删除中/重建后旧代次的切片复活进上下文
+            documents = await self._filter_active_documents(documents)
+
             # 转换为 Evidence
             evidences = []
             # Chroma similarity retriever 默认只返回 Document，没有距离；
@@ -262,6 +267,7 @@ class RetrievalService:
                         "user_id": doc.metadata.get("user_id"),
                         "space_id": doc.metadata.get("space_id", ""),
                         "md5": doc.metadata.get("md5", ""),
+                        "generation": doc.metadata.get("generation"),
                     }
                 )
                 evidences.append(evidence)
@@ -271,6 +277,45 @@ class RetrievalService:
         except Exception as e:
             logger.error(f"【统一检索】知识库检索失败: {e}")
             return await self._keyword_search_knowledge(query, top_k, space_id)
+
+    async def _filter_active_documents(self, documents: List) -> List:
+        """读取侧可见性过滤（R2D）。
+
+        保留条件：切片携带 md5，且 (user_id, md5) 对应的文档仍处于 indexed；
+        切片元数据带 generation 时还必须等于文档的 active_generation
+        （旧代次/重建后旧切片一律丢弃；无 generation 的存量切片按 indexed 放行）。
+        可见性查询失败时 fail-closed：全部丢弃，不让未验证切片进入上下文。
+        """
+        if not documents:
+            return documents
+
+        md5s = {d.metadata.get("md5", "") for d in documents if d.metadata.get("md5")}
+        if not md5s:
+            # 知识库切片都应携带 md5；缺失标识的候选无法验证归属，丢弃
+            logger.warning("【统一检索】存在缺失 md5 标识的知识库候选，已丢弃")
+            return []
+
+        try:
+            from app.services.document_index_service import get_active_document_md5s
+            active = await get_active_document_md5s(self.user_id, md5s)
+        except Exception as e:
+            # fail-closed：可见性不可验证时不让任何候选进入上下文
+            logger.warning(f"【统一检索】可见性过滤查询失败，丢弃全部候选: {e}")
+            return []
+
+        kept = []
+        for d in documents:
+            md5 = d.metadata.get("md5", "")
+            if not md5:
+                continue
+            active_generation = active.get(md5)
+            if active_generation is None:
+                continue  # 文档已删除/删除中/非 indexed：不可见
+            gen_meta = d.metadata.get("generation")
+            if gen_meta is not None and int(gen_meta) != int(active_generation):
+                continue  # 旧代次切片：不可见
+            kept.append(d)
+        return kept
 
     async def _retrieve_notes(self, query: str, top_k: int) -> List[Evidence]:
         """从笔记库检索"""

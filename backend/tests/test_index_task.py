@@ -201,8 +201,8 @@ async def test_index_loader_exception_failed_and_retry(env):
         assert "embedding down" in doc.error_message
         assert doc.retry_count == 1
 
-        # 重试后可以再次 claim（失败状态不再无法领取）
-        assert await repo.claim_for_indexing(doc_id) is True
+        # 重试后可以再次 claim（失败状态不再无法领取；返回新代次，R2B）
+        assert await repo.claim_for_indexing(doc_id)
         await s.commit()
 
 
@@ -230,7 +230,7 @@ async def test_index_exception_without_retries_left_stops(env):
         doc = await repo.get_by_id(doc_id, "u1")
         # 重试次数耗尽：保持 index_failed（终态，不再可领取）
         assert doc.status == DocumentIndexStatus.INDEX_FAILED
-        assert await repo.claim_for_indexing(doc_id) is False
+        assert await repo.claim_for_indexing(doc_id) is None
 
 
 # ---------- 批量补偿 ----------

@@ -8,7 +8,6 @@
 4. 更新索引状态为 indexed 或 index_failed
 """
 import asyncio
-import os
 
 from app.tasks.celery_app import celery_app
 from app.core.logger_handler import logger
@@ -40,148 +39,48 @@ def index_document_task(self, document_id: str, user_id: str):
 
 async def _index_document_async(task, document_id: str, user_id: str):
     """
-    异步索引文档的核心逻辑。
+    异步索引文档的核心逻辑 —— 统一执行服务的 Celery 封装（R2C）。
 
-    流程：
-    1. 检查文档记录是否存在
-    2. 检查文件是否存在
-    3. 加载文档并切片
-    4. 调用 embedding 生成向量并写入 ChromaDB
-    5. 更新状态为 indexed 或 index_failed
+    执行器（app.services.document_index_service.execute_index_document）内部完成：
+    1. 原子抢占 INDEXING（仅 pending_index 可进入），同时取得执行代次（R2B）
+    2. 检查文件、加载文档并切片、写入代次化向量、保存 MD5 记录
+    3. 条件发布 indexed（状态 + 代次匹配），发布后回收旧代次向量（R2D）
+    4. 失败时条件写回 index_failed（不覆盖 deleting/删除）
 
-    错误处理：
-    - embedding 调用失败：写入 index_failed + 真实错误信息
-    - 文档被删除：安全退出，不抛异常
-    - 所有异常都会记录真实错误信息，不允许静默卡在 pending_index
+    错误处理（本封装职责）：
+    - retryable 失败且仍有重试预算：条件重置回 pending_index（仅 index_failed
+      可重置）+ 递增重试计数，重置与提交成功后才投递 Celery 重试（S02/R3）
+    - 失去执行权（deleting/删除/代次过期）：安全退出，不投递重试
     """
     from app.db.db_config import AsyncSessionLocal
     from app.repositories.document_index_repository import DocumentIndexRepository
+    from app.services.document_index_service import execute_index_document
 
-    async with AsyncSessionLocal() as session:
-        repo = DocumentIndexRepository(session)
+    result = await execute_index_document(document_id, user_id)
 
-        # 获取文档记录（并发安全：记录可能已被删除）
-        doc = await repo.get_by_id(document_id, user_id)
-        if not doc:
-            logger.warning(f"【后台索引】文档不存在（可能已被删除），跳过: id={document_id}")
-            return
+    if not result["retryable"]:
+        return
 
-        # 先取得执行权（仅 pending_index 可进入）：迟到/重复任务在 claim 前
-        # 一律不写终态，避免把 deleting / 其它 worker 的 indexing 覆盖掉（S02）
-        if not await repo.claim_for_indexing(document_id):
-            logger.info(f"【后台索引】未抢占到索引权（可能已在执行或删除中），跳过: id={document_id}")
-            return
-        await session.commit()
+    error = result.get("error") or "索引执行失败"
+    logger.error(f"【后台索引】文档索引失败: id={document_id}, error={error}")
 
-        # 检查文件是否存在（此时必然处于 indexing，条件失败写回由本 worker 持有）
-        if not os.path.exists(doc.file_path):
-            error_msg = f"文件已丢失: {doc.file_path}"
-            logger.error(f"【后台索引】{error_msg}, id={document_id}")
-            await repo.mark_index_failed_if_indexing(document_id, error_msg)
-            await session.commit()
-            return
-
-        try:
-            # 加载文档并切片
-            from app.rag.vector_store import VectorStoreService
-            store = VectorStoreService()
-
-            # 加载文档
-            logger.info(f"【后台索引】开始加载文档: id={document_id}, path={doc.file_path}")
-            documents = await store.get_file_document(
-                doc.file_path, md5=doc.md5, user_id=user_id
-            )
-            if not documents:
-                error_msg = "文档加载为空（可能是不支持的文件格式或文件损坏）"
-                logger.error(f"【后台索引】{error_msg}, id={document_id}")
-                await repo.mark_index_failed_if_indexing(document_id, error_msg)
-                await session.commit()
-                return
-
-            # 注入元数据
-            for d in documents:
-                d.metadata['user_id'] = user_id
-                d.metadata['original_filename'] = doc.original_filename
-                d.metadata['md5'] = doc.md5
-                d.metadata['space_id'] = doc.space_id or ''
-
-            # 切片
-            split_docs = store.split_documents_sync(documents)
-            if not split_docs:
-                error_msg = "文档切片为空（可能是文件内容过少）"
-                logger.error(f"【后台索引】{error_msg}, id={document_id}")
-                await repo.mark_index_failed_if_indexing(document_id, error_msg)
-                await session.commit()
-                return
-
-            logger.info(f"【后台索引】文档切片完成: id={document_id}, chunks={len(split_docs)}")
-
-            # 写入向量数据库（这一步会触发真实的 embedding 调用）
-            # 如果 embedding 服务不可用，这里会抛出异常
-            # 稳定 chunk ID：重复执行 upsert 覆盖，不产生重复向量
-            from app.services.document_index_service import _stable_chunk_ids
-            chunk_ids = _stable_chunk_ids(user_id, document_id, split_docs)
-            await asyncio.to_thread(
-                store.vectors_store.add_documents, split_docs, ids=chunk_ids
-            )
-
-            # 保存 MD5 记录
-            await store.save_md5_hex(doc.md5, doc.filename, doc.original_filename, user_id)
-
-            # 条件发布 indexed：仅当仍处于 indexing（未被 deleting/删除抢占）
-            if not await repo.publish_indexed(document_id, chunk_count=len(split_docs)):
-                logger.warning(
-                    f"【后台索引】索引完成但文档已被删除/deleting，不发布: id={document_id}"
-                )
-            await session.commit()
-
-            logger.info(
-                f"【后台索引】文档索引完成: id={document_id}, "
-                f"filename={doc.original_filename}, chunks={len(split_docs)}"
-            )
-
-        except Exception as e:
-            # 提取真实错误信息（不打印 API Key 等敏感信息）
-            error_msg = _sanitize_error_message(str(e))
-            logger.error(f"【后台索引】文档索引失败: id={document_id}, error={error_msg}")
-
-            # 条件失败写回：仅仍处于 indexing 时置 index_failed（不覆盖 deleting/删除）。
-            # 返回 False = 已失去执行权（deleting/已删除）→ 不得改写状态、不得重试（S02）
-            failed_written = False
+    if task.request.retries < task.max_retries:
+        async with AsyncSessionLocal() as session:
+            repo = DocumentIndexRepository(session)
             try:
-                failed_written = await repo.mark_index_failed_if_indexing(
-                    document_id, error_msg[:500]
-                )
-                if failed_written:
-                    await repo.increment_retry(document_id)
-                await session.commit()
-            except Exception as commit_err:
-                await session.rollback()
-                logger.error(f"【后台索引】写入失败状态也失败: {commit_err}")
-                return  # 提交未确认成功，不投递重试
-
-            if not failed_written:
-                logger.warning(
-                    f"【后台索引】失败写回被拒（已删除/deleting，失去执行权），退出不重试: id={document_id}"
-                )
-                return
-
-            # 重试（如果还有次数）：条件重置回 pending_index（仅 index_failed 可重置）。
-            # 重置与提交都成功之后才投递 Celery 重试，否则由数据库补偿发现（S02）
-            if task.request.retries < task.max_retries:
-                try:
-                    if not await repo.reset_to_pending_if_failed(document_id):
-                        logger.warning(
-                            f"【后台索引】重试前重置被拒（状态已变化），不投递重试: id={document_id}"
-                        )
-                        await session.commit()
-                        return
+                if not await repo.reset_to_pending_if_failed(document_id):
+                    logger.warning(
+                        f"【后台索引】重试前重置被拒（状态已变化），不投递重试: id={document_id}"
+                    )
                     await session.commit()
-                except Exception as reset_err:
-                    await session.rollback()
-                    logger.error(f"【后台索引】重试前重置为 pending 失败: {reset_err}")
                     return
-                raise task.retry(exc=e)
+                await repo.increment_retry(document_id)
+                await session.commit()
+            except Exception as reset_err:
+                await session.rollback()
+                logger.error(f"【后台索引】重试前重置为 pending 失败: {reset_err}")
+                return
+        raise task.retry(exc=RuntimeError(error))
 
 
 def _sanitize_error_message(msg: str) -> str:

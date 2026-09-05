@@ -153,8 +153,23 @@ async def save_uploaded_file(
     from app.db.db_config import AsyncSessionLocal
     from app.repositories.document_index_repository import DocumentIndexRepository
 
-    # 读取文件内容
-    content = await file.read()
+    # R3 有界读取：先按声明大小预检，再分块读取并强制硬上限，
+    # 避免超大请求把整个文件一次性读进内存
+    declared_size = getattr(file, "size", None)
+    if declared_size is not None and declared_size > MAX_FILE_SIZE:
+        raise ValueError("文件大小不能超过20MB")
+
+    chunks = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_FILE_SIZE:
+            raise ValueError("文件大小不能超过20MB")
+        chunks.append(chunk)
+    content = b"".join(chunks)
     await file.seek(0)
 
     filename = safe_filename(file)
@@ -242,29 +257,30 @@ async def save_uploaded_file(
         await session.commit()
 
         # 上传时立即尝试同步索引 —— embedding 可用就当场完成。
-        # 以 _sync_index 返回的落库状态为准：禁止把"没有抛异常"当作索引成功。
+        # 统一执行服务（R2C）返回落库状态与是否可重试：禁止把"没有抛异常"当作索引成功。
+        retry_scheduled = False
         try:
-            sync_status = await _sync_index(doc.id, user_id)
+            exec_result = await execute_index_document(doc.id, user_id)
         except Exception as e:
-            # _sync_index 已在 DB 置为 index_failed 并提交
+            # 防御性兜底：执行器内部已兜住业务异常；这里只承接基础设施级异常
             error_msg = str(e)[:200]
-            logger.warning(f"【文档索引】上传时同步索引失败，落库 index_failed: id={doc.id}, error={error_msg}")
-            # 尝试后台重试（仅调度，不伪装成已成功入队）
-            scheduled = False
+            logger.warning(f"【文档索引】上传时同步索引执行异常，落库 index_failed: id={doc.id}, error={error_msg}")
             try:
                 from app.tasks.index_task import index_document_task
                 index_document_task.delay(doc.id, user_id)
-                scheduled = True
+                retry_scheduled = True
             except Exception:
-                scheduled = False
+                retry_scheduled = False
             return {
                 "document_id": doc.id,
                 "filename": filename,
                 "status": DocumentIndexStatus.INDEX_FAILED.value,
-                "message": "文件已保存，但索引失败" + ("，已提交后台重试" if scheduled else ""),
-                "retry_scheduled": scheduled,
+                "message": "文件已保存，但索引失败" + ("，已提交后台重试" if retry_scheduled else ""),
+                "retry_scheduled": retry_scheduled,
                 "duplicate": False,
             }
+
+        sync_status = exec_result["status"]
 
         if sync_status == DocumentIndexStatus.INDEXED:
             logger.info(f"【文档索引】上传时同步索引完成: id={doc.id}")
@@ -277,13 +293,21 @@ async def save_uploaded_file(
             }
 
         if sync_status == DocumentIndexStatus.INDEX_FAILED:
-            # 空文档/空切片等通常不可自动重试的失败：DB 已落 index_failed
+            if exec_result.get("retryable"):
+                # 可重试失败（如 embedding 暂不可用）：提交后台重试
+                try:
+                    from app.tasks.index_task import index_document_task
+                    index_document_task.delay(doc.id, user_id)
+                    retry_scheduled = True
+                except Exception:
+                    retry_scheduled = False
             return {
                 "document_id": doc.id,
                 "filename": filename,
                 "status": DocumentIndexStatus.INDEX_FAILED.value,
-                "message": "文件已保存，但索引失败（文件内容为空或无法解析）",
-                "retry_scheduled": False,
+                "message": ("文件已保存，但索引失败，已提交后台重试" if retry_scheduled
+                            else "文件已保存，但索引失败，请稍后在索引状态页重试"),
+                "retry_scheduled": retry_scheduled,
                 "duplicate": False,
             }
 
@@ -302,41 +326,89 @@ async def save_uploaded_file(
         }
 
 
-def _stable_chunk_ids(user_id: str, document_id: str, split_docs) -> List[str]:
-    """稳定 chunk ID：所有者 + 文档ID + 版本 + 序号。
+def _stable_chunk_ids(user_id: str, document_id: str, split_docs,
+                      generation: int = 0) -> List[str]:
+    """稳定 chunk ID：所有者 + 文档ID + 代次 + 序号（R2B）。
 
-    重跑同一文档生成相同 ID，Chroma upsert 覆盖而非追加，
+    同一代次重跑生成相同 ID，Chroma upsert 覆盖而非追加；新代次写新 ID，
+    发布成功后由 `_cleanup_superseded_generations` 回收旧代次产物，
     重复投递/两个 worker 重试不会产生重复有效向量。
     """
-    return [f"{user_id}:{document_id}:v1:{i}" for i in range(len(split_docs))]
+    return [f"{user_id}:{document_id}:g{generation}:{i}" for i in range(len(split_docs))]
 
 
-async def _sync_index(document_id: str, user_id: str) -> DocumentIndexStatus:
+async def _cleanup_superseded_generations(store, user_id: str, md5: str,
+                                          document_id: str, active_generation: int,
+                                          legacy_chunk_count: int) -> None:
+    """发布成功后回收旧代次向量（尽力而为，失败不阻塞发布，R2D）。
+
+    两条路径：
+    1. 代次元数据过滤：generation < active_generation（覆盖代次化后的全部写入）；
+    2. 旧版固定 ID 前缀 {user}:{doc}:v1:{i}（覆盖代次化之前的存量向量，
+       数量取发布前的 chunk_count）。
+    读取侧可见性过滤是正确性保证，本清理负责空间回收与防泄漏纵深。
     """
-    同步索引（当 Celery 不可用时的降级方案）。
+    try:
+        await asyncio.to_thread(
+            store.vectors_store.delete,
+            where={"$and": [
+                {"user_id": user_id},
+                {"md5": md5},
+                {"generation": {"$lt": int(active_generation)}},
+            ]},
+        )
+    except Exception as e:
+        logger.warning(f"【文档索引】旧代次向量清理失败（元数据过滤）: {e}")
+    if legacy_chunk_count and legacy_chunk_count > 0:
+        try:
+            legacy_ids = [f"{user_id}:{document_id}:v1:{i}"
+                          for i in range(legacy_chunk_count)]
+            await asyncio.to_thread(store.vectors_store.delete, ids=legacy_ids)
+        except Exception as e:
+            logger.warning(f"【文档索引】旧版固定 ID 向量清理失败: {e}")
 
-    返回数据库最终真实状态：indexed / index_failed / deleting / pending_index 等。
-    条件发布被拒（删除获胜）时如实返回当前状态，绝不伪报 indexed（S04）。
-    创建独立的数据库会话，避免与调用者的会话状态冲突。
+
+async def execute_index_document(document_id: str, user_id: str) -> dict:
+    """统一索引执行服务（R2C）：HTTP 同步模式与 Celery worker 共用唯一实现。
+
+    返回 {"status": DocumentIndexStatus, "retryable": bool, "error": str|None}：
+    - status：数据库最终真实状态（诚实契约，发布被拒返回实际状态）；
+    - retryable=True：可重试的执行失败（失败状态已条件落库，调用方可重置
+      pending 后重新投递）；
+    - retryable=False：终态（成功/不可重试失败/未抢到执行权/失去执行权）。
     """
     from app.db.db_config import AsyncSessionLocal
     from app.repositories.document_index_repository import DocumentIndexRepository
 
+    generation: Optional[int] = None
     async with AsyncSessionLocal() as session:
         repo = DocumentIndexRepository(session)
-
         try:
-            # 原子抢占 INDEXING：仅 pending_index 可进入；并发 worker 重复投递安全退出
-            if not await repo.claim_for_indexing(document_id):
-                doc_now = await repo.get_by_id(document_id, user_id)
-                await session.commit()
-                return doc_now.status if doc_now else DocumentIndexStatus.INDEX_FAILED
-
-            await session.commit()
-
             doc = await repo.get_by_id(document_id, user_id)
             if not doc:
-                return DocumentIndexStatus.INDEX_FAILED
+                logger.warning(f"【文档索引】文档不存在（可能已被删除），跳过: id={document_id}")
+                return {"status": DocumentIndexStatus.INDEX_FAILED,
+                        "retryable": False, "error": "document_not_found"}
+
+            # 原子抢占 INDEXING（仅 pending_index 可进入），同时取得执行代次
+            generation = await repo.claim_for_indexing(document_id)
+            if generation is None:
+                logger.info(f"【文档索引】未抢占到索引权（可能已在执行或删除中），跳过: id={document_id}")
+                current = await repo.get_status(document_id, user_id)
+                await session.commit()
+                return {"status": current or DocumentIndexStatus.INDEX_FAILED,
+                        "retryable": False, "error": None}
+            await session.commit()
+
+            # 检查文件是否存在（此时必然处于 indexing，失败写回由本执行方持有）
+            if not os.path.exists(doc.file_path):
+                error_msg = f"文件已丢失: {doc.file_path}"
+                logger.error(f"【文档索引】{error_msg}, id={document_id}")
+                await repo.mark_index_failed_if_indexing(
+                    document_id, error_msg, generation=generation)
+                await session.commit()
+                return {"status": DocumentIndexStatus.INDEX_FAILED,
+                        "retryable": False, "error": error_msg}
 
             from app.rag.vector_store import VectorStoreService
             store = VectorStoreService()
@@ -347,36 +419,43 @@ async def _sync_index(document_id: str, user_id: str) -> DocumentIndexStatus:
             )
             if not documents:
                 if not await repo.mark_index_failed_if_indexing(
-                    document_id, "文档加载为空"
+                    document_id, "文档加载为空", generation=generation
                 ):
-                    # 失去执行权：返回数据库当前真实状态（S04）
                     current = await repo.get_status(document_id, user_id)
                     await session.commit()
-                    return current or DocumentIndexStatus.INDEX_FAILED
+                    return {"status": current or DocumentIndexStatus.INDEX_FAILED,
+                            "retryable": False, "error": None}
                 await session.commit()
-                return DocumentIndexStatus.INDEX_FAILED
+                return {"status": DocumentIndexStatus.INDEX_FAILED,
+                        "retryable": False, "error": "文档加载为空"}
 
-            # 注入元数据
+            # 注入元数据（含执行代次，供旧代次清理与读取侧过滤使用）
             for d in documents:
                 d.metadata['user_id'] = user_id
                 d.metadata['original_filename'] = doc.original_filename
                 d.metadata['md5'] = doc.md5
                 d.metadata['space_id'] = doc.space_id or ''
+                d.metadata['generation'] = int(generation)
 
             # 切片
             split_docs = store.split_documents_sync(documents)
             if not split_docs:
                 if not await repo.mark_index_failed_if_indexing(
-                    document_id, "文档切片为空"
+                    document_id, "文档切片为空", generation=generation
                 ):
                     current = await repo.get_status(document_id, user_id)
                     await session.commit()
-                    return current or DocumentIndexStatus.INDEX_FAILED
+                    return {"status": current or DocumentIndexStatus.INDEX_FAILED,
+                            "retryable": False, "error": None}
                 await session.commit()
-                return DocumentIndexStatus.INDEX_FAILED
+                return {"status": DocumentIndexStatus.INDEX_FAILED,
+                        "retryable": False, "error": "文档切片为空"}
 
-            # 写入向量数据库（稳定 chunk ID，重复执行走 upsert 不产生重复向量）
-            chunk_ids = _stable_chunk_ids(user_id, document_id, split_docs)
+            logger.info(f"【文档索引】文档切片完成: id={document_id}, chunks={len(split_docs)}")
+
+            # 写入向量数据库（代次化稳定 ID，upsert 幂等）
+            legacy_chunk_count = doc.chunk_count or 0
+            chunk_ids = _stable_chunk_ids(user_id, document_id, split_docs, generation)
             await asyncio.to_thread(
                 store.vectors_store.add_documents, split_docs, ids=chunk_ids
             )
@@ -384,36 +463,66 @@ async def _sync_index(document_id: str, user_id: str) -> DocumentIndexStatus:
             # 保存 MD5 记录
             await store.save_md5_hex(doc.md5, doc.filename, doc.original_filename, user_id)
 
-            # 条件发布 indexed：仅当仍处于 indexing（未被 deleting/删除抢占）
-            if not await repo.publish_indexed(document_id, chunk_count=len(split_docs)):
+            # 条件发布 indexed：状态仍为 indexing 且代次匹配（执行身份）
+            if not await repo.publish_indexed(
+                document_id, chunk_count=len(split_docs), generation=generation
+            ):
                 logger.warning(
-                    f"【文档索引】同步索引完成但文档已被删除/deleting，不发布: id={document_id}"
+                    f"【文档索引】索引完成但文档已被删除/deleting 或代次已过期，不发布: id={document_id}"
                 )
                 current = await repo.get_status(document_id, user_id)
                 await session.commit()
-                return current or DocumentIndexStatus.INDEX_FAILED
+                return {"status": current or DocumentIndexStatus.INDEX_FAILED,
+                        "retryable": False, "error": None}
+
+            # 发布成功：推进读取侧可见代次后回收旧代次产物（尽力而为）
+            await _cleanup_superseded_generations(
+                store, user_id, doc.md5, document_id,
+                active_generation=generation, legacy_chunk_count=legacy_chunk_count,
+            )
             await session.commit()
 
-            logger.info(f"【文档索引】同步索引完成: id={document_id}, chunks={len(split_docs)}")
-            return DocumentIndexStatus.INDEXED
+            logger.info(
+                f"【文档索引】同步索引完成: id={document_id}, chunks={len(split_docs)}, "
+                f"generation={generation}"
+            )
+            return {"status": DocumentIndexStatus.INDEXED,
+                    "retryable": False, "error": None}
 
         except Exception as e:
-            logger.error(f"【文档索引】同步索引失败: id={document_id}, error={e}")
+            from app.tasks.index_task import _sanitize_error_message
+            error_msg = _sanitize_error_message(str(e))
+            logger.error(f"【文档索引】索引执行失败: id={document_id}, error={error_msg}")
             written = False
             try:
                 written = await repo.mark_index_failed_if_indexing(
-                    document_id, str(e)[:500]
+                    document_id, error_msg[:500], generation=generation,
                 )
                 await session.commit()
             except Exception:
                 await session.rollback()
             if written:
-                raise
-            # 失去执行权（deleting/已删除）：状态归删除方所有，
-            # 返回数据库当前真实状态，不伪装成 index_failed 也不抛异常（S04）
-            current = await repo.get_status(document_id, user_id)
-            await session.commit()
-            return current or DocumentIndexStatus.INDEX_FAILED
+                return {"status": DocumentIndexStatus.INDEX_FAILED,
+                        "retryable": True, "error": error_msg[:200]}
+            # 失去执行权（deleting/已删除/代次过期）：状态归删除方所有
+            try:
+                current = await repo.get_status(document_id, user_id)
+                await session.commit()
+            except Exception:
+                current = None
+            return {"status": current or DocumentIndexStatus.INDEX_FAILED,
+                    "retryable": False, "error": error_msg[:200]}
+
+
+async def _sync_index(document_id: str, user_id: str) -> DocumentIndexStatus:
+    """
+    同步索引（HTTP 请求内执行的降级方案）—— 统一执行服务的薄封装（R2C）。
+
+    返回数据库最终真实状态：indexed / index_failed / deleting / pending_index 等。
+    条件发布被拒（删除获胜）时如实返回当前状态，绝不伪报 indexed（S04）。
+    """
+    result = await execute_index_document(document_id, user_id)
+    return result["status"]
 
 
 async def reindex_document(document_id: str, user_id: str) -> dict:
@@ -503,6 +612,25 @@ async def get_user_index_status(user_id: str, space_id: str = None) -> List[dict
             }
             for doc in docs
         ]
+
+
+async def get_active_document_md5s(user_id: str, md5s) -> dict:
+    """查询仍对外可见（indexed）的文档：md5 → active_generation（R2D 读取侧过滤）。
+
+    查询失败时 fail-closed 返回空映射 —— 不可验证的切片不进入 rerank/
+    模型上下文，防止已删除/已重建文档的旧切片复活。
+    """
+    if not md5s:
+        return {}
+    from app.db.db_config import AsyncSessionLocal
+    from app.repositories.document_index_repository import DocumentIndexRepository
+    try:
+        async with AsyncSessionLocal() as session:
+            repo = DocumentIndexRepository(session)
+            return await repo.get_indexed_md5s(user_id, list(md5s))
+    except Exception as e:
+        logger.warning(f"【文档索引】读取侧可见性查询失败（fail-closed）: {e}")
+        return {}
 
 
 async def delete_index_record(document_id: str, user_id: str, delete_file: bool = True) -> dict:
