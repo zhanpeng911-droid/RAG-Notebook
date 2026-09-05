@@ -112,9 +112,9 @@ async def client(monkeypatch):
     # document_index_service 相关函数打桩（router 只做编排）
     import app.services.document_index_service as di
     monkeypatch.setattr(di, "clean_user_index_records",
-                        async_fake({"deleted_count": 2}))
+                        async_fake({"deleted_count": 2, "failed_count": 0, "results": []}))
     monkeypatch.setattr(di, "delete_index_record",
-                        async_fake({"success": True, "message": "已删除"}))
+                        async_fake({"success": True, "state": "deleted", "message": "已删除"}))
     monkeypatch.setattr(di, "get_user_index_status", async_fake([]))
     monkeypatch.setattr(di, "get_embedding_health_status", lambda: {"available": True})
     monkeypatch.setattr(di, "reindex_document",
@@ -400,7 +400,7 @@ async def test_direct_clean_vectors(client, monkeypatch):
     calls = {}
     async def _clean(user_id, space_id=None):
         calls["scoped"] = True
-        return {"deleted_count": 1}
+        return {"deleted_count": 1, "failed_count": 0, "results": []}
     monkeypatch.setattr(di, "clean_user_index_records", _clean)
     resp = await clean_user_vectors(USER_A, "sp-1", FakeKnowledgeService())
     assert resp.status_code == 200
@@ -490,7 +490,7 @@ async def test_direct_reindex_fail_400(client, monkeypatch):
 async def test_direct_delete_document_v2_ok(client, monkeypatch):
     import app.services.document_index_service as di
     monkeypatch.setattr(di, "delete_index_record",
-                        async_fake({"success": True, "message": "已删除"}))
+                        async_fake({"success": True, "state": "deleted", "message": "已删除"}))
     resp = await delete_document_by_id("d1", USER_A)
     assert resp.status_code == 200
 
@@ -519,3 +519,128 @@ async def test_direct_add_single_v2_duplicate_content(client, monkeypatch):
 
 
 # ==================== KnowledgeService 直接单测 ====================
+
+
+# ---------- S03 删除结果传播（202/200 区分、失败不回退 v1） ----------
+
+@pytest.mark.asyncio
+async def test_clean_route_reports_partial_failure_202(client, monkeypatch):
+    """批删部分失败：/clean 返回 202 + 逐项结果，而非统一 success。"""
+    import app.services.document_index_service as di
+
+    async def _clean(user_id, space_id=None):
+        return {"success": False, "deleted_count": 1, "failed_count": 1,
+                "results": [
+                    {"document_id": "d1", "filename": "a.txt", "state": "deleted",
+                     "message": "文档已删除"},
+                    {"document_id": "d2", "filename": "b.txt", "state": "deleting",
+                     "message": "向量清理未完成，记录保留（deleting），可重试"},
+                ],
+                "message": "已删除 1 条记录，1 条清理未完成（可重试）"}
+
+    monkeypatch.setattr(di, "clean_user_index_records", _clean)
+    r = await client.delete("/api/v1/knowledge/clean?space_id=sp-1",
+                            headers=_auth(USER_A))
+    assert r.status_code == 202
+    body = r.json()
+    assert body["code"] == 200
+    assert body["data"]["failed_count"] == 1
+    assert body["data"]["results"][1]["state"] == "deleting"
+
+
+@pytest.mark.asyncio
+async def test_clean_route_all_deleted_returns_200(client):
+    r = await client.delete("/api/v1/knowledge/clean?space_id=sp-1",
+                            headers=_auth(USER_A))
+    assert r.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_delete_by_filename_v2_failure_does_not_fall_back_to_v1(client, monkeypatch):
+    """v2 记录存在但删除失败：必须返回失败状态，不得静默回退 v1 误删 MD5 记录。"""
+    import app.db.db_config as dbc
+    import app.repositories.document_index_repository as dir_mod
+    from types import SimpleNamespace as NS
+
+    monkeypatch.setattr(dbc, "AsyncSessionLocal", client._factory)
+
+    v2_doc = NS(id="doc-v2", original_filename="x.txt")
+
+    class RepoWithDoc:
+        def __init__(self, session):
+            self.session = session
+
+        async def get_user_documents(self, user_id):
+            return [v2_doc]
+
+    monkeypatch.setattr(dir_mod, "DocumentIndexRepository", RepoWithDoc)
+
+    import app.services.document_index_service as di
+
+    async def _fail_delete(doc_id, user_id, delete_file=True):
+        return {"success": False, "state": "deleting",
+                "message": "向量清理未完成，记录保留（deleting），可重试"}
+
+    monkeypatch.setattr(di, "delete_index_record", _fail_delete)
+
+    v1_calls = []
+
+    async def _v1(user_id, filename, delete_documents):
+        v1_calls.append(filename)
+        return True
+
+    from app.router.knowledge_router import get_knowledge_service
+
+    class SpyService(FakeKnowledgeService):
+        async def handle_delete_by_filename(self, user_id, filename, delete_documents=True):
+            return await _v1(user_id, filename, delete_documents)
+
+    client._app.dependency_overrides[get_knowledge_service] = SpyService
+
+    r = await client.delete("/api/v1/knowledge/delete/filename?filename=x.txt",
+                            headers=_auth(USER_A))
+    assert r.status_code == 202          # deleting：清理中，可重试
+    assert v1_calls == [], "v2 删除未完成时不得回退 v1"
+
+
+@pytest.mark.asyncio
+async def test_delete_by_filename_query_failure_raises(client, monkeypatch):
+    """v2 查询本身失败：报错，不得当"没有 v2"回退 v1。"""
+    import app.db.db_config as dbc
+
+    class BoomFactory:
+        def __call__(self, *a, **k):
+            raise RuntimeError("db down")
+
+    monkeypatch.setattr(dbc, "AsyncSessionLocal", BoomFactory())
+
+    v1_calls = []
+
+    class SpyService(FakeKnowledgeService):
+        async def handle_delete_by_filename(self, user_id, filename, delete_documents=True):
+            v1_calls.append(filename)
+            return True
+
+    from app.router.knowledge_router import get_knowledge_service
+    client._app.dependency_overrides[get_knowledge_service] = SpyService
+
+    r = await client.delete("/api/v1/knowledge/delete/filename?filename=x.txt",
+                            headers=_auth(USER_A))
+    assert r.status_code == 500
+    assert v1_calls == []
+
+
+@pytest.mark.asyncio
+async def test_delete_document_v2_in_progress_returns_202(client, monkeypatch):
+    """v2 单删清理中：202 + state=deleting，不伪装成功。"""
+    import app.services.document_index_service as di
+
+    async def _deleting(doc_id, user_id, delete_file=True):
+        return {"success": False, "state": "deleting",
+                "message": "向量清理未完成，记录保留（deleting），可重试"}
+
+    monkeypatch.setattr(di, "delete_index_record", _deleting)
+    r = await client.delete("/api/v1/knowledge/documents/doc-1",
+                            headers=_auth(USER_A))
+    assert r.status_code == 202
+    assert r.json()["data"]["state"] == "deleting"

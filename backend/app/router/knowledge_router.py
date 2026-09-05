@@ -124,11 +124,27 @@ async def clean_user_vectors(
     - 旧 MD5 记录
     - document_index 记录
     - knowledge_files 下的物理文件
+
+    S03：逐项结果传播 —— 全部删除完成返回 200；仍有条目处于清理中/失败
+    返回 202，body 中带 deleted_count / failed_count / 逐项 results。
     """
+    from fastapi.responses import JSONResponse
+    from fastapi.encoders import jsonable_encoder
+
+    def _partial(message: str, data: dict) -> JSONResponse:
+        return JSONResponse(status_code=202, content=jsonable_encoder(
+            {"code": 200, "message": message, "data": data}))
+
     # 带空间参数时必须只清理该空间，不能调用按用户全量删除的旧 v1 路径。
     if space_id:
         from app.services.document_index_service import clean_user_index_records
         result = await clean_user_index_records(user_id, space_id=space_id)
+        if result.get("failed_count"):
+            return _partial(result["message"], {
+                "deleted_count": result["deleted_count"],
+                "failed_count": result["failed_count"],
+                "results": result["results"],
+            })
         return success_response(
             message=f"已成功清除空间内文档（v2 删除 {result['deleted_count']} 条记录）"
         )
@@ -138,6 +154,13 @@ async def clean_user_vectors(
 
     from app.services.document_index_service import clean_user_index_records
     result = await clean_user_index_records(user_id)
+
+    if result.get("failed_count"):
+        return _partial(result["message"], {
+            "deleted_count": result["deleted_count"],
+            "failed_count": result["failed_count"],
+            "results": result["results"],
+        })
 
     return success_response(
         message=f"已成功清除用户上传的所有向量（v2 删除 {result['deleted_count']} 条记录）"
@@ -193,15 +216,18 @@ async def delete_by_filename(
     """
     通过文件名删除文档（兼容 v1 旧路径和 v2 document_index）。
 
-    删除策略：
-    1. 先从 document_index 表查找匹配的 v2 文档
-    2. 如果找到，使用 v2 删除逻辑（清理向量、物理文件、document_index 记录）
-    3. 如果没找到 v2 记录，回退到旧 MD5 删除逻辑
+    删除策略（S03）：
+    1. 先从 document_index 表查找匹配的 v2 文档；查询失败必须报错，
+       不得当"没有 v2"静默回退 v1
+    2. 找到 v2 记录：使用统一删除编排；删除失败/清理中必须返回该状态
+       （202 清理中 / 500 失败），不得继续走 v1
+    3. 没找到 v2 记录：回退到旧 MD5 删除逻辑（delete_documents 原合同不变）
     """
     from app.services.document_index_service import delete_index_record
+    from fastapi.responses import JSONResponse
+    from fastapi.encoders import jsonable_encoder
 
     # 先尝试 v2 路径：从 document_index 表查找
-    deleted_via_v2 = False
     try:
         from app.db.db_config import AsyncSessionLocal
         from app.repositories.document_index_repository import DocumentIndexRepository
@@ -210,19 +236,24 @@ async def delete_by_filename(
             repo = DocumentIndexRepository(session)
             # 按 original_filename 查找 v2 记录
             docs = await repo.get_user_documents(user_id)
-            for doc in docs:
-                if doc.original_filename == filename:
-                    result = await delete_index_record(doc.id, user_id, delete_file=delete_documents)
-                    if result["success"]:
-                        deleted_via_v2 = True
-                        break
+            matched = next(
+                (d for d in docs if d.original_filename == filename), None
+            )
     except Exception as e:
-        logger.warning(f"【删除】v2 路径查找失败，回退到 v1: {e}")
+        logger.error(f"【删除】v2 路径查询失败（不回退 v1）: {e}")
+        raise HTTPException(status_code=500, detail="文档查询失败，请稍后重试")
 
-    if deleted_via_v2:
-        return success_response(message=f"已成功删除文件 {filename}")
+    if matched is not None:
+        result = await delete_index_record(matched.id, user_id, delete_file=delete_documents)
+        if result.get("state") == "deleted":
+            return success_response(message=f"已成功删除文件 {filename}")
+        if result.get("state") == "deleting":
+            return JSONResponse(status_code=202, content=jsonable_encoder(
+                {"code": 200, "message": result.get("message", "清理中"),
+                 "data": {"state": "deleting", "document_id": matched.id}}))
+        raise HTTPException(status_code=500, detail=result.get("message", "删除失败"))
 
-    # 回退到 v1 旧路径
+    # 回退到 v1 旧路径（仅在确认没有 v2 记录时）
     success = await knowledge_service.handle_delete_by_filename(user_id, filename, delete_documents)
     if success:
         if delete_documents:
@@ -542,13 +573,20 @@ async def delete_document_by_id(
     5. 返回结构化结果
 
     幂等：文档不存在也返回成功。
+    S03：删除未完成（向量/文件清理中）返回 202；失败返回 500。
     """
     from app.services.document_index_service import delete_index_record
+    from fastapi.responses import JSONResponse
+    from fastapi.encoders import jsonable_encoder
+
     result = await delete_index_record(document_id, user_id, delete_file=True)
-    if result["success"]:
+    if result.get("state") == "deleted":
         return success_response(message=result["message"])
-    else:
-        raise HTTPException(status_code=500, detail=result["message"])
+    if result.get("state") == "deleting":
+        return JSONResponse(status_code=202, content=jsonable_encoder(
+            {"code": 200, "message": result["message"],
+             "data": {"state": "deleting", "document_id": document_id}}))
+    raise HTTPException(status_code=500, detail=result["message"])
 
 
 @knowledge_router.post("/add/single/v2")

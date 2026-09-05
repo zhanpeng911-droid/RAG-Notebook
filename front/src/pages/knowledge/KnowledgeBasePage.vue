@@ -687,7 +687,13 @@ async function deleteDocumentById(documentId) {
 
   try {
     const res = await http.delete(`/api/v1/knowledge/documents/${encodeURIComponent(documentId)}`)
-    return res.data?.code === 200
+    if (res.data?.code !== 200) return false
+    // 202 = 删除已受理但清理未完成（deleting）：提示保留与重试，不报"删除成功"
+    if (res.data?.data?.state === 'deleting') {
+      showToast(res.data?.message || '清理中，稍后可重试')
+      return 'deleting'
+    }
+    return true
   } catch (error) {
     console.error('Delete document by id error:', error)
     return false
@@ -702,8 +708,14 @@ async function cleanAllVectors() {
     if (filterSpaceId.value) {
       url += `?space_id=${encodeURIComponent(filterSpaceId.value)}`
     }
-    await http.delete(url)
-    showToast('清除成功')
+    const res = await http.delete(url)
+    const data = res.data?.data
+    // 202 = 部分条目清理中：保留条目并提示可重试，不统一报成功
+    if (res.status === 202 && data?.failed_count > 0) {
+      showToast(`已删除 ${data.deleted_count} 条，${data.failed_count} 条清理中，可重试`)
+    } else {
+      showToast('清除成功')
+    }
     await fetchDocuments()
   } catch (error) {
     console.error('Clean vectors error:', error)
@@ -790,16 +802,26 @@ function handleDeleteDocument(doc) {
   }).then(async (result) => {
     if (result) {
       let success = false
+      let deleting = false
       // v2 文档优先用 document_id 删除
       if (doc.id && doc.index_status) {
-        success = await deleteDocumentById(doc.id)
+        const outcome = await deleteDocumentById(doc.id)
+        if (outcome === 'deleting') {
+          deleting = true
+          success = true // 受理成功但清理中：不回退 filename 删除，避免误删 v1 记录
+        } else {
+          success = outcome === true
+        }
       }
       // 旧文档回退 filename 删除
       if (!success) {
         const filename = doc.original_filename || doc.filename
         success = await deleteDocumentByFilename(filename)
       }
-      if (success) {
+      if (deleting) {
+        showToast('删除处理中，可稍后重试')
+        await fetchDocuments()
+      } else if (success) {
         showToast('删除成功')
         await fetchDocuments()
       } else {
@@ -843,6 +865,7 @@ function getIndexStatusText(status) {
     case 'indexing': return '索引中'
     case 'indexed': return '已索引'
     case 'index_failed': return '索引失败'
+    case 'deleting': return '删除中'
     default: return status || ''
   }
 }

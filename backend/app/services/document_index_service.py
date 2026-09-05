@@ -507,19 +507,36 @@ async def get_user_index_status(user_id: str, space_id: str = None) -> List[dict
 
 async def delete_index_record(document_id: str, user_id: str, delete_file: bool = True) -> dict:
     """
-    删除文档索引记录（v2 路径）。
+    删除单个文档索引记录（v2 路径）。单删与批删共用同一编排（S03）。
 
     删除顺序（保证一致性）：
     1. 查询 DocumentIndex（按 document_id + user_id）
-    2. 如有向量，按 user_id + md5 删除 Chroma 向量和旧 MD5 记录
-    3. 安全删除 knowledge_files 下的物理文件（校验 realpath 必须在用户目录内）
-    4. 删除 document_index 记录并显式 commit
+    2. 置 deleting（并发索引任务无法再 claim，读取侧可见"删除中"）
+    3. 按 user_id + md5 删除 Chroma 向量和旧 MD5 记录
+    4. 安全删除 knowledge_files 下的物理文件（校验必须在用户目录内）
+    5. 删除 document_index 记录并显式 commit
 
     幂等：文档不存在也返回成功。
-    支持所有状态：pending_index / indexing / index_failed / indexed
+    返回：{"success": bool, "state": "deleted"|"deleting"|"failed", "message": str}
+    失败时保留可恢复依据（记录不删、状态停在 deleting），可重试。
+    """
+    from app.rag.vector_store import VectorStoreService
+    try:
+        store = VectorStoreService()
+    except Exception as e:
+        logger.error(f"【文档索引】VectorStoreService 初始化失败，拒绝删除（可能漏清向量）: {e}")
+        return {"success": False, "state": "failed",
+                "message": "向量服务不可用，删除未执行，请稍后重试"}
+    return await _delete_single_record(document_id, user_id, delete_file, store)
 
-    返回：
-        dict: {"success": bool, "message": str}
+
+async def _delete_single_record(doc_id: str, user_id: str, delete_file: bool, store) -> dict:
+    """单条删除编排 —— 唯一实现，所有删除入口共用。
+
+    返回 {"success", "state": deleted|deleting|failed, "message"}：
+    - deleted：向量/MD5/文件/SQL 全部确认完成；
+    - deleting：清理未完成（向量/MD5/文件失败），记录保留可重试；
+    - failed：SQL 删除等不可自动恢复的失败。
     """
     from app.db.db_config import AsyncSessionLocal
     from app.repositories.document_index_repository import DocumentIndexRepository
@@ -527,33 +544,25 @@ async def delete_index_record(document_id: str, user_id: str, delete_file: bool 
     async with AsyncSessionLocal() as session:
         repo = DocumentIndexRepository(session)
 
-        doc = await repo.get_by_id(document_id, user_id)
+        doc = await repo.get_by_id(doc_id, user_id)
         if not doc:
-            return {"success": True, "message": "文档不存在或已删除（幂等）"}
+            return {"success": True, "state": "deleted",
+                    "message": "文档不存在或已删除（幂等）"}
 
         saved_md5 = doc.md5
         saved_status = doc.status
+        file_path = doc.file_path
 
-        # 可能已写向量的状态都纳入清理：indexed/indexing/deleting，
-        # 以及 index_failed（可能发生"向量写成功、SQL 提交失败"的残余）。
-        # deleting 重试也必须再次尝试向量清理（F02）。
-        may_have_vectors = saved_status in (
-            DocumentIndexStatus.INDEXED,
-            DocumentIndexStatus.INDEXING,
-            DocumentIndexStatus.DELETING,
-            DocumentIndexStatus.INDEX_FAILED,
-        )
-
-        # 先置为 DELETING（已是 deleting 则跳过）：并发索引任务无法再 claim，
-        # 读取侧可见"删除中"
+        # 先置为 DELETING（幂等）：并发索引任务无法再 claim，读取侧可见"删除中"
         if saved_status != DocumentIndexStatus.DELETING:
-            await repo.update_status(document_id, DocumentIndexStatus.DELETING)
+            await repo.update_status(doc_id, DocumentIndexStatus.DELETING)
             await session.commit()
 
-        if may_have_vectors and saved_md5:
+        # 向量清理：凡具备资源标识（md5）一律尝试 —— pending（F09 重试路径）
+        # 也可能已有部分向量，不能凭"当前是 pending"推断从未写过向量（S03）；
+        # 向量清理按 user_id+md5 定位，幂等，宁多勿漏
+        if saved_md5 and store is not None:
             try:
-                from app.rag.vector_store import VectorStoreService
-                store = VectorStoreService()
                 where_clause = {"$and": [{"user_id": user_id}, {"md5": saved_md5}]}
                 await asyncio.to_thread(store.vectors_store.delete, where=where_clause)
                 logger.info(f"【文档索引】已删除向量: user_id={user_id}, md5={saved_md5}")
@@ -563,30 +572,55 @@ async def delete_index_record(document_id: str, user_id: str, delete_file: bool 
                 error_msg = str(e)[:300]
                 logger.error(f"【文档索引】向量清理失败，保留 deleting 记录: {error_msg}")
                 await repo.update_status(
-                    document_id,
+                    doc_id,
                     DocumentIndexStatus.DELETING,
                     error_message=f"向量清理失败: {error_msg}",
                 )
                 await session.commit()
-                return {"success": False, "message": "向量清理未完成，记录保留（deleting），可重试"}
+                return {"success": False, "state": "deleting",
+                        "message": "向量清理未完成，记录保留（deleting），可重试"}
 
             try:
                 from app.services.knowledge_record_service import KnowledgeRecordService
                 record_service = KnowledgeRecordService()
                 await record_service.delete_single_md5(user_id, saved_md5, delete_documents=False)
             except Exception as e:
-                logger.warning(f"【文档索引】删除 MD5 记录失败: {e}")
+                # MD5 清理失败同样保留可恢复依据（可重试），不宣称成功
+                logger.warning(f"【文档索引】删除 MD5 记录失败，保留 deleting 记录: {e}")
+                await repo.update_status(
+                    doc_id,
+                    DocumentIndexStatus.DELETING,
+                    error_message=f"MD5 记录清理失败: {str(e)[:200]}",
+                )
+                await session.commit()
+                return {"success": False, "state": "deleting",
+                        "message": "MD5 记录清理未完成，记录保留（deleting），可重试"}
 
-        # 安全删除物理文件
-        if delete_file and doc.file_path:
-            _safe_delete_physical_file(doc.file_path, user_id)
+        # 安全删除物理文件；失败保留记录（可重试），不删 SQL 丢失清理依据
+        if delete_file and file_path:
+            if not _safe_delete_physical_file(file_path, user_id):
+                logger.error(f"【文档索引】物理文件删除失败，保留 deleting 记录: {file_path}")
+                await repo.update_status(
+                    doc_id,
+                    DocumentIndexStatus.DELETING,
+                    error_message="物理文件删除失败，记录保留可重试",
+                )
+                await session.commit()
+                return {"success": False, "state": "deleting",
+                        "message": "物理文件删除未完成，记录保留（deleting），可重试"}
 
         # 删除 document_index 记录
-        await repo.delete_by_id(document_id, user_id)
-        await session.commit()
-        logger.info(f"【文档索引】已删除记录: id={document_id}")
+        try:
+            await repo.delete_by_id(doc_id, user_id)
+            await session.commit()
+        except Exception as e:
+            await session.rollback()
+            logger.error(f"【文档索引】删除记录失败: id={doc_id}, error={e}")
+            return {"success": False, "state": "failed",
+                    "message": f"记录删除失败: {str(e)[:200]}"}
 
-        return {"success": True, "message": "文档已删除"}
+        logger.info(f"【文档索引】已删除记录: id={doc_id}")
+        return {"success": True, "state": "deleted", "message": "文档已删除"}
 
 
 def _is_within(child_real: str, parent_real: str) -> bool:
@@ -598,10 +632,14 @@ def _is_within(child_real: str, parent_real: str) -> bool:
         return False
 
 
-def _safe_delete_physical_file(file_path: str, user_id: str) -> None:
-    """安全删除物理文件，校验 realpath 必须在用户目录内且为普通文件"""
+def _safe_delete_physical_file(file_path: str, user_id: str) -> bool:
+    """安全删除物理文件，校验 realpath 必须在用户目录内且为普通文件。
+
+    返回可判定结果（S03）：True = 文件已不存在（删除成功或原本就没有）；
+    False = 文件仍在但无法删除（路径不合法、非普通文件或删除失败）。
+    """
     if not file_path or not os.path.exists(file_path):
-        return
+        return True  # 资源原本不存在：幂等成功
 
     try:
         user_dir = _get_storage_dir(user_id)
@@ -612,30 +650,36 @@ def _safe_delete_physical_file(file_path: str, user_id: str) -> None:
         # 改用 commonpath 路径级比较；且仅删除普通文件（不删目录/符号链接目标）
         if real_file == real_user_dir:
             logger.warning(f"【文档索引】拒绝删除用户目录本身: {file_path}")
-            return
+            return False
         if not _is_within(real_file, real_user_dir):
             logger.warning(f"【文档索引】文件路径不在用户目录内，拒绝删除: {file_path}")
-            return
+            return False
         if not os.path.isfile(real_file):
             logger.warning(f"【文档索引】目标不是普通文件，拒绝删除: {file_path}")
-            return
+            return False
 
         os.unlink(real_file)
         logger.info(f"【文档索引】已删除物理文件: {file_path}")
+        return True
     except Exception as e:
         logger.warning(f"【文档索引】删除物理文件失败: {e}")
+        return False
 
 
 async def clean_user_index_records(user_id: str, space_id: str = None) -> dict:
     """
-    清除用户的所有 v2 文档索引记录、向量和物理文件。
+    清除用户的所有 v2 文档索引记录、向量和物理文件（S03 逐项编排）。
+
+    批删只负责枚举和汇总：逐条调用与单删相同的 `_delete_single_record`，
+    每条独立提交；只有确认清理完成的条目计入 deleted_count，其余保留
+    可恢复依据（deleting）可重试。
 
     参数：
         user_id: 用户ID
         space_id: 空间ID（None 表示清理所有）
 
     返回：
-        dict: {"success": bool, "deleted_count": int, "message": str}
+        dict: {"success", "deleted_count", "failed_count", "results", "message"}
     """
     from app.db.db_config import AsyncSessionLocal
     from app.repositories.document_index_repository import DocumentIndexRepository
@@ -644,49 +688,59 @@ async def clean_user_index_records(user_id: str, space_id: str = None) -> dict:
         repo = DocumentIndexRepository(session)
         docs = await repo.get_user_documents(user_id, space_id=space_id)
 
-        if not docs:
-            return {"success": True, "deleted_count": 0, "message": "没有需要清除的记录"}
+    if not docs:
+        return {"success": True, "deleted_count": 0, "failed_count": 0,
+                "results": [], "message": "没有需要清除的记录"}
 
-        # 复用同一个 VectorStoreService 实例
-        store = None
-        try:
-            from app.rag.vector_store import VectorStoreService
-            store = VectorStoreService()
-        except Exception as e:
-            logger.warning(f"【文档索引】VectorStoreService 初始化失败（可能 Chroma 不可用）: {e}")
+    # 共享一个向量库实例；初始化失败时全部条目只标记 deleting，
+    # 不删除任何 SQL/文件（向量无法清理，保留可恢复依据）
+    store = None
+    store_error = ""
+    try:
+        from app.rag.vector_store import VectorStoreService
+        store = VectorStoreService()
+    except Exception as e:
+        store_error = str(e)[:200]
+        logger.warning(f"【文档索引】VectorStoreService 初始化失败（可能 Chroma 不可用）: {store_error}")
 
-        deleted_count = 0
+    results = []
+    deleted_count = 0
+    failed_count = 0
+
+    if store is None:
+        async with AsyncSessionLocal() as session:
+            mark_repo = DocumentIndexRepository(session)
+            for doc in docs:
+                await mark_repo.update_status(
+                    doc.id, DocumentIndexStatus.DELETING,
+                    error_message=f"向量服务不可用: {store_error}",
+                )
+                results.append({
+                    "document_id": doc.id,
+                    "filename": doc.original_filename,
+                    "state": "deleting",
+                    "message": "向量服务不可用，记录保留（deleting），可重试",
+                })
+            await session.commit()
+        failed_count = len(docs)
+    else:
         for doc in docs:
-            # 如果已索引或正在索引，清理向量
-            # 可能已写向量的状态都清理（含 deleting 重试、index_failed 残余）
-            if doc.status in (
-                DocumentIndexStatus.INDEXED,
-                DocumentIndexStatus.INDEXING,
-                DocumentIndexStatus.DELETING,
-                DocumentIndexStatus.INDEX_FAILED,
-            ) and doc.md5:
-                if store:
-                    try:
-                        where_clause = {"$and": [{"user_id": user_id}, {"md5": doc.md5}]}
-                        await asyncio.to_thread(store.vectors_store.delete, where=where_clause)
-                    except Exception as e:
-                        logger.warning(f"【文档索引】清除向量失败: {e}")
+            out = await _delete_single_record(doc.id, user_id, delete_file=True, store=store)
+            results.append({
+                "document_id": doc.id,
+                "filename": doc.original_filename,
+                "state": out["state"],
+                "message": out["message"],
+            })
+            if out["state"] == "deleted":
+                deleted_count += 1
+            else:
+                failed_count += 1
 
-                try:
-                    from app.services.knowledge_record_service import KnowledgeRecordService
-                    record_service = KnowledgeRecordService()
-                    await record_service.delete_single_md5(user_id, doc.md5, delete_documents=False)
-                except Exception as e:
-                    logger.warning(f"【文档索引】清除 MD5 记录失败: {e}")
+    message = f"已删除 {deleted_count} 条记录"
+    if failed_count:
+        message += f"，{failed_count} 条清理未完成（可重试）"
+    logger.info(f"【文档索引】已清除用户 {user_id} 的 v2 记录: {message}")
 
-            # 删除物理文件
-            _safe_delete_physical_file(doc.file_path, user_id)
-
-            # 删除记录
-            await repo.delete_by_id(doc.id, user_id)
-            deleted_count += 1
-
-        await session.commit()
-        logger.info(f"【文档索引】已清除用户 {user_id} 的 {deleted_count} 条 v2 记录")
-
-        return {"success": True, "deleted_count": deleted_count, "message": f"已清除 {deleted_count} 条记录"}
+    return {"success": failed_count == 0, "deleted_count": deleted_count,
+            "failed_count": failed_count, "results": results, "message": message}

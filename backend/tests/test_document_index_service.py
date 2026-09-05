@@ -345,10 +345,12 @@ async def test_delete_index_idempotent(env):
     doc_id = made["document_id"]
 
     out = await dis.delete_index_record(doc_id, "u-del")
-    assert out == {"success": True, "message": "文档已删除"}
+    # S03：结果带逐项状态（deleted / deleting / failed）
+    assert out == {"success": True, "state": "deleted", "message": "文档已删除"}
 
     again = await dis.delete_index_record(doc_id, "u-del")
     assert again["success"] is True and "幂等" in again["message"]
+    assert again["state"] == "deleted"
 
     rows = await dis.get_user_index_status("u-del")
     assert all(x["id"] != doc_id for x in rows)
