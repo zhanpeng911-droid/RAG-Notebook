@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional, List
 
-from sqlalchemy import select, update, and_
+from sqlalchemy import select, update, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent_run import (
@@ -17,7 +17,14 @@ from app.models.agent_run import (
     AgentRunStatus,
     TERMINAL_RUN_STATUSES,
 )
+from app.models.chat_history import ChatSession
 from app.core.logger_handler import logger
+
+
+def _exclude_deleted_session_runs():
+    """运行可见性条件（S05）：session_id 为空运行始终可见；
+    关联会话已删除（tombstone）的运行不可通过详情/列表/反馈读回。"""
+    return or_(AgentRun.session_id.is_(None), ChatSession.deleted_at.is_(None))
 
 
 class AgentRunRepository:
@@ -124,10 +131,13 @@ class AgentRunRepository:
         return result.rowcount > 0
 
     async def get_run(self, run_id: str, user_id: str) -> Optional[AgentRun]:
-        """获取运行记录"""
+        """获取运行记录（关联会话已删除的运行不可读，S05）"""
         result = await self.session.execute(
-            select(AgentRun).where(
-                and_(AgentRun.id == run_id, AgentRun.user_id == user_id)
+            select(AgentRun)
+            .outerjoin(ChatSession, AgentRun.session_id == ChatSession.id)
+            .where(
+                and_(AgentRun.id == run_id, AgentRun.user_id == user_id),
+                _exclude_deleted_session_runs(),
             )
         )
         return result.scalar_one_or_none()
@@ -135,14 +145,15 @@ class AgentRunRepository:
     async def get_user_runs(
         self, user_id: str, session_id: str = None, limit: int = 20
     ) -> List[AgentRun]:
-        """获取用户的运行记录"""
+        """获取用户的运行记录（排除关联已删除会话的运行，S05）"""
         conditions = [AgentRun.user_id == user_id]
         if session_id:
             conditions.append(AgentRun.session_id == session_id)
 
         result = await self.session.execute(
             select(AgentRun)
-            .where(and_(*conditions))
+            .outerjoin(ChatSession, AgentRun.session_id == ChatSession.id)
+            .where(and_(*conditions), _exclude_deleted_session_runs())
             .order_by(AgentRun.created_at.desc())
             .limit(limit)
         )

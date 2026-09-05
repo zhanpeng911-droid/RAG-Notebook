@@ -90,6 +90,7 @@ async def agent_query_stream(
     from app.repositories.agent_run_repository import AgentRunRepository
     from app.db.db_config import AsyncSessionLocal
     from app.models.chat_history import ChatSession
+    from sqlalchemy import select
 
     _ensure_session_service_ready()
 
@@ -99,14 +100,22 @@ async def agent_query_stream(
     )
 
     # 在返回 StreamingResponse 前完成会话和 run 创建，释放初始化会话。
+    # S05：会话校验（含 tombstone 拒绝）与 run 创建在同一短事务内，
+    # 且对父会话行加锁，与删除方（clear_session）持同一把锁。
     session_id = request.session_id or str(uuid.uuid4())
     async with AsyncSessionLocal() as setup_db:
         if request.session_id:
-            existing = await setup_db.get(ChatSession, session_id)
+            existing = (await setup_db.execute(
+                select(ChatSession)
+                .where(ChatSession.id == request.session_id)
+                .with_for_update()
+            )).scalar_one_or_none()
             if existing is None:
                 raise HTTPException(status_code=404, detail="会话不存在")
             if existing.user_id != user_id:
                 raise HTTPException(status_code=403, detail="当前会话不属于你")
+            if existing.deleted_at is not None:
+                raise HTTPException(status_code=404, detail="会话不存在或已删除")
         else:
             setup_db.add(ChatSession(id=session_id, user_id=user_id, title=request.query[:30]))
             await setup_db.flush()
@@ -137,22 +146,30 @@ async def agent_query_stream(
                 event_type = event.get("type")
                 if event_type == "completed":
                     total_ms = int((time.time() - start_time) * 1000)
-                    async with AsyncSessionLocal() as event_db:
-                        event_repo = AgentRunRepository(event_db)
-                        await event_repo.update_run_terminal(
+                    # S05：终态提交 + 历史追加在同一事务（会话行锁保护）。
+                    # 条件写被拒或事务失败时不发 completed，不返回成功快照。
+                    try:
+                        from app.services.agent_completion_service import finalize_agent_run
+                        outcome = await finalize_agent_run(
                             run.id,
-                            "completed",
+                            user_id,
+                            status="completed",
                             answer=event.get("answer"),
                             total_time_ms=total_ms,
                             citation_count=len(event.get("citations", [])),
+                            session_id=session_id,
+                            user_message=request.query,
+                            assistant_message=event.get("answer", ""),
                         )
-                        await event_db.commit()
-                    # 把问答写入会话历史
-                    try:
-                        from app.services import session_manager as sm
-                        await sm.session_manager.add_message(session_id, user_id, request.query, event.get("answer", ""))
-                    except Exception as msg_err:
-                        logger.warning(f"写入会话历史失败: {msg_err}")
+                    except Exception as fin_err:
+                        logger.error(f"【Agent】completed 终态提交失败: {fin_err}")
+                        event = {"type": "error", "error": "结果落库失败，请重试"}
+                    else:
+                        if not outcome["run_updated"]:
+                            logger.warning(
+                                f"【Agent】终态已被其它结果占用，completed 不再发出: run={run.id}"
+                            )
+                            event = {"type": "error", "error": "运行结果已被其它终态占用"}
                 elif event_type == "error":
                     total_ms = int((time.time() - start_time) * 1000)
                     async with AsyncSessionLocal() as event_db:
@@ -220,16 +237,24 @@ async def agent_query(
     from app.agentic.graph import run_agent
     from app.repositories.agent_run_repository import AgentRunRepository
     from app.models.chat_history import ChatSession
+    from sqlalchemy import select
 
     _ensure_session_service_ready()
 
     session_id = request.session_id or str(uuid.uuid4())
     if request.session_id:
-        existing = await db.get(ChatSession, session_id)
+        # S05：tombstone 会话拒绝 + 父会话行锁（与删除方同一屏障）
+        existing = (await db.execute(
+            select(ChatSession)
+            .where(ChatSession.id == request.session_id)
+            .with_for_update()
+        )).scalar_one_or_none()
         if existing is None:
             raise HTTPException(status_code=404, detail="会话不存在")
         if existing.user_id != user_id:
             raise HTTPException(status_code=403, detail="当前会话不属于你")
+        if existing.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="会话不存在或已删除")
     else:
         db.add(ChatSession(id=session_id, user_id=user_id, title=request.query[:30]))
         await db.flush()
@@ -262,27 +287,31 @@ async def agent_query(
         final_status = "failed"
     else:
         final_status = "completed"
-    await repo.update_run_terminal(
-        run.id,
-        final_status,
-        answer=result.get("answer"),
-        error_message=result.get("error"),
-        total_time_ms=total_ms,
-        citation_count=len(result.get("citations", [])),
-    )
-    await db.commit()
 
-    if not result.get("error") and result.get("answer"):
-        try:
-            from app.services import session_manager as sm
-            await sm.session_manager.add_message(
-                session_id,
-                user_id,
-                request.query,
-                result.get("answer", ""),
-            )
-        except Exception as msg_err:
-            logger.warning(f"写入会话历史失败: {msg_err}")
+    # S05：终态提交 + 历史追加在同一事务（会话行锁保护）。
+    # 提交失败或条件写被拒时不返回成功快照。
+    run_updated = False
+    try:
+        from app.services.agent_completion_service import finalize_agent_run
+        outcome = await finalize_agent_run(
+            run.id,
+            user_id,
+            status=final_status,
+            answer=result.get("answer"),
+            error_message=result.get("error"),
+            total_time_ms=total_ms,
+            citation_count=len(result.get("citations", [])),
+            session_id=session_id if final_status == "completed" else None,
+            user_message=request.query,
+            assistant_message=result.get("answer", ""),
+        )
+        run_updated = outcome["run_updated"]
+    except Exception as fin_err:
+        logger.error(f"【Agent非流式】终态提交失败: {fin_err}")
+
+    if not run_updated and final_status == "completed":
+        result["error"] = "运行结果落库失败，请重试"
+        final_status = "failed"
 
     result["run_id"] = run.id
     result["session_id"] = session_id

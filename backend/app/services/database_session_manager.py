@@ -94,12 +94,19 @@ class DatabaseSessionManager:
 
         会话必须存在且属于当前用户、未被删除；不再替迟到请求自动创建旧会话 ID
         （F03：删除后迟到写入不得重建会话）。新会话由服务端显式创建。
+
+        S05 原子屏障：会话校验（含 tombstone 复查）与消息/标题写入在
+        同一事务内完成，并对父会话行加锁（MySQL SELECT ... FOR UPDATE），
+        与 clear_session 持同一把锁——删除先提交则本写入被拒，
+        本写入先提交则删除等待锁释放后统一清理。
         """
         from fastapi import HTTPException, status
 
         async with AsyncSessionLocal() as db:
             existing_session = await db.run_sync(
-                lambda s: s.query(ChatSession).filter(ChatSession.id == session_id).first()
+                lambda s: s.query(ChatSession).filter(
+                    ChatSession.id == session_id
+                ).with_for_update().first()
             )
 
             if not existing_session or existing_session.deleted_at is not None:
@@ -158,32 +165,40 @@ class DatabaseSessionManager:
         AgentRun/AgentStep/AgentFeedback 与会话只是普通字段关联（无外键级联），
         必须在此显式删除，否则会留下孤儿数据。全部在同一事务内完成：
         先删关联 Agent 数据，再删消息与会话；会话必须属于当前用户。
+
+        S05 原子屏障：先取父会话行锁（与 add_message / finalize_agent_run
+        同一把锁），锁内复查归属后统一清理并提交。对已是 tombstone 的会话
+        重复删除同样执行清理（幂等），使历史竞态残留可被再次清除；
+        tombstone 不保存标题、消息正文或 metadata。
         """
         async with AsyncSessionLocal() as db:
-            # 查找会话，验证属于该用户
+            # 查找会话并锁定行（校验归属 + 阻塞并发写入，直至本事务提交）
             session = await db.run_sync(
                 lambda s: s.query(ChatSession).filter(
-                    ChatSession.id == session_id, ChatSession.user_id == user_id
-                ).first()
+                    ChatSession.id == session_id,
+                    ChatSession.user_id == user_id,
+                ).with_for_update().first()
             )
 
-            if session and session.deleted_at is None:
-                # 该会话下的运行 ID（AgentRun.session_id 为普通字段）
-                run_ids = select(AgentRun.id).where(AgentRun.session_id == session_id)
-                await db.execute(delete(AgentFeedback).where(AgentFeedback.run_id.in_(run_ids)))
-                await db.execute(delete(AgentStep).where(AgentStep.run_id.in_(run_ids)))
-                await db.execute(delete(AgentRun).where(AgentRun.session_id == session_id))
-                # 删除消息
-                await db.execute(delete(ChatMessage).where(ChatMessage.session_id == session_id))
-                # tombstone：保留最小行（清空标题/元数据），置删除时间，
-                # 防止迟到写入把会话重建出来（F03）
-                session.deleted_at = datetime.now(timezone.utc).replace(tzinfo=None)
-                session.title = None
-                session.metadata_ = None
-                await db.commit()
-                logger.info(
-                    f"【数据库会话管理】会话 {session_id} 及其关联数据已清除（tombstone），属于用户: {user_id}"
-                )
+            if session is None:
+                return  # 不存在或不属于该用户：幂等返回
+
+            # 该会话下的运行 ID（AgentRun.session_id 为普通字段）
+            run_ids = select(AgentRun.id).where(AgentRun.session_id == session_id)
+            await db.execute(delete(AgentFeedback).where(AgentFeedback.run_id.in_(run_ids)))
+            await db.execute(delete(AgentStep).where(AgentStep.run_id.in_(run_ids)))
+            await db.execute(delete(AgentRun).where(AgentRun.session_id == session_id))
+            # 删除消息
+            await db.execute(delete(ChatMessage).where(ChatMessage.session_id == session_id))
+            # tombstone：保留最小行（清空标题/元数据），置删除时间，
+            # 防止迟到写入把会话重建出来（F03）；重复删除时重置同样字段
+            session.deleted_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            session.title = None
+            session.metadata_ = None
+            await db.commit()
+            logger.info(
+                f"【数据库会话管理】会话 {session_id} 及其关联数据已清除（tombstone），属于用户: {user_id}"
+            )
 
     async def get_all_session_ids(self, user_id: Optional[str] = None) -> List[str]:
         """获取所有会话 ID，如果提供了 user_id，则只返回该用户的会话（不含已删除）"""
