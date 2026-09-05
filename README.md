@@ -238,6 +238,11 @@ Copy-Item DjangoUserService/.env.example DjangoUserService/.env
 - `backend/.env`：`SECRET_KEY`、MySQL、Redis（含 `REDIS_PASSWORD`）、`DJANGO_API_URL`、`CORS_ORIGINS`、`LLM_TYPE` 及对应模型 Key/URL；
 - `DjangoUserService/.env`：`JWT_SECRET_KEY`、数据库、Redis Cache（`REDIS_CACHE_URL` 带认证）、Celery broker/backend；
 - `SECRET_KEY` 与 `JWT_SECRET_KEY` 必须一致（JWT 跨服务契约见 [docs/JWT_CONTRACT.md](docs/JWT_CONTRACT.md)）；
+- `JWT_BLACKLIST_CHECK_ENABLED=true` 时 JWT 吊销黑名单经 Redis 校验，**Redis 必须可达**；
+  Redis 不可用会按 fail-closed 拒绝所有鉴权请求（503）。仅在无 Redis 的临时开发环境
+  才设为 `false`；
+- 检索参数热更新的管理员白名单 `RUNTIME_CONFIG_ADMIN_USER_IDS`（详见
+  [检索参数热更新](#检索参数热更新)）：填入允许修改参数的用户 UUID，逗号分隔；
 - 本地 `.env` 含敏感信息，**不要提交到 Git**。
 
 ### 4. 执行数据库迁移
@@ -260,6 +265,12 @@ uv run alembic upgrade head
 net start mysql80
 redis-server
 ```
+
+> Windows 本地 Redis（如 `D:\Redis\redis-server.exe`）建议直接在解压目录运行
+> `redis-server.exe`（无配置文件时以默认参数启动，监听 6379、无密码）。无密码时把
+> `backend/.env` 的 `REDIS_PASSWORD` 置空、`DjangoUserService/.env` 的
+> `REDIS_CACHE_URL` 去掉认证段（如 `redis://localhost:6379/0`）。
+> `redis-cli ping` 返回 PONG 即就绪。
 
 如使用本地 Ollama：
 
@@ -286,7 +297,10 @@ uv run uvicorn main:app --reload --port 8002 --host 127.0.0.1
 cd backend
 uv run celery -A app.tasks.celery_app:celery_app worker --loglevel=info
 
-# 终端 4：Celery Beat（pending_index 补偿扫描）
+# Windows 本地开发需加 --pool=solo（prefork 在 Windows 不可用）：
+uv run celery -A app.tasks.celery_app:celery_app worker --loglevel=info --pool=solo
+
+# 终端 4：Celery Beat（pending_index 补偿扫描 + 过期 Agent 运行回收，每 5 分钟）
 cd backend
 uv run celery -A app.tasks.celery_app:celery_app beat --loglevel=info
 
@@ -382,9 +396,14 @@ backend/app/config/chroma.yaml
 
 接口：`GET/PUT /api/v1/admin/runtime-config`、`POST /api/v1/admin/runtime-config/reset`（变更写入审计日志）。前端设置页提供可视化调整面板。索引期参数（chunk 大小等）不纳入热更新，避免误导。
 
+**权限**：`GET` 对所有登录用户开放；`PUT` / `reset` 仅限用户 UUID 出现在
+`backend/.env` 的 `RUNTIME_CONFIG_ADMIN_USER_IDS`（逗号分隔）中的账号，
+其余用户返回 403。配置方法：注册/登录后从用户接口取得自己的 UUID，
+写入该配置并重启 FastAPI 后端。
+
 ### 数据隔离与安全
 
-- Django 用户服务负责用户认证，FastAPI 用 JWT 识别用户（黑名单撤销跨服务生效）；
+- Django 用户服务负责用户认证，FastAPI 用 JWT 识别用户（黑名单撤销跨服务生效，Redis 不可用时按 fail-closed 拒绝鉴权请求）；
 - 知识库、笔记、会话、Agent run 等数据按用户维度隔离；
 - 文件名唯一性校验（按用户隔离，同名文件拒绝上传并返回 409）；
 - Agent 检索还会按 `space_id` 约束范围；
