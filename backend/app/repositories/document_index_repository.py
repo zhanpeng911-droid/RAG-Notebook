@@ -183,6 +183,54 @@ class DocumentIndexRepository:
             doc.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
             await self.session.flush()
 
+    async def get_status(self, doc_id: str, user_id: str) -> Optional[DocumentIndexStatus]:
+        """仅查询状态列（绕开 identity map，读取数据库当前真实值）。"""
+        result = await self.session.execute(
+            select(DocumentIndex.status).where(
+                and_(DocumentIndex.id == doc_id, DocumentIndex.user_id == user_id)
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def reset_to_pending_if_failed(self, doc_id: str) -> bool:
+        """条件重试重置：仅当仍处于 index_failed 时回到 pending_index。
+
+        worker 失败重试路径专用：失败写回后状态可能已被删除/deleting 抢占
+        （S02），此时不得重置、不得投递重试。
+        """
+        result = await self.session.execute(
+            update(DocumentIndex)
+            .where(DocumentIndex.id == doc_id)
+            .where(DocumentIndex.status == DocumentIndexStatus.INDEX_FAILED)
+            .values(
+                status=DocumentIndexStatus.PENDING_INDEX,
+                updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            )
+        )
+        await self.session.flush()
+        return result.rowcount > 0
+
+    async def reset_to_pending_if_retryable(self, doc_id: str) -> bool:
+        """条件人工重试重置：仅 index_failed / pending_index 可重置。
+
+        人工重试入口先读后写之间存在 TOCTOU（S02）：读取时是 failed，
+        更新前可能已被置为 deleting/indexing。条件更新以行数为准。
+        """
+        result = await self.session.execute(
+            update(DocumentIndex)
+            .where(DocumentIndex.id == doc_id)
+            .where(DocumentIndex.status.in_([
+                DocumentIndexStatus.INDEX_FAILED,
+                DocumentIndexStatus.PENDING_INDEX,
+            ]))
+            .values(
+                status=DocumentIndexStatus.PENDING_INDEX,
+                updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            )
+        )
+        await self.session.flush()
+        return result.rowcount > 0
+
     async def delete_by_id(self, doc_id: str, user_id: str) -> bool:
         """删除文档索引记录"""
         doc = await self.get_by_id(doc_id, user_id)

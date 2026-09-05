@@ -287,12 +287,17 @@ async def save_uploaded_file(
                 "duplicate": False,
             }
 
-        # INDEXING/PENDING_INDEX：被并发 worker 抢占，正在处理中（响应与 DB 一致）
+        # 其它落库状态（pending_index / indexing / deleting 等）：如实返回实际状态，
+        # 不把"失去发布权"包装成任何形式的成功（S04）
+        if sync_status in (DocumentIndexStatus.PENDING_INDEX, DocumentIndexStatus.INDEXING):
+            message = "文件已保存，索引处理中"
+        else:
+            message = f"文件已保存，当前状态：{sync_status.value}"
         return {
             "document_id": doc.id,
             "filename": filename,
-            "status": DocumentIndexStatus.PENDING_INDEX.value,
-            "message": "文件已保存，索引处理中",
+            "status": sync_status.value,
+            "message": message,
             "duplicate": False,
         }
 
@@ -310,7 +315,8 @@ async def _sync_index(document_id: str, user_id: str) -> DocumentIndexStatus:
     """
     同步索引（当 Celery 不可用时的降级方案）。
 
-    返回最终落库状态（indexed / index_failed），不再用"没有抛异常"当作成功。
+    返回数据库最终真实状态：indexed / index_failed / deleting / pending_index 等。
+    条件发布被拒（删除获胜）时如实返回当前状态，绝不伪报 indexed（S04）。
     创建独立的数据库会话，避免与调用者的会话状态冲突。
     """
     from app.db.db_config import AsyncSessionLocal
@@ -340,9 +346,13 @@ async def _sync_index(document_id: str, user_id: str) -> DocumentIndexStatus:
                 doc.file_path, md5=doc.md5, user_id=user_id
             )
             if not documents:
-                await repo.mark_index_failed_if_indexing(
+                if not await repo.mark_index_failed_if_indexing(
                     document_id, "文档加载为空"
-                )
+                ):
+                    # 失去执行权：返回数据库当前真实状态（S04）
+                    current = await repo.get_status(document_id, user_id)
+                    await session.commit()
+                    return current or DocumentIndexStatus.INDEX_FAILED
                 await session.commit()
                 return DocumentIndexStatus.INDEX_FAILED
 
@@ -356,9 +366,12 @@ async def _sync_index(document_id: str, user_id: str) -> DocumentIndexStatus:
             # 切片
             split_docs = store.split_documents_sync(documents)
             if not split_docs:
-                await repo.mark_index_failed_if_indexing(
+                if not await repo.mark_index_failed_if_indexing(
                     document_id, "文档切片为空"
-                )
+                ):
+                    current = await repo.get_status(document_id, user_id)
+                    await session.commit()
+                    return current or DocumentIndexStatus.INDEX_FAILED
                 await session.commit()
                 return DocumentIndexStatus.INDEX_FAILED
 
@@ -376,6 +389,9 @@ async def _sync_index(document_id: str, user_id: str) -> DocumentIndexStatus:
                 logger.warning(
                     f"【文档索引】同步索引完成但文档已被删除/deleting，不发布: id={document_id}"
                 )
+                current = await repo.get_status(document_id, user_id)
+                await session.commit()
+                return current or DocumentIndexStatus.INDEX_FAILED
             await session.commit()
 
             logger.info(f"【文档索引】同步索引完成: id={document_id}, chunks={len(split_docs)}")
@@ -383,14 +399,21 @@ async def _sync_index(document_id: str, user_id: str) -> DocumentIndexStatus:
 
         except Exception as e:
             logger.error(f"【文档索引】同步索引失败: id={document_id}, error={e}")
+            written = False
             try:
-                await repo.mark_index_failed_if_indexing(
+                written = await repo.mark_index_failed_if_indexing(
                     document_id, str(e)[:500]
                 )
                 await session.commit()
             except Exception:
-                pass
-            raise
+                await session.rollback()
+            if written:
+                raise
+            # 失去执行权（deleting/已删除）：状态归删除方所有，
+            # 返回数据库当前真实状态，不伪装成 index_failed 也不抛异常（S04）
+            current = await repo.get_status(document_id, user_id)
+            await session.commit()
+            return current or DocumentIndexStatus.INDEX_FAILED
 
 
 async def reindex_document(document_id: str, user_id: str) -> dict:
@@ -421,12 +444,17 @@ async def reindex_document(document_id: str, user_id: str) -> dict:
         if not os.path.exists(doc.file_path):
             return {"success": False, "message": "文件已丢失，无法重新索引"}
 
-        # 更新状态为 pending_index（无论 embedding 是否可用）
-        await repo.update_status(document_id, DocumentIndexStatus.PENDING_INDEX)
+        # 条件重置 pending_index（S02 TOCTOU：读取时是 failed/pending，
+        # 更新前可能已被置为 deleting/indexing —— 以条件更新行数为准）
+        reset_ok = await repo.reset_to_pending_if_retryable(document_id)
+        if not reset_ok:
+            await session.commit()
+            logger.warning(f"【文档索引】人工重试重置被拒（状态已变化）: id={document_id}")
+            return {"success": False, "message": "文档状态已变化（可能正在删除或已被删除），请刷新后重试"}
         await repo.increment_retry(document_id)
         await session.commit()
 
-        # 提交 Celery 任务
+        # 提交成功之后才投递 Celery 任务；broker 失败由 Beat 补偿发现
         from app.tasks.index_task import index_document_task
         try:
             index_document_task.delay(document_id, user_id)

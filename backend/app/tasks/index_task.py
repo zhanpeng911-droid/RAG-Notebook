@@ -56,7 +56,6 @@ async def _index_document_async(task, document_id: str, user_id: str):
     """
     from app.db.db_config import AsyncSessionLocal
     from app.repositories.document_index_repository import DocumentIndexRepository
-    from app.models.document_index import DocumentIndexStatus
 
     async with AsyncSessionLocal() as session:
         repo = DocumentIndexRepository(session)
@@ -67,23 +66,20 @@ async def _index_document_async(task, document_id: str, user_id: str):
             logger.warning(f"【后台索引】文档不存在（可能已被删除），跳过: id={document_id}")
             return
 
-        # 检查文件是否存在
+        # 先取得执行权（仅 pending_index 可进入）：迟到/重复任务在 claim 前
+        # 一律不写终态，避免把 deleting / 其它 worker 的 indexing 覆盖掉（S02）
+        if not await repo.claim_for_indexing(document_id):
+            logger.info(f"【后台索引】未抢占到索引权（可能已在执行或删除中），跳过: id={document_id}")
+            return
+        await session.commit()
+
+        # 检查文件是否存在（此时必然处于 indexing，条件失败写回由本 worker 持有）
         if not os.path.exists(doc.file_path):
             error_msg = f"文件已丢失: {doc.file_path}"
             logger.error(f"【后台索引】{error_msg}, id={document_id}")
-            await repo.update_status(
-                document_id,
-                DocumentIndexStatus.INDEX_FAILED,
-                error_message=error_msg
-            )
+            await repo.mark_index_failed_if_indexing(document_id, error_msg)
             await session.commit()
             return
-
-        # 更新状态为 indexing（原子抢占：仅 pending_index 可进入；重复投递安全退出）
-        if not await repo.claim_for_indexing(document_id):
-            logger.info(f"【后台索引】未抢占到索引权（可能已在执行），跳过: id={document_id}")
-            return
-        await session.commit()
 
         try:
             # 加载文档并切片
@@ -149,26 +145,42 @@ async def _index_document_async(task, document_id: str, user_id: str):
             error_msg = _sanitize_error_message(str(e))
             logger.error(f"【后台索引】文档索引失败: id={document_id}, error={error_msg}")
 
+            # 条件失败写回：仅仍处于 indexing 时置 index_failed（不覆盖 deleting/删除）。
+            # 返回 False = 已失去执行权（deleting/已删除）→ 不得改写状态、不得重试（S02）
+            failed_written = False
             try:
-                # 条件失败写回：仅仍处于 indexing 时置 index_failed（不覆盖 deleting/删除）
-                await repo.mark_index_failed_if_indexing(
+                failed_written = await repo.mark_index_failed_if_indexing(
                     document_id, error_msg[:500]
                 )
-                await repo.increment_retry(document_id)
+                if failed_written:
+                    await repo.increment_retry(document_id)
                 await session.commit()
             except Exception as commit_err:
+                await session.rollback()
                 logger.error(f"【后台索引】写入失败状态也失败: {commit_err}")
+                return  # 提交未确认成功，不投递重试
 
-            # 重试（如果还有次数）：先提交可领取状态（pending_index），
-            # 使 Celery retry 能再次 claim；否则失败状态永远无法被再次领取（F09）
+            if not failed_written:
+                logger.warning(
+                    f"【后台索引】失败写回被拒（已删除/deleting，失去执行权），退出不重试: id={document_id}"
+                )
+                return
+
+            # 重试（如果还有次数）：条件重置回 pending_index（仅 index_failed 可重置）。
+            # 重置与提交都成功之后才投递 Celery 重试，否则由数据库补偿发现（S02）
             if task.request.retries < task.max_retries:
                 try:
-                    await repo.update_status(
-                        document_id, DocumentIndexStatus.PENDING_INDEX
-                    )
+                    if not await repo.reset_to_pending_if_failed(document_id):
+                        logger.warning(
+                            f"【后台索引】重试前重置被拒（状态已变化），不投递重试: id={document_id}"
+                        )
+                        await session.commit()
+                        return
                     await session.commit()
                 except Exception as reset_err:
+                    await session.rollback()
                     logger.error(f"【后台索引】重试前重置为 pending 失败: {reset_err}")
+                    return
                 raise task.retry(exc=e)
 
 
@@ -212,7 +224,6 @@ async def _batch_index_pending_async(limit: int):
     """
     from app.db.db_config import AsyncSessionLocal
     from app.repositories.document_index_repository import DocumentIndexRepository
-    from app.models.document_index import DocumentIndexStatus
 
     async with AsyncSessionLocal() as session:
         repo = DocumentIndexRepository(session)
@@ -222,7 +233,7 @@ async def _batch_index_pending_async(limit: int):
 
         # 获取可重试的失败文档（retry_count < 3）
         from sqlalchemy import select, and_
-        from app.models.document_index import DocumentIndex
+        from app.models.document_index import DocumentIndex, DocumentIndexStatus
         result = await session.execute(
             select(DocumentIndex).where(
                 and_(
@@ -233,21 +244,31 @@ async def _batch_index_pending_async(limit: int):
         )
         failed_docs = list(result.scalars().all())
 
-        all_docs = pending_docs + failed_docs
-        if not all_docs:
+        if not pending_docs and not failed_docs:
             logger.info("【批量索引】没有待索引的文档")
             return
 
-        logger.info(f"【批量索引】找到 {len(pending_docs)} 个待索引 + {len(failed_docs)} 个可重试文档")
-
-        for doc in all_docs:
-            try:
-                # 重置状态为 pending_index
-                if doc.status == DocumentIndexStatus.INDEX_FAILED:
-                    await repo.update_status(doc.id, DocumentIndexStatus.PENDING_INDEX)
-                index_document_task.delay(doc.id, doc.user_id)
-                logger.info(f"【批量索引】已提交索引任务: id={doc.id}, filename={doc.original_filename}")
-            except Exception as e:
-                logger.error(f"【批量索引】提交任务失败: id={doc.id}, error={e}")
-
+        # 条件重置失败文档（仅 index_failed 可重置；读取后被删除/deleting 抢占的跳过），
+        # 全部提交成功之后才允许投递（S02：不能先投递后提交）
+        eligible = {doc.id: doc.user_id for doc in pending_docs}
+        for doc in failed_docs:
+            if await repo.reset_to_pending_if_failed(doc.id):
+                eligible[doc.id] = doc.user_id
+            else:
+                logger.warning(
+                    f"【批量索引】失败文档重置被拒（状态已变化，跳过）: id={doc.id}"
+                )
         await session.commit()
+
+        logger.info(
+            f"【批量索引】待索引 {len(pending_docs)} 个 + 可重试 {len(failed_docs)} 个，"
+            f"实际投递 {len(eligible)} 个"
+        )
+
+        # 提交成功后统一投递；broker 失败的文档仍留在 pending_index，
+        # 由下一轮 Beat 补偿发现（数据库是唯一事实来源）
+        for doc_id, doc_user_id in eligible.items():
+            try:
+                index_document_task.delay(doc_id, doc_user_id)
+            except Exception as e:
+                logger.error(f"【批量索引】提交任务失败: id={doc_id}, error={e}")
