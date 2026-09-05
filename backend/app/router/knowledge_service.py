@@ -3,7 +3,7 @@ import base64
 import time
 import os
 import tempfile
-from typing import List, AsyncGenerator
+from typing import List, AsyncGenerator, TYPE_CHECKING
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 
@@ -11,7 +11,6 @@ from fastapi import HTTPException, UploadFile
 
 from app.core.logger_handler import logger
 from app.core.exceptions import KnowledgeException
-from app.rag.vector_store import VectorStoreService
 from app.rag.task_queue import TaskQueue
 from app.rag.sse_models import SliceResult
 from app.utils.file_handler import get_file_md5_hex_sync
@@ -22,6 +21,9 @@ from app.services.knowledge_file_validator import (
 )
 from app.services import knowledge_sse_events as sse
 from app.services.knowledge_record_service import KnowledgeRecordService
+
+if TYPE_CHECKING:
+    from app.rag.vector_store import VectorStoreService
 
 
 @dataclass
@@ -100,6 +102,7 @@ def _sync_slice_file(file_content: bytes, filename: str, file_index: int, user_i
             # 在加载文档之前计算 md5，因为多模态PDF加载器需要 md5 来确定图片的存储路径。
             # 如果后移（等切片完再算），多模态加载器就无法将图片保存到正确的位置。
             md5_hex = get_file_md5_hex_sync(temp_file_path)
+            from app.rag.vector_store import VectorStoreService
             store = VectorStoreService()
             documents = store.get_file_document_sync(temp_file_path, md5=md5_hex, user_id=user_id)
             if not documents:
@@ -170,6 +173,7 @@ class KnowledgeService:
         异常:
             KnowledgeException: 文件超过 20MB 或类型不支持时抛出。
         """
+        from app.rag.vector_store import VectorStoreService
         store = VectorStoreService()
 
         size_error = validate_single_file_size(file)
@@ -185,8 +189,106 @@ class KnowledgeService:
         if type_error:
             raise KnowledgeException(code=400, message=type_error)
 
-        await store.get_document(files=[file], user_id=user_id, space_id=space_id)
+        # 评审 #6：v1 上传统一纳入 generation 体系——
+        # 内容校验通过后才登记 document_index 行并分配执行代次，
+        # 切片携带代次元数据，读取侧可见性过滤与旧代次回收对 v1/v2 一致生效
+        generation, md5_hex = await self._allocate_v1_generation(file, user_id, space_id)
+
+        try:
+            await store.get_document(
+                files=[file], user_id=user_id, space_id=space_id, generation=generation
+            )
+        except Exception:
+            # 写入失败：登记行条件标记失败，保留可重试依据（不留 indexed 幽灵行）
+            await self._fail_v1_generation(file, user_id, generation)
+            raise
+        await self._publish_v1_generation(store, user_id, md5_hex, generation)
         return filename
+
+    @staticmethod
+    async def _allocate_v1_generation(file, user_id: str, space_id: str = ""):
+        """为 v1 上传分配执行代次：按内容 md5 get-or-create document_index 行。
+
+        行状态置为 INDEXING、generation 递增；向量写入成功后由
+        _publish_v1_generation 条件发布（active_generation 推进）。
+        返回 (generation, md5_hex)。
+        """
+        import hashlib
+        from app.db.db_config import AsyncSessionLocal
+        from app.repositories.document_index_repository import DocumentIndexRepository
+        from app.models.document_index import DocumentIndexStatus
+
+        content = await file.read()
+        await file.seek(0)
+        md5_hex = hashlib.md5(content).hexdigest()
+
+        async with AsyncSessionLocal() as session:
+            repo = DocumentIndexRepository(session)
+            row = await repo.get_by_md5(md5_hex, user_id)
+            if row is None:
+                row = await repo.create(
+                    user_id=user_id,
+                    filename=f"kb_{md5_hex}",
+                    original_filename=getattr(file, "filename", "") or md5_hex,
+                    file_path="",
+                    md5=md5_hex,
+                    space_id=space_id or None,
+                    status=DocumentIndexStatus.UPLOADED,
+                )
+            generation = (row.generation or 0) + 1
+            row.generation = generation
+            row.status = DocumentIndexStatus.INDEXING
+            await session.commit()
+            return generation, md5_hex
+
+    @staticmethod
+    async def _publish_v1_generation(store, user_id: str, md5_hex: str, generation: int) -> None:
+        """条件发布 v1 代次：行仍处于 INDEXING 且代次匹配时推进 active_generation。"""
+        import asyncio as _aio
+        from app.db.db_config import AsyncSessionLocal
+        from app.repositories.document_index_repository import DocumentIndexRepository
+
+        try:
+            ids = await _aio.to_thread(
+                store.vectors_store.get,
+                where={"$and": [{"user_id": user_id}, {"md5": md5_hex}]},
+                include=[],
+            )
+            chunk_count = len(ids.get("ids", [])) if isinstance(ids, dict) else 0
+        except Exception:
+            chunk_count = 0
+
+        async with AsyncSessionLocal() as session:
+            repo = DocumentIndexRepository(session)
+            row = await repo.get_by_md5(md5_hex, user_id)
+            if row is None:
+                return
+            if not await repo.publish_indexed(row.id, chunk_count=chunk_count, generation=generation):
+                from app.core.logger_handler import logger
+                logger.warning(f"【知识库】v1 代次发布被拒（状态/代次已变化）: md5={md5_hex}, gen={generation}")
+                return
+            await session.commit()
+
+    @staticmethod
+    async def _fail_v1_generation(file, user_id: str, generation: int) -> None:
+        """v1 写入失败：条件写回失败状态（仅仍处于 INDEXING 的本代次行）。"""
+        import hashlib
+        from app.db.db_config import AsyncSessionLocal
+        from app.repositories.document_index_repository import DocumentIndexRepository
+
+        content = await file.read()
+        await file.seek(0)
+        md5_hex = hashlib.md5(content).hexdigest()
+
+        async with AsyncSessionLocal() as session:
+            repo = DocumentIndexRepository(session)
+            row = await repo.get_by_md5(md5_hex, user_id)
+            if row is None:
+                return
+            await repo.mark_index_failed_if_indexing(
+                row.id, "v1 上传向量写入失败", generation=generation
+            )
+            await session.commit()
 
     async def handle_add_vector_multiple(self, files: List[UploadFile], user_id: str, space_id: str = "") -> List[str]:
         """
@@ -377,7 +479,7 @@ class KnowledgeService:
         return queue, executor, futures
 
     async def _process_slice_results(
-            self, queue: TaskQueue, valid_count: int, store: VectorStoreService,
+            self, queue: TaskQueue, valid_count: int, store: "VectorStoreService",
             state: ProcessingState, user_id: str
     ) -> AsyncGenerator[str, None]:
         """
@@ -489,6 +591,7 @@ class KnowledgeService:
         queue, executor, futures = self._start_slicing(valid_files, user_id, space_id)
 
         # 串行消费 + 写入（客户端断开时由 finally 兜底清理）
+        from app.rag.vector_store import VectorStoreService
         store = VectorStoreService()
         try:
             async for event in self._process_slice_results(queue, len(valid_files), store, state, user_id):
@@ -551,6 +654,7 @@ class KnowledgeService:
         返回:
             list: 文档信息字典列表，每个字典包含文件名、切片数等信息。
         """
+        from app.rag.vector_store import VectorStoreService
         store = VectorStoreService()
         documents = await store.get_user_documents(user_id, space_id=space_id)
         logger.info(f"【知识库】获取用户 {user_id} 的知识库文档，共 {len(documents)} 个文件")
@@ -570,6 +674,7 @@ class KnowledgeService:
         异常:
             HTTPException: 文档不存在时抛出 404 错误。
         """
+        from app.rag.vector_store import VectorStoreService
         store = VectorStoreService()
         document = await store.get_document_detail(user_id, filename)
         if not document:
@@ -589,6 +694,7 @@ class KnowledgeService:
             dict: 包含文件名、切片总数和切片内容列表的字典。
                  切片为空时返回空列表。
         """
+        from app.rag.vector_store import VectorStoreService
         store = VectorStoreService()
         chunks = await store.get_document_chunks(user_id, filename)
         if chunks['total_chunks'] == 0:

@@ -475,12 +475,15 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
                 return {"status": current or DocumentIndexStatus.INDEX_FAILED,
                         "retryable": False, "error": None}
 
-            # 发布成功：推进读取侧可见代次后回收旧代次产物（尽力而为）
+            # P0：先提交发布指针，提交成功后才允许回收旧代次向量。
+            # 提交失败时旧向量原样保留，文档仍指向旧代次、保持可检索；
+            # 新代次向量的清理由下方尽力而为 + Beat 周期回收任务兜底（幂等）
+            await session.commit()
+
             await _cleanup_superseded_generations(
                 store, user_id, doc.md5, document_id,
                 active_generation=generation, legacy_chunk_count=legacy_chunk_count,
             )
-            await session.commit()
 
             logger.info(
                 f"【文档索引】同步索引完成: id={document_id}, chunks={len(split_docs)}, "

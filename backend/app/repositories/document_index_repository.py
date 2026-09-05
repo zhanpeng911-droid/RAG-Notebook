@@ -277,6 +277,16 @@ class DocumentIndexRepository:
         await self.session.flush()
         return True
 
+    async def get_recent_indexed_documents(self, limit: int = 50) -> List[DocumentIndex]:
+        """获取最近的 indexed 文档（供周期性旧代次向量回收扫描，R2D）。"""
+        result = await self.session.execute(
+            select(DocumentIndex)
+            .where(DocumentIndex.status == DocumentIndexStatus.INDEXED)
+            .order_by(DocumentIndex.updated_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
     async def get_pending_documents(self, limit: int = 10) -> List[DocumentIndex]:
         """获取待索引的文档（用于批量索引）"""
         result = await self.session.execute(

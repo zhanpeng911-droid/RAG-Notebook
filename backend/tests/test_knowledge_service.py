@@ -7,10 +7,48 @@ import io
 from types import SimpleNamespace as NS
 
 import pytest
+import pytest_asyncio
 from fastapi import UploadFile
 from fastapi import HTTPException as FE
 
 from app.core.exceptions import KnowledgeException
+
+@pytest_asyncio.fixture(autouse=True)
+async def _isolated_db(monkeypatch):
+    """v1 上传登记行使用内存库，禁止触达真实 MySQL（R0 隔离规则）。
+
+    同时强制注入默认假 VectorStoreService：全量运行时其它测试可能把
+    sys.modules 里的 mock 模块顶成真实模块（导入顺序依赖），延迟导入会
+    解析到真实类并触发真 Chroma 初始化。此处按调用时解析结果打补丁，
+    使本文件与顺序无关；个别测试可再覆盖为自己可控的假实现。
+    """
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+    from app.models.chat_history import Base as _Base
+    from types import SimpleNamespace as _NS
+    import app.db.db_config as _db_cfg
+
+    async def _noop_get_document(**kwargs):
+        return None
+
+    default_fake = _NS(get_document=_noop_get_document)
+    monkeypatch.setattr(_vs_module(), "VectorStoreService",
+                        lambda: default_fake)
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(_Base.metadata.create_all)
+    factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(_db_cfg, "AsyncSessionLocal", factory)
+    yield
+    await engine.dispose()
+
+
+def _vs_module():
+    """conftest 预注册的 app.rag.vector_store mock 模块（确定性 patch 目标）。"""
+    import importlib
+    return importlib.import_module("app.rag.vector_store")
+
+
 
 USER_A = "u-aaaa-0000-0000-000000000001"
 
@@ -43,7 +81,7 @@ async def test_single_ok(monkeypatch):
     from app.router.knowledge_service import KnowledgeService
     svc = KnowledgeService()
     fake_store = NS(get_document=async_fake(None))
-    monkeypatch.setattr("app.router.knowledge_service.VectorStoreService",
+    monkeypatch.setattr(_vs_module(), "VectorStoreService",
                         lambda: fake_store)
     out = await svc.handle_add_vector_single(_upl(), USER_A)
     assert out == "t.txt"
@@ -165,7 +203,7 @@ def test_sync_slice_file_success(monkeypatch):
         get_file_document_sync=lambda path, md5, user_id: docs,
         split_documents_sync=lambda d: [NS(page_content="x", metadata={})],
     )
-    monkeypatch.setattr(ks, "VectorStoreService", lambda: fake_store)
+    monkeypatch.setattr(_vs_module(), "VectorStoreService", lambda: fake_store)
     monkeypatch.setattr(ks, "get_file_md5_hex_sync", lambda p: "abc123")
 
     puts = []
@@ -185,7 +223,7 @@ def test_sync_slice_file_empty_docs(monkeypatch):
 
     fake_store = NS(get_file_document_sync=lambda p, md5, user_id: [],
                     split_documents_sync=lambda d: [])
-    monkeypatch.setattr(ks, "VectorStoreService", lambda: fake_store)
+    monkeypatch.setattr(_vs_module(), "VectorStoreService", lambda: fake_store)
     monkeypatch.setattr(ks, "get_file_md5_hex_sync", lambda p: "abc")
 
     puts = []
@@ -205,7 +243,7 @@ def test_sync_slice_file_exception(monkeypatch):
 
     def _boom():
         raise RuntimeError("boom")
-    monkeypatch.setattr(ks, "VectorStoreService", _boom)
+    monkeypatch.setattr(_vs_module(), "VectorStoreService", _boom)
     monkeypatch.setattr(ks, "get_file_md5_hex_sync", lambda p: "abc")
 
     puts = []
@@ -383,7 +421,7 @@ async def test_handle_get_user_knowledge(monkeypatch):
     from app.router.knowledge_service import KnowledgeService
     svc = KnowledgeService()
     fake_store = NS(get_user_documents=async_fake([{"filename": "x.txt"}]))
-    monkeypatch.setattr("app.router.knowledge_service.VectorStoreService",
+    monkeypatch.setattr(_vs_module(), "VectorStoreService",
                         lambda: fake_store)
     out = await svc.handle_get_user_knowledge(USER_A)
     assert out[0]["filename"] == "x.txt"
@@ -394,7 +432,7 @@ async def test_handle_get_document_detail_missing(monkeypatch):
     from app.router.knowledge_service import KnowledgeService
     svc = KnowledgeService()
     fake_store = NS(get_document_detail=async_fake(None))
-    monkeypatch.setattr("app.router.knowledge_service.VectorStoreService",
+    monkeypatch.setattr(_vs_module(), "VectorStoreService",
                         lambda: fake_store)
     with pytest.raises(FE) as ei:
         await svc.handle_get_document_detail(USER_A, "x.txt")
@@ -406,7 +444,7 @@ async def test_handle_document_chunks_empty(monkeypatch):
     from app.router.knowledge_service import KnowledgeService
     svc = KnowledgeService()
     fake_store = NS(get_document_chunks=async_fake({"total_chunks": 0, "chunks": []}))
-    monkeypatch.setattr("app.router.knowledge_service.VectorStoreService",
+    monkeypatch.setattr(_vs_module(), "VectorStoreService",
                         lambda: fake_store)
     out = await svc.handle_get_document_chunks(USER_A, "x.txt")
     assert out["total_chunks"] == 0
@@ -418,7 +456,7 @@ async def test_handle_document_chunks_nonempty(monkeypatch):
     svc = KnowledgeService()
     fake_store = NS(get_document_chunks=async_fake(
         {"total_chunks": 2, "chunks": [{"content": "a"}, {"content": "b"}]}))
-    monkeypatch.setattr("app.router.knowledge_service.VectorStoreService",
+    monkeypatch.setattr(_vs_module(), "VectorStoreService",
                         lambda: fake_store)
     out = await svc.handle_get_document_chunks(USER_A, "x.txt")
     assert out["total_chunks"] == 2

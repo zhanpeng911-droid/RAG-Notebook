@@ -204,8 +204,9 @@ async def test_retrieval_filter_drops_deleted_and_stale_generation(env, monkeypa
     from app.rag.retrieval_service import RetrievalService
 
     async def _active(user_id, md5s):
-        # M-OK 已发布代次 2；M-DEL 已删除；M-OLD 已重建（可见代次 3）
-        return {"M-OK": 2, "M-OLD": 3}
+        # M-OK 已发布代次 2；M-DEL 已删除；M-OLD 已重建（可见代次 3）；
+        # M-LEGACY 纯存量（active=0）
+        return {"M-OK": 2, "M-OLD": 3, "M-LEGACY": 0}
 
     monkeypatch.setattr(dis, "get_active_document_md5s", _active)
 
@@ -214,11 +215,14 @@ async def test_retrieval_filter_drops_deleted_and_stale_generation(env, monkeypa
         NS(page_content="ok", metadata={"md5": "M-OK", "generation": 2}),
         NS(page_content="deleted", metadata={"md5": "M-DEL", "generation": 1}),
         NS(page_content="stale", metadata={"md5": "M-OLD", "generation": 2}),
-        NS(page_content="legacy", metadata={"md5": "M-OK"}),  # 存量无代次：放行
+        # gen-less 残留：文档已发布过代次 → 丢弃（评审 #6 规则收紧）
+        NS(page_content="legacy-residue", metadata={"md5": "M-OK"}),
+        # gen-less 且 active=0：纯存量文档 → 放行
+        NS(page_content="legacy-pure", metadata={"md5": "M-LEGACY"}),
         NS(page_content="no-md5", metadata={}),               # 无标识：丢弃
     ]
     kept = await svc._filter_active_documents(docs)
-    assert [d.page_content for d in kept] == ["ok", "legacy"]
+    assert [d.page_content for d in kept] == ["ok", "legacy-pure"]
 
 
 @pytest.mark.asyncio

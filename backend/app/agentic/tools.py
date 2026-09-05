@@ -96,9 +96,12 @@ async def get_document_chunk(
     """
     获取命中文档块上下文（仅限本次命中内容）。
 
-    :param chunk_id: 切片 ID
-    :param user_id: 用户 ID（强制）
-    :return: 切片详情
+    读取侧验证（评审 P1）：
+    1. 切片 metadata.user_id 必须等于当前用户（缺失标识一律拒绝，fail-closed）；
+    2. 切片所属文档（按 md5）必须仍处于 indexed；
+    3. 切片携带 generation 时必须等于文档的 active_generation —— 旧代次/
+       已删除文档的切片不得通过 chunk_id 直读复活。
+    任一验证失败返回 None，不返回内容。
     """
     logger.info(f"【工具】get_document_chunk: chunk_id={chunk_id}, user_id={user_id}")
 
@@ -117,10 +120,52 @@ async def get_document_chunk(
         if not result['ids']:
             return None
 
+        metadata = result['metadatas'][0] if result['metadatas'] else {}
+        content = result['documents'][0] if result['documents'] else ""
+
+        # 所有权验证：metadata 必须携带 user_id 且与请求者一致
+        chunk_owner = metadata.get("user_id")
+        if not chunk_owner or chunk_owner != user_id:
+            logger.warning(
+                f"【工具】get_document_chunk 拒绝：切片不存在或不属于当前用户 "
+                f"chunk_id={chunk_id}, user_id={user_id}"
+            )
+            return None
+
+        # 可见性验证：所属文档必须仍为 indexed，且代次与已发布代次一致
+        md5 = metadata.get("md5", "")
+        if not md5:
+            logger.warning(f"【工具】get_document_chunk 拒绝：切片缺少 md5 标识 chunk_id={chunk_id}")
+            return None
+
+        from app.services.document_index_service import get_active_document_md5s
+        active = await get_active_document_md5s(user_id, [md5])
+        active_generation = active.get(md5)
+        if active_generation is None:
+            logger.warning(
+                f"【工具】get_document_chunk 拒绝：所属文档不可见（已删除/未发布）"
+                f"chunk_id={chunk_id}, md5={md5}"
+            )
+            return None
+        chunk_generation = metadata.get("generation")
+        if chunk_generation is not None:
+            if int(chunk_generation) != int(active_generation):
+                logger.warning(
+                    f"【工具】get_document_chunk 拒绝：旧代次切片 chunk_id={chunk_id}, "
+                    f"chunk_gen={chunk_generation}, active_gen={active_generation}"
+                )
+                return None
+        elif active_generation > 0:
+            # 文档已发布过代次但切片无代次元数据：代次化之前的残留，拒绝
+            logger.warning(
+                f"【工具】get_document_chunk 拒绝：无代次残留切片 chunk_id={chunk_id}"
+            )
+            return None
+
         return {
             "chunk_id": chunk_id,
-            "content": result['documents'][0] if result['documents'] else "",
-            "metadata": result['metadatas'][0] if result['metadatas'] else {},
+            "content": content,
+            "metadata": metadata,
         }
     except Exception as e:
         logger.error(f"【工具】获取切片失败: {e}")

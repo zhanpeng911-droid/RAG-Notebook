@@ -244,3 +244,43 @@ Redis 不可用"的环境下按设计 fail-closed 503 —— 属预期行为而�
 仍未完成（登记）：R2D 的 manifest/清理记录持久化、R3 数据库统一重试预算与生产后台索引开关、
 R5 composable 级竞态 fixture、R6B SSE 协议闭环、R7 Nginx 上传边界、R8 隔离 Compose 与
 真实 Chroma 并发/Actions 产物。
+
+---
+
+## 第二次验收返修记录（2026-09-05，评审结论"暂不通过/Request changes"后）
+
+评审在 `893a7a5` 实测：前端 71 / Django 21 / functional 14 / Ruff / mypy / lint/build 通过；
+后端全量 1041 passed、2 failed、9 skipped（导入顺序/测试隔离）。提出 9 项阻断问题。
+本批全部修复，提交见下表。
+
+| # | 级别 | 问题 | 修复 | 回归 |
+|---|---|---|---|---|
+| 1 | P0 | 发布未提交 MySQL 先删旧向量，提交失败导致文档不可检索 | `execute_index_document` 改为先提交发布指针、提交成功后才内联清理；新增 `cleanup_superseded_vectors_task`（Beat 每 10 分钟，幂等元数据过滤清理）持久兜底 | `test_publish_commit_precedes_vector_cleanup`（清理时另一连接已见 indexed）+ `test_publish_commit_failure_keeps_old_generation`（提交失败零删除、旧代次保留） |
+| 2 | P1 | Agent 未验证 space_id 成员资格 | `_ensure_space_member` 提升为 `app/core/permission.ensure_space_member` 共享实现；Agent 流式/非流式入口在调 provider 前校验（404/403） | `test_agent_rejects_non_member_space` / `test_agent_stream_rejects_non_member_space` / `test_query_non_member_space_404` |
+| 3 | P1 | `get_document_chunk` 按 ID 直读无所有权/代次验证 | 强制 metadata.user_id 匹配（缺失即拒）+ 文档 indexed + 代次等于 active_generation（gen-less 残留在已发布代次文档上一并拒绝），任一失败返回 None | `test_get_document_chunk_ownership_and_generation`（本人/他人/旧代次/缺标识）+ `test_get_document_chunk_rejects_other_user` |
+| 4 | P1 | 剩余预算 0–3 秒跳过 judge 时 `quality_scores` 未初始化 → 正常答案变 generation_failed | 进入条件分支前初始化 `quality_scores = None`（阶段 E 引入的回归） | `test_generate_with_tiny_remaining_budget_returns_answer` |
+| 5 | P1 | 反馈提交绕过会话删除屏障 | 反馈端点在同一事务内对父会话行 `SELECT ... FOR UPDATE` 并复核 tombstone，删除获胜即 404 | `test_feedback_blocked_when_session_deleted_behind_race`（模拟 get_run 与插入之间删除获胜）+ `test_feedback_ok_for_active_session` |
+| 6 | P1 | v1 上传/部分读取入口绕过 generation；v1 文档对 Agent 检索不可见 | v1 上传（single/multiple/stream 共用）内容校验通过后登记 document_index 行并分配代次（`kb:{user}:{md5}:g{n}:{i}` 稳定 ID，修复 v1 重传随机 ID 的 N→M 重复），条件发布推进 active_generation；读取侧 gen-less 规则收紧：已发布代次文档的 gen-less 残留不可见（纯存量 active=0 文档放行） | `test_v1_upload_registers_generation` / `test_v1_upload_failure_marks_failed` / `test_retrieval_filter_genless_rule` |
+| 7 | P1 | 008 downgrade 直接丢代次依据 | 存在 active_generation > 0 时 RuntimeError 拒绝（照 006/007 模式），注明停写维护窗口要求 | `test_008_downgrade_guard_source` |
+| 8 | P1 | 连接池修复漏掉 `sync_note_vector_task` | 该任务 `asyncio.run` 入口补 `dispose_stale_connections()`（评审 #8） | `test_sync_note_vector_disposes_stale_connections` + 本地 worker 实测 |
+| 9 | P1 | R6C 仅按 created_at 清扫、limit 未生效 | 迁移 009 加 `agent_runs.heartbeat_at`；流式执行每 10s 心跳；回收改为 lease=COALESCE(heartbeat_at, created_at)，limit 经子查询实际生效（最旧优先） | `test_heartbeat_lease_and_limit`（心跳新鲜不回收/limit=1 只收最旧）+ `test_touch_run_heartbeat` |
+
+测试隔离根因修复（对应评审"后端全量 2 failed"）：`knowledge_service` 的模块级
+`from app.rag.vector_store import VectorStoreService` 在首次导入时固化绑定，
+全量运行顺序下可能绕过测试桩解析到真实类；改为方法内延迟导入 + `_isolated_db`
+autouse fixture 注入默认假实现与内存库，文件级与顺序无关。
+
+### 验证结果（本批候选提交）
+
+- 后端全量（CI 范围）**连续 2 次 1060 passed / 9 skipped**；
+- functional **14/14**；mypy 门禁 **0 错误**；ruff 通过；
+- 迁移 009 已在真实 MySQL 应用（`alembic current` = 009 head）；
+- 前端/Django 本批无改动（此前 71/21 通过维持）。
+
+### 结论（按评审建议口径）
+
+> S01–S07 和第三批的部分实现及单元测试通过；整体验收不通过，Request changes。
+> 本批已修复 9 项阻断项；**真实集成证据仍缺**：当前 `main` 领先 `origin/main`
+> 多个提交、无对应远程 CI 记录，真实 MySQL 双连接竞态、真实 Chroma 迟到写/清理、
+> 隔离 Compose 与当前 SHA 的 Actions 产物待推送后取得。按原约束不自动推送，
+> 推送与 CI 复验需项目所有者执行。

@@ -59,3 +59,28 @@ def require_role(allowed_roles: list[str]):
         return role
 
     return _check_role
+
+
+async def ensure_space_member(space_id, user_id: str, db: AsyncSession):
+    """校验非空 space_id 存在且用户是该空间所属组织的成员（评审 P1 #2）。
+
+    从 knowledge_router._ensure_space_member 提升为共享实现；Agent 两个
+    查询入口在调用 provider 前必须执行——成员被移出组织后，不得再用旧
+    space_id 检索原空间内容。space_id 为空返回 None（个人知识库）。
+    返回 Space 行；不存在 404，非成员 403。
+    """
+    from app.models.space import Space
+
+    if not space_id:
+        return None
+
+    result = await db.execute(select(Space).where(Space.id == space_id))
+    space = result.scalar_one_or_none()
+    if not space:
+        raise HTTPException(status_code=404, detail="空间不存在")
+
+    role = await _get_user_role(db, str(space.org_id), user_id)  # type: ignore[arg-type]
+    if role is None:
+        raise HTTPException(status_code=403, detail="您不是该空间所属组织的成员")
+
+    return space

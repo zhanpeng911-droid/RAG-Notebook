@@ -99,14 +99,38 @@ async def test_get_document_chunk_missing_returns_none(fake_vector_module):
 
 
 @pytest.mark.asyncio
-async def test_get_document_chunk_hit_returns_payload(fake_vector_module):
+async def test_get_document_chunk_hit_returns_payload(fake_vector_module, monkeypatch):
     fake_vector_module["result"] = {
-        "ids": ["c1"], "documents": ["内容"], "metadatas": [{"user_id": "u1"}],
+        "ids": ["c1"], "documents": ["内容"],
+        "metadatas": [{"user_id": "u1", "md5": "M1", "generation": 1}],
     }
+    # 读取侧守卫（评审 P1 #3）：stub 可见性为"已发布代次 1"
+    import app.services.document_index_service as dis
+
+    async def _active(user_id, md5s):
+        return {"M1": 1}
+
+    monkeypatch.setattr(dis, "get_active_document_md5s", _active)
     out = await get_document_chunk("c1", "u1")
     assert out["chunk_id"] == "c1"
     assert out["content"] == "内容"
     assert out["metadata"]["user_id"] == "u1"
+
+
+@pytest.mark.asyncio
+async def test_get_document_chunk_rejects_other_user(fake_vector_module, monkeypatch):
+    """他人切片 / 旧代次 / 缺标识一律拒绝（隔离探针回归）。"""
+    fake_vector_module["result"] = {
+        "ids": ["c2"], "documents": ["别人的"],
+        "metadatas": [{"user_id": "u2", "md5": "M1", "generation": 1}],
+    }
+    import app.services.document_index_service as dis
+
+    async def _active(user_id, md5s):
+        return {"M1": 1}
+
+    monkeypatch.setattr(dis, "get_active_document_md5s", _active)
+    assert await get_document_chunk("c2", "u1") is None
 
 
 # ---------- list_user_documents 关键词过滤 ----------

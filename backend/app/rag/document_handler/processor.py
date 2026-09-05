@@ -113,13 +113,16 @@ class DocumentProcessor:
         """同步分割文档（用于多线程场景）"""
         return self.spliter.split_documents_sync(documents)
 
-    async def get_document(self, files: list = None, user_id: str = None, progress_callback=None, space_id: str = ""):
+    async def get_document(self, files: list = None, user_id: str = None, progress_callback=None, space_id: str = "", generation: int = None):
         """
         处理文档并将其转为向量存入向量数据库
         :param files: 上传的文件列表，如果为None则从数据文件夹读取
         :param user_id: 用户ID，用于标记文档的所有者
         :param progress_callback: 进度回调函数，用于实时返回处理进度
         :param space_id: 空间ID，用于归属哪个空间
+        :param generation: 执行代次（R2B）。提供时切片元数据携带 generation
+            并使用稳定 chunk ID（按 md5 分代），使 v1 上传统一纳入代次发布
+            与读取侧可见性体系；None 保持旧行为（随机 ID、无代次元数据）
         """
         file_paths = []
         file_names = {}
@@ -235,7 +238,20 @@ class DocumentProcessor:
                     doc.metadata['md5'] = md5_hex
                     doc.metadata['space_id'] = space_id
 
-                await asyncio.to_thread(self.vectors_store.add_documents, document)
+                if generation is not None:
+                    # R2B：代次元数据 + 稳定 chunk ID（按 md5 分代），
+                    # 重传覆盖同代次切片而非追加随机 ID（修复 N→M 重复）
+                    for doc in document:
+                        doc.metadata['generation'] = int(generation)
+                    stable_ids = [
+                        f"kb:{user_id}:{md5_hex}:g{int(generation)}:{i}"
+                        for i in range(len(document))
+                    ]
+                    await asyncio.to_thread(
+                        self.vectors_store.add_documents, document, ids=stable_ids
+                    )
+                else:
+                    await asyncio.to_thread(self.vectors_store.add_documents, document)
 
                 original_filename = file_names.get(file_path, filename) if files else filename
                 await self.md5_store.save_md5_hex(md5_hex, filename, original_filename, user_id)

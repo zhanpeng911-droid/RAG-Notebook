@@ -107,6 +107,57 @@ def _sanitize_error_message(msg: str) -> str:
 
 
 @celery_app.task(bind=True, max_retries=1, ignore_result=True)
+def cleanup_superseded_vectors_task(self, limit: int = 50):
+    """周期回收旧代次向量（R2D 持久清理，评审 P0 兜底）。
+
+    发布指针提交成功后若"尽力而为"的内联清理失败，旧代次向量会残留
+    （读取侧代次过滤保证其不可见，但不占空间）。本任务按 updated_at 倒序
+    扫描最近的 indexed 文档，幂等执行 generation < active_generation 的
+    元数据过滤清理；legacy（无 generation 元数据）残留仅在发布时刻已知
+    精确数量，仍以内联清理为准，扫描期不猜测。
+    """
+    _run_async(_cleanup_superseded_async(limit))
+
+
+async def _cleanup_superseded_async(limit: int) -> int:
+    from app.db.db_config import AsyncSessionLocal
+    from app.repositories.document_index_repository import DocumentIndexRepository
+    from app.services.document_index_service import _cleanup_superseded_generations
+
+    async with AsyncSessionLocal() as session:
+        repo = DocumentIndexRepository(session)
+        docs = await repo.get_recent_indexed_documents(limit=limit)
+
+    if not docs:
+        return 0
+
+    cleaned = 0
+    try:
+        from app.rag.vector_store import VectorStoreService
+        store = VectorStoreService()
+    except Exception as e:
+        logger.warning(f"【向量回收】VectorStoreService 初始化失败，本轮跳过: {e}")
+        return 0
+
+    for doc in docs:
+        if not doc.md5 or not doc.active_generation:
+            continue
+        try:
+            await _cleanup_superseded_generations(
+                store, doc.user_id, doc.md5, doc.id,
+                active_generation=doc.active_generation,
+                legacy_chunk_count=0,
+            )
+            cleaned += 1
+        except Exception as e:
+            logger.warning(f"【向量回收】清理失败（下轮重试）: id={doc.id}, error={e}")
+
+    if cleaned:
+        logger.info(f"【向量回收】本轮对 {cleaned}/{len(docs)} 个 indexed 文档执行了旧代次清理")
+    return cleaned
+
+
+@celery_app.task(bind=True, max_retries=1, ignore_result=True)
 def batch_index_pending_task(self, limit: int = 10):
     """
     批量索引待处理文档。

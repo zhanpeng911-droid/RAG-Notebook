@@ -61,6 +61,11 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.agent_maintenance_task.reclaim_stale_agent_runs_task",
         "schedule": 300.0,  # 每 5 分钟执行一次
     },
+    "cleanup-superseded-vectors-every-10-minutes": {
+        "task": "app.tasks.index_task.cleanup_superseded_vectors_task",
+        "schedule": 600.0,  # 每 10 分钟执行一次（旧代次向量兜底回收）
+        "args": (50,),
+    },
 }
 
 
@@ -120,7 +125,13 @@ def sync_note_vector_task(self, note_id: str, user_id: str):
         )
 
     try:
-        asyncio.run(_sync())
+        async def _entry():
+            # 每次任务新建事件循环，先丢弃池中旧循环的连接（评审 #8）
+            from app.db.db_config import dispose_stale_connections
+            await dispose_stale_connections()
+            await _sync()
+
+        asyncio.run(_entry())
         logger.info(f"Vector sync completed note_id={note_id}")
     except Exception as exc:
         logger.error(f"Vector sync failed note_id={note_id}: {exc}")

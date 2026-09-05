@@ -18,7 +18,6 @@ from app.core.success_response import success_response
 from app.core.exceptions import OrganizationNotFoundException, SpaceNotFoundException
 from app.core.permission import _get_user_role
 from app.core.audit import write_audit_log
-from app.rag.vector_store import VectorStoreService
 
 space_router = APIRouter(prefix="/space", tags=["space"])
 
@@ -87,6 +86,7 @@ async def _count_space_documents(db: AsyncSession, space_id: str) -> int:
     note_count = result.scalar() or 0
     async_doc_count = 0
     try:
+        from app.rag.vector_store import VectorStoreService
         store = VectorStoreService()
         docs = await store.get_user_documents(None, space_id=space_id)
         async_doc_count = len(docs)
@@ -381,6 +381,7 @@ async def list_space_documents(
 
     knowledge_docs = []
     try:
+        from app.rag.vector_store import VectorStoreService
         store = VectorStoreService()
         for item in await store.get_user_documents(None, space_id=space_id):
             knowledge_docs.append({

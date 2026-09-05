@@ -106,6 +106,7 @@ class AnswerGenerator:
             # LLM-as-judge 质量评分（非必要；预算不足时跳过，失败不影响主流程）。
             # S06：judge 等待上限 = min(剩余共同预算, 自身上限 15s)，
             # 不得在评分阶段越过总 deadline
+            quality_scores = None  # 先初始化：跳过评分分支不得触发 UnboundLocalError
             judge_budget = self._remaining_timeout(deadline, default=15.0)
             if judge_budget >= 3.0:
                 quality_scores = await self._judge_answer(

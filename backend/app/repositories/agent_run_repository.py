@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional, List
 
-from sqlalchemy import select, update, and_, or_
+from sqlalchemy import select, update, and_, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent_run import (
@@ -206,17 +206,36 @@ class AgentRunRepository:
         )
         return list(result.scalars().all())
 
-    async def reclaim_stale_runs(self, cutoff: datetime, limit: int = 100) -> int:
-        """回收过期运行（R6C）：将超过 cutoff 仍处于 started 的运行条件置为 timeout。
+    async def touch_run_heartbeat(self, run_id: str) -> None:
+        """更新运行心跳（R6C）：流式执行中定期调用，作为 lease 依据。"""
+        await self.session.execute(
+            update(AgentRun)
+            .where(AgentRun.id == run_id)
+            .where(AgentRun.status == AgentRunStatus.STARTED.value)
+            .values(heartbeat_at=datetime.now(timezone.utc).replace(tzinfo=None))
+        )
+        await self.session.flush()
 
-        正常运行生命周期只有数十秒（Guardrails.MAX_TOTAL_TIME=45s）；
-        进程崩溃/断电会留下永久 started 的孤儿运行。仅更新仍为 started 的行
-        （条件写），不触碰已有终态的运行；返回回收条数。
+    async def reclaim_stale_runs(self, cutoff: datetime, limit: int = 100) -> int:
+        """回收过期运行（R6C）：将超过 lease 仍处于 started 的运行条件置为 timeout。
+
+        lease 依据 = COALESCE(heartbeat_at, created_at)：流式执行中心跳定期
+        更新，进程崩溃后心跳停止，超过 cutoff 的孤儿运行被回收；
+        正常运行生命周期只有数十秒（Guardrails.MAX_TOTAL_TIME=45s）。
+        limit 参数实际生效（子查询限量，按创建时间最旧的先回收）；
+        仅更新仍为 started 的行，不触碰已有终态的运行。
         """
+        lease_expr = func.coalesce(AgentRun.heartbeat_at, AgentRun.created_at)
+        stale_ids = (
+            select(AgentRun.id)
+            .where(AgentRun.status == AgentRunStatus.STARTED.value)
+            .where(lease_expr < cutoff)
+            .order_by(AgentRun.created_at.asc())
+            .limit(limit)
+        )
         result = await self.session.execute(
             update(AgentRun)
-            .where(AgentRun.status == AgentRunStatus.STARTED.value)
-            .where(AgentRun.created_at < cutoff)
+            .where(AgentRun.id.in_(stale_ids))
             .values(
                 status=AgentRunStatus.TIMEOUT.value,
                 error_message="运行超时未更新，已被回收任务置为 timeout",

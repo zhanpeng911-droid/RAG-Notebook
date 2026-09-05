@@ -37,5 +37,23 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """回退安全（评审 P1 #6）：存在已发布代次时拒绝执行。
+
+    active_generation 是读取侧区分多代次向量的唯一依据；直接删列后旧
+    应用无法判定哪个代次对外可见，回滚期间残留的旧代次切片可能重新
+    可见。必须先在受控维护窗口停写，确认已发布文档的旧代次向量清理
+    完成（active_generation 归零或数据已归档）后再降级。
+    MySQL DDL 隐式提交，检查与 DDL 之间的窗口须停写执行（同 006/007）。
+    """
+    conn = op.get_bind()
+    published = conn.execute(
+        sa.text("SELECT COUNT(*) FROM document_index WHERE active_generation > 0")
+    ).scalar()
+    if published:
+        raise RuntimeError(
+            f"document_index 存在 {published} 条已发布代次（active_generation > 0），"
+            "拒绝降级：删除代次列会丢失读取侧可见性判定依据，残留旧代次切片"
+            "可能在回滚后重新可见。请先停写并完成旧代次向量清理后重试。"
+        )
     op.drop_column("document_index", "active_generation")
     op.drop_column("document_index", "generation")

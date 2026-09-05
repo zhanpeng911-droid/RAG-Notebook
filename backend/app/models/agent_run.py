@@ -54,6 +54,7 @@ class AgentRun(Base):
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
     completed_at = Column(DateTime(timezone=True), nullable=True, comment="完成时间")
+    heartbeat_at = Column(DateTime(timezone=True), nullable=True, comment="最近心跳时间（执行中定期更新；过期回收依据 R6C）")
 
 
 class AgentStep(Base):

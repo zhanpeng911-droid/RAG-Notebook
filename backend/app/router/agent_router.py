@@ -104,6 +104,11 @@ async def agent_query_stream(
     # 且对父会话行加锁，与删除方（clear_session）持同一把锁。
     session_id = request.session_id or str(uuid.uuid4())
     async with AsyncSessionLocal() as setup_db:
+        # 评审 P1 #2：调用 provider 前校验空间成员资格——
+        # 被移出组织的用户不得用旧 space_id 检索原空间内容
+        if request.space_id:
+            from app.core.permission import ensure_space_member
+            await ensure_space_member(request.space_id, user_id, setup_db)
         if request.session_id:
             existing = (await setup_db.execute(
                 select(ChatSession)
@@ -133,6 +138,7 @@ async def agent_query_stream(
     async def event_generator():
         import json
         start_time = time.time()
+        last_heartbeat = 0.0
 
         try:
             async for event in run_agent_stream(
@@ -194,6 +200,17 @@ async def agent_query_stream(
                         )
                         await event_db.commit()
 
+                # R6C 心跳：执行中定期更新 heartbeat_at（节流 10s），
+                # 使回收任务能区分"仍在执行"与"进程崩溃后遗留"
+                if time.time() - last_heartbeat > 10:
+                    try:
+                        async with AsyncSessionLocal() as hb_db:
+                            await AgentRunRepository(hb_db).touch_run_heartbeat(run.id)
+                            await hb_db.commit()
+                        last_heartbeat = time.time()
+                    except Exception as hb_err:
+                        logger.warning(f"【Agent】心跳更新失败: {hb_err}")
+
                 # 添加 run_id 和 session_id 到事件
                 event["run_id"] = run.id
                 event["session_id"] = session_id
@@ -242,6 +259,9 @@ async def agent_query(
     _ensure_session_service_ready()
 
     session_id = request.session_id or str(uuid.uuid4())
+    if request.space_id:
+        from app.core.permission import ensure_space_member
+        await ensure_space_member(request.space_id, user_id, db)
     if request.session_id:
         # S05：tombstone 会话拒绝 + 父会话行锁（与删除方同一屏障）
         existing = (await db.execute(
@@ -404,7 +424,7 @@ async def submit_feedback(
 
     repo = AgentRunRepository(db)
 
-    # 验证运行记录存在
+    # 验证运行记录存在（get_run 已排除关联已删除会话的运行）
     run = await repo.get_run(request.run_id, user_id)
     if not run:
         raise HTTPException(status_code=404, detail="运行记录不存在")
@@ -412,6 +432,21 @@ async def submit_feedback(
     # 验证评分范围
     if request.rating < 1 or request.rating > 5:
         raise HTTPException(status_code=400, detail="评分必须在 1-5 之间")
+
+    # 评审 P1 #5：反馈写入与父会话删除采用同一屏障——
+    # 同一事务内锁定父会话行并复核 tombstone，防止与 clear_session 交错
+    # 留下"run 已删、反馈仍存在"的孤儿记录
+    if run.session_id:
+        from sqlalchemy import select
+        from app.models.chat_history import ChatSession
+        sess = (await db.execute(
+            select(ChatSession)
+            .where(ChatSession.id == run.session_id)
+            .with_for_update()
+        )).scalar_one_or_none()
+        if sess is None or sess.deleted_at is not None:
+            await db.rollback()
+            raise HTTPException(status_code=404, detail="运行记录不存在或所属会话已删除")
 
     feedback = await repo.add_feedback(
         run_id=request.run_id,

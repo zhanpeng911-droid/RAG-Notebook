@@ -312,8 +312,13 @@ class RetrievalService:
             if active_generation is None:
                 continue  # 文档已删除/删除中/非 indexed：不可见
             gen_meta = d.metadata.get("generation")
-            if gen_meta is not None and int(gen_meta) != int(active_generation):
-                continue  # 旧代次切片：不可见
+            if gen_meta is not None:
+                if int(gen_meta) != int(active_generation):
+                    continue  # 旧代次切片：不可见
+            elif active_generation > 0:
+                # 文档已发布过代次但切片无代次元数据：代次化之前的残留，不可见
+                # （纯存量文档 active_generation == 0 时放行）
+                continue
             kept.append(d)
         return kept
 

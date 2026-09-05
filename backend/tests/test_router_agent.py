@@ -213,16 +213,30 @@ async def test_query_error_marks_run_failed(client, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_query_new_session_created(client, monkeypatch):
+    """新会话由服务端创建；不带 space_id（未种空间数据时成员校验会 404，属预期）。"""
     async def fake_run(**kwargs):
         return {"answer": "a", "citations": [], "error": None}
     monkeypatch.setattr("app.agentic.graph.run_agent", fake_run)
 
     r = await client.post("/api/v1/chat/agent/query",
                           headers=_auth(USER_A),
-                          json={"query": "q", "space_id": "sp-1"})
+                          json={"query": "q"})
     assert r.status_code == 200
     session_id = r.json()["data"]["session_id"]
     assert session_id
+
+
+@pytest.mark.asyncio
+async def test_query_non_member_space_404(client, monkeypatch):
+    """空间不存在时入口校验返回 404（评审 #2 成员资格守卫）。"""
+    async def fake_run(**kwargs):
+        raise AssertionError("provider 不应被调用")
+    monkeypatch.setattr("app.agentic.graph.run_agent", fake_run)
+
+    r = await client.post("/api/v1/chat/agent/query",
+                          headers=_auth(USER_A),
+                          json={"query": "q", "space_id": "sp-missing"})
+    assert r.status_code == 404
 
 
 # ---------- 流式查询正路径 ----------

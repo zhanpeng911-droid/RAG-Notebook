@@ -23,7 +23,6 @@ from typing import List, Optional
 from fastapi.routing import APIRouter
 from fastapi import UploadFile, File, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse, FileResponse
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.router.knowledge_service import KnowledgeService, get_knowledge_service
@@ -32,7 +31,6 @@ from app.schemas.models import MD5Record, MD5ListResponse, KnowledgeListResponse
 from app.utils.auth_utils import get_current_user_id
 from app.db.db_config import get_db
 from app.models.space import Space
-from app.core.permission import _get_user_role
 from app.utils.image_extractor import get_image_storage_dir
 from app.core.success_response import success_response
 from app.core.rate_limit import rate_limit
@@ -43,20 +41,9 @@ knowledge_router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 
 
 async def _ensure_space_member(space_id: Optional[str], user_id: str, db: AsyncSession) -> Optional[Space]:
-    """Validate that a non-empty space_id exists and belongs to an org the user can access."""
-    if not space_id:
-        return None
-
-    result = await db.execute(select(Space).where(Space.id == space_id))
-    space = result.scalar_one_or_none()
-    if not space:
-        raise HTTPException(status_code=404, detail="空间不存在")
-
-    role = await _get_user_role(db, space.org_id, user_id)
-    if role is None:
-        raise HTTPException(status_code=403, detail="您不是该空间所属组织的成员")
-
-    return space
+    """共享空间成员校验的委托（实现位于 app.core.permission.ensure_space_member）。"""
+    from app.core.permission import ensure_space_member
+    return await ensure_space_member(space_id, user_id, db)
 
 
 @knowledge_router.post("/add/single")
