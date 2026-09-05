@@ -230,3 +230,17 @@ Redis 不可用"的环境下按设计 fail-closed 503 —— 属预期行为而�
    锁序、真实 Chroma 在途写与删除交错、当前 SHA 的 Actions fullstack 运行记录。
 7. **R0/R9**：conftest 全局 sys.modules mock 按 fixture 作用域加固；当前候选 SHA 的
    CI 与真实集成产物采集。
+
+### 第三批：统一执行服务与代次发布（2026-09-05，`6a66f0c`）
+
+| 原任务 | 内容 | 验证 |
+|---|---|---|
+| R2B 执行身份 | 迁移 008（generation/active_generation）；claim 原子递增代次；发布/失败写回要求代次匹配 | 真实 MySQL 升级 005→008、122 行旧数据保留；test_index_generation.py 代次生命周期用例 |
+| R2C 统一执行服务 | `execute_index_document` 唯一实现；HTTP 同步与 Celery worker 共用；worker 退化为重试封装 | `test_worker_and_sync_share_executor`；源码断言 worker 不再自带发布实现 |
+| R2D 清理与读取侧 | 发布后双路径回收旧代次向量（元数据过滤 + 旧版 v1 固定 ID）；检索向量路径 `_filter_active_documents`（indexed + 代次匹配，fail-closed） | 过滤器用例：已删/旧代次/无标识/存量无代次分别处理；查询失败全丢弃 |
+| R3 有界上传 | 声明大小预检 + 1MB 分块读取 + 20MB 硬上限 | 声明超限零读取拒绝、流超限中止、正常分块成功三用例 |
+| R6C 运行回收 | `reclaim_stale_runs` 条件写（仅 started 且超时）+ Beat 每 5 分钟 | 回收/不误收新鲜运行/不触碰终态 + Celery 注册用例 |
+
+仍未完成（登记）：R2D 的 manifest/清理记录持久化、R3 数据库统一重试预算与生产后台索引开关、
+R5 composable 级竞态 fixture、R6B SSE 协议闭环、R7 Nginx 上传边界、R8 隔离 Compose 与
+真实 Chroma 并发/Actions 产物。
