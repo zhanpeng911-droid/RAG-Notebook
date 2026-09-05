@@ -35,6 +35,18 @@ def _redact_llm_config(config: Optional[dict]) -> Optional[dict]:
     return redacted
 
 
+def _ensure_session_service_ready() -> None:
+    """S01：会话服务未就绪时拒绝进入处理（503）。
+
+    不得在调用 provider 之后才发现会话管理器缺失（历史写入会静默丢失）。
+    """
+    from app.services import get_session_manager
+    try:
+        get_session_manager()
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="会话服务未就绪，请稍后重试")
+
+
 agent_router = APIRouter(prefix="/chat/agent", tags=["agent"])
 
 
@@ -78,6 +90,8 @@ async def agent_query_stream(
     from app.repositories.agent_run_repository import AgentRunRepository
     from app.db.db_config import AsyncSessionLocal
     from app.models.chat_history import ChatSession
+
+    _ensure_session_service_ready()
 
     logger.info(
         f"【Agent流式】user_id={user_id}, query={request.query[:50]}, "
@@ -206,6 +220,8 @@ async def agent_query(
     from app.agentic.graph import run_agent
     from app.repositories.agent_run_repository import AgentRunRepository
     from app.models.chat_history import ChatSession
+
+    _ensure_session_service_ready()
 
     session_id = request.session_id or str(uuid.uuid4())
     if request.session_id:

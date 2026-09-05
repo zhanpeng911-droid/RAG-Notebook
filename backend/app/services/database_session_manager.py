@@ -236,3 +236,18 @@ async def init_database_session_manager():
     global database_session_manager
     database_session_manager = await DatabaseSessionManager.create()
     return database_session_manager
+
+
+def get_session_manager() -> "DatabaseSessionManager":
+    """获取当前会话管理器实例（S01）。
+
+    每次读取定义模块的当前全局变量，不做导入期快照；未初始化时明确失败，
+    绝不返回 None —— 否则消费方会在 provider 调用之后才以
+    AttributeError 的形式吞掉历史写入。
+    """
+    if database_session_manager is None:
+        raise RuntimeError(
+            "会话管理器尚未初始化（init_database_session_manager 未执行），"
+            "拒绝进行会话读写"
+        )
+    return database_session_manager

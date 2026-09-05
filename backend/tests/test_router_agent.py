@@ -49,6 +49,13 @@ async def client(monkeypatch):
 
     # agent_query_stream 内部 from app.db.db_config import AsyncSessionLocal
     monkeypatch.setattr(db_config, "AsyncSessionLocal", factory)
+    # 会话管理器方法经模块级导入使用 AsyncSessionLocal，同样指向内存库
+    import app.services.database_session_manager as dsm
+    monkeypatch.setattr(dsm, "AsyncSessionLocal", factory)
+
+    # S01：执行真实会话管理器初始化（路由前置就绪检查 + 历史落库依赖它）
+    from app.services.database_session_manager import init_database_session_manager
+    await init_database_session_manager()
 
     app = FastAPI()
     app.include_router(agent_router, prefix="/api/v1")
@@ -177,6 +184,18 @@ async def test_query_success_creates_run(client, monkeypatch):
                           headers=_auth(USER_A))
     assert r2.status_code == 200
     assert r2.json()["data"]["run"]["status"] == "completed"
+
+    # S01 接线验收：问答历史真实落入数据库（两条 ChatMessage）
+    from sqlalchemy import select
+    from app.models.chat_history import ChatMessage
+    session_id = data["session_id"]
+    async with client._factory() as db:
+        msgs = (await db.execute(
+            select(ChatMessage).where(ChatMessage.session_id == session_id)
+            .order_by(ChatMessage.id))).scalars().all()
+    assert [(m.role, m.content) for m in msgs] == [
+        ("user", "今天的笔记"), ("assistant", "完整答案"),
+    ]
 
 
 @pytest.mark.asyncio
