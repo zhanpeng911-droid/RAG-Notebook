@@ -103,10 +103,16 @@ class AnswerGenerator:
 
             answer = response.content
 
-            # LLM-as-judge 质量评分（非必要；预算不足时跳过，失败不影响主流程）
-            quality_scores = None
-            if self._remaining_timeout(deadline, default=15.0) >= 3.0:
-                quality_scores = await self._judge_answer(query, context, answer)
+            # LLM-as-judge 质量评分（非必要；预算不足时跳过，失败不影响主流程）。
+            # S06：judge 等待上限 = min(剩余共同预算, 自身上限 15s)，
+            # 不得在评分阶段越过总 deadline
+            judge_budget = self._remaining_timeout(deadline, default=15.0)
+            if judge_budget >= 3.0:
+                quality_scores = await self._judge_answer(
+                    query, context, answer, timeout=min(judge_budget, 15.0)
+                )
+            else:
+                logger.info("【答案生成】剩余预算不足，跳过评分")
 
             return {
                 "answer": answer,
@@ -127,11 +133,14 @@ class AnswerGenerator:
         except Exception as e:
             import traceback
             logger.error(f"【答案生成】失败: {e}\n{traceback.format_exc()}")
+            # S06：provider 异常 = 业务失败，展示文案与成功标志分离，
+            # 不再返回"道歉答案 + timed_out=false"伪装成功
             return {
-                "answer": "抱歉，生成答案时出现错误。",
+                "answer": None,
                 "citations": [],
                 "quality_scores": None,
                 "timed_out": False,
+                "error": "generation_failed",
             }
 
     def _remaining_timeout(self, deadline: Optional[float], default: float) -> float:
@@ -145,6 +154,7 @@ class AnswerGenerator:
         query: str,
         context: str,
         answer: str,
+        timeout: float = 15.0,
     ) -> Optional[Dict[str, Any]]:
         """
         用 LLM-as-judge 对生成的答案进行质量评分。
@@ -155,6 +165,8 @@ class AnswerGenerator:
         :param query: 用户原始查询
         :param context: 喂给生成器的证据上下文
         :param answer: 生成的答案
+        :param timeout: 等待上限（秒）；调用方传入 min(剩余共同预算, 15)，
+                        评分不得越过总 deadline（S06）
         :return: {"faithfulness_score": float, "completeness_score": float,
                   "relevance_score": float, "overall_score": float,
                   "issues": list, "suggestions": list}，失败返回 None
@@ -166,7 +178,7 @@ class AnswerGenerator:
             from langchain_core.messages import HumanMessage
             response = await asyncio.wait_for(
                 chat_model.ainvoke([HumanMessage(content=prompt)]),
-                timeout=15.0,
+                timeout=timeout,
             )
 
             raw = response.content.strip()

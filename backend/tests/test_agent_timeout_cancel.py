@@ -208,3 +208,141 @@ async def test_repository_timout_sets_completed_at(run_db):
         run = await repo.get_run(run_id, "u1")
         assert run.status == AgentRunStatus.TIMEOUT.value
         assert run.completed_at is not None
+
+
+# ---------- S06：检索下限放大预算 ----------
+
+@pytest.mark.asyncio
+async def test_retrieval_tiny_budget_times_out_within_budget(monkeypatch):
+    """剩余预算 30ms 时检索等待不得超过剩余预算（不得被 0.5s 下限放大）。"""
+    from app.agentic.planner import planner
+
+    graph = graph_mod.AgentGraph(user_id="user-a")
+    monkeypatch.setattr(graph_mod.Guardrails, "MAX_TOTAL_TIME", 0.03)
+
+    class FakePlan:
+        query_type = NS(value="simple")
+        scope = "all"
+        top_k = 3
+        use_hyde = False
+        use_rerank = False
+
+    monkeypatch.setattr(planner, "create_plan", lambda *a, **k: FakePlan())
+
+    class HangRetrieval:
+        async def retrieve(self, **k):
+            await asyncio.sleep(10)
+            return []
+
+    monkeypatch.setattr(graph_mod, "RetrievalService", lambda **k: HangRetrieval())
+
+    start = time.monotonic()
+    events = [e async for e in graph.run("测试")]
+    elapsed = time.monotonic() - start
+
+    types = [e["type"] for e in events]
+    assert "timeout" in types
+    # 预算 0.03s + 调度容差；修复前会被 max(remaining, 0.5) 放大到 ~0.5s+
+    assert elapsed < 0.35, f"检索耗时 {elapsed:.3f}s，超出 30ms 预算+容差"
+
+
+# ---------- S06：judge 受共同 deadline 约束 ----------
+
+@pytest.mark.asyncio
+async def test_judge_cannot_exceed_deadline():
+    """主生成很快、judge 挂起：总耗时不得超过 deadline（+容差），评分跳过。"""
+    import time as _time
+    from app.agentic.answer_generator import AnswerGenerator
+
+    class FastGenHangJudge:
+        def __init__(self):
+            self.calls = 0
+
+        async def ainvoke(self, msgs):
+            self.calls += 1
+            if self.calls == 1:
+                return type("Resp", (), {"content": "答案"})()
+            await asyncio.sleep(30)  # judge 挂起，远超剩余预算
+            raise AssertionError("不应执行到这里")
+
+    gen = AnswerGenerator()
+    gen._chat_model = FastGenHangJudge()
+
+    start = _time.monotonic()
+    out = await gen.generate(
+        query="q",
+        evidences=[NS(source_type="note", source_id="k1", chunk_id="c1",
+                      title="t", content="c", score=0.9, metadata={})],
+        deadline=_time.monotonic() + 3.1,
+    )
+    elapsed = _time.monotonic() - start
+
+    assert out["answer"] == "答案"       # 主答案按时完成
+    assert out["timed_out"] is False
+    assert out["quality_scores"] is None  # 评分跳过而非拖过总时限
+    assert elapsed < 4.5, f"judge 超出共同 deadline：{elapsed:.2f}s（修复前 ~15s）"
+    assert gen._chat_model.calls == 2
+
+
+# ---------- S06：provider 异常 → 结构化失败，不得伪装成功 ----------
+
+@pytest.mark.asyncio
+async def test_generator_provider_error_structured_failure():
+    """provider 抛错：返回结构化 failed（answer=None + error），不是道歉文案成功。"""
+    from app.agentic.answer_generator import AnswerGenerator
+
+    class BoomModel:
+        async def ainvoke(self, msgs):
+            raise RuntimeError("provider down")
+
+    gen = AnswerGenerator()
+    gen._chat_model = BoomModel()
+    out = await gen.generate("q", [NS(source_type="note", source_id="k1", chunk_id="c1",
+                                     title="t", content="c", score=0.9, metadata={})])
+    assert out["answer"] is None
+    assert out.get("error"), "provider 异常必须带结构化 error"
+    assert out["timed_out"] is False or out.get("error") == "generation_failed"
+
+
+@pytest.mark.asyncio
+async def test_graph_provider_error_yields_error_not_completed(monkeypatch):
+    """生成器报 error：graph 发 error 事件，不得发 completed。"""
+    from app.agentic.planner import planner
+    from app.agentic.retrieval_grader import evidence_grader
+
+    graph = graph_mod.AgentGraph(user_id="user-a")
+
+    class FakePlan:
+        query_type = NS(value="simple")
+        scope = "all"
+        top_k = 3
+        use_hyde = False
+        use_rerank = False
+
+    monkeypatch.setattr(planner, "create_plan", lambda *a, **k: FakePlan())
+
+    class FakeEv:
+        source_type = "note"
+        title = "t"
+        content = "c"
+
+    class FakeRetrieval:
+        async def retrieve(self, **k):
+            return [FakeEv()]
+
+    monkeypatch.setattr(graph_mod, "RetrievalService", lambda **k: FakeRetrieval())
+    monkeypatch.setattr(evidence_grader, "grade", lambda *a, **k: NS(
+        confidence=0.9, confidence_level="high", is_sufficient=True,
+        relevant_evidences=[FakeEv()], reason="ok"))
+
+    class BoomGenerator:
+        async def generate(self, **k):
+            return {"answer": None, "citations": [], "quality_scores": None,
+                    "timed_out": False, "error": "generation_failed"}
+
+    monkeypatch.setattr(graph_mod, "create_answer_generator", lambda **k: BoomGenerator())
+
+    events = [e async for e in graph.run("测试查询")]
+    types = [e["type"] for e in events]
+    assert "error" in types
+    assert "completed" not in types

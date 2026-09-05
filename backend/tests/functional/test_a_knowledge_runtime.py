@@ -127,9 +127,9 @@ async def test_rate_limit_returns_429(monkeypatch, factory):
 
     async def _connect():
         return fake
-    # rate_limit 模块在 import 时已绑定 connect_redis/is_redis_available，须 patch 其命名空间
+    # rate_limit 模块经 connect_redis 获取客户端（is_redis_available 已在
+    # ded57b8 移除，此处不再 patch 已不存在的名字）
     monkeypatch.setattr(rl, "connect_redis", _connect)
-    monkeypatch.setattr(rl, "is_redis_available", lambda: True)
 
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
                                base_url="http://test")

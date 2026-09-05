@@ -87,11 +87,14 @@ async def test_generate_timeout_returns_structured_failure():
 
 
 @pytest.mark.asyncio
-async def test_generate_exception_returns_error_message():
+async def test_generate_exception_returns_structured_failure():
+    """provider 异常：结构化失败（answer=None + error），不再返回道歉文案冒充成功（S06）"""
     gen = AnswerGenerator()
     gen._chat_model = StubModel(errors=[RuntimeError("模型挂了")])
     out = await gen.generate("q", [_ev()])
-    assert "出现错误" in out["answer"]
+    assert out["answer"] is None
+    assert out["error"] == "generation_failed"
+    assert out["timed_out"] is False
 
 
 # ---------- judge 容错 ----------

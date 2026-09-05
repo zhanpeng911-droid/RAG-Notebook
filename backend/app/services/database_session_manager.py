@@ -192,9 +192,10 @@ class DatabaseSessionManager:
             await db.execute(delete(ChatMessage).where(ChatMessage.session_id == session_id))
             # tombstone：保留最小行（清空标题/元数据），置删除时间，
             # 防止迟到写入把会话重建出来（F03）；重复删除时重置同样字段
-            session.deleted_at = datetime.now(timezone.utc).replace(tzinfo=None)
-            session.title = None
-            session.metadata_ = None
+            # （SQLAlchemy 经典声明式 Column 赋值，mypy 误报为 Column[...]）
+            session.deleted_at = datetime.now(timezone.utc).replace(tzinfo=None)  # type: ignore[assignment]
+            session.title = None  # type: ignore[assignment]
+            session.metadata_ = None  # type: ignore[assignment]
             await db.commit()
             logger.info(
                 f"【数据库会话管理】会话 {session_id} 及其关联数据已清除（tombstone），属于用户: {user_id}"

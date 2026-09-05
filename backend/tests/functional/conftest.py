@@ -52,6 +52,11 @@ async def factory(monkeypatch):
 
     # agent_router / runtime_config 直接使用 db_config.AsyncSessionLocal
     monkeypatch.setattr(dbc, "AsyncSessionLocal", fac)
+    # 会话管理器方法经模块级导入使用 AsyncSessionLocal；S01 就绪门槛要求
+    # 管理器已初始化
+    import app.services.database_session_manager as dsm
+    monkeypatch.setattr(dsm, "AsyncSessionLocal", fac)
+    await dsm.init_database_session_manager()
     yield fac
     await engine.dispose()
 

@@ -127,8 +127,9 @@ class AgentGraph:
                     llm_config=self.llm_config,
                 )
 
-                # 检索必须受整体预算约束（F06）：检索/embedding 永久挂起时
-                # 不能拖过总时限；用剩余预算作检索超时
+                # 检索必须受整体预算约束（F06/S06）：检索/embedding 永久挂起时
+                # 不能拖过总时限；等待上限就是剩余预算，不设下限 ——
+                # max(remaining, 0.5) 会把不足 0.5s 的剩余预算放大（S06）
                 remaining = self.guardrails.remaining_budget()
                 if remaining <= 0:
                     logger.warning("【Agent】检索前预算已耗尽")
@@ -145,7 +146,7 @@ class AgentGraph:
                             use_hyde=plan.use_hyde,
                             use_rerank=plan.use_rerank,
                         ),
-                        timeout=max(remaining, 0.5),
+                        timeout=remaining,
                     )
                 except asyncio.TimeoutError:
                     logger.warning("【Agent】检索超时（整体预算约束）")
@@ -242,6 +243,14 @@ class AgentGraph:
                 logger.warning("【Agent】答案生成超时")
                 state.error = "生成超时"
                 yield self._create_event(AgentPhase.TIMEOUT, state=state, error="生成超时")
+                return
+
+            if result.get("error"):
+                # 生成失败（provider 异常等）：结构化 error，不计为 completed（S06）。
+                # 展示文案与业务成功标志分离：不发道歉文案冒充成功答案
+                logger.warning(f"【Agent】答案生成失败: {result.get('error')}")
+                state.error = str(result.get("error"))
+                yield self._create_event(AgentPhase.ERROR, state=state, error=state.error)
                 return
 
             state.answer = result["answer"]
