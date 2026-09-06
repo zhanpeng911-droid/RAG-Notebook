@@ -230,7 +230,8 @@ async def _process_cleanup_tasks_async(limit: int) -> int:
                 # K1：写入者未确定关闭（writing/unknown）→ 不得判 done。
                 # 查空只是观测（verified_empty_at 保留为观测字段）；
                 # 关闭证明来自执行清单。关闭 + 核验为空 → done。
-                if await repo.has_open_executions(task.document_id):
+                from app.services.document_index_service import _ExecutionRepository
+                if await _ExecutionRepository(session).has_open_executions(task.document_id):
                     raise RuntimeError("存在未关闭的写入执行（waiting_writer），暂缓完成")
                 if await repo.mark_done(task.id, task.claim_token):
                     done += 1

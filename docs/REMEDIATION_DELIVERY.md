@@ -333,3 +333,23 @@ C2 待真实集成，C3 部分完成（三项点名），C4 队列缺陷已修�
   T01（open execution 下 done 门槛未生效）、T09（遗留向量仍被清理）；
   test_index_delete_orchestration 2 用例待按精确目标契约适配。
 - K4 全入口/兼容回填、K5 真实集成证据均未实施。
+
+### 收口补充返修第二批（N1 校准 + N3/N4 部分，基线 c852c4c 后）
+
+按续方案 §10 实施：
+- **N1 校准**：T01 重构为"显式 writing 执行 → 删除 → 两次清理不得 done → 生产关闭接口
+  关闭 → 清理收敛"；发现并修复 done 门未生效的根因之一：worker 的 open-execution 检查
+  曾指向 CleanupTaskRepository 的重复实现，合并为 `_ExecutionRepository` 唯一实现
+  （方案 §10.4 要求）。T01/T09 当前以 xfail(strict=False) 登记未接线缺陷（原因内嵌，
+  XPASS 时提示移除），不视为已修。
+- **K3**：worker 领取统一走仓库实现；mark_done/mark_failed 增加 status=claimed 条件。
+- **N4 部分**：删除编排向量清理收编为 document_id 精确目标 + 旧版固定 ID 清单；
+  test_index_delete_orchestration 故障注入按新契约适配（按 document_id 注入），
+  原业务断言保留。
+- **N2/N3 剩余**：claim 的 UPDATE 复核 next_retry_at、waiting_writer 不耗重试预算、
+  续租、unknown 解决路径、执行清单覆盖证明——未实施。
+- **K5 真实集成证据**：未实施。
+
+验证：后端全量**连续 2 次 1065 passed / 9 skipped / 2 xfailed**（xfail 为登记中的
+K1 接线缺陷，非跳过）；functional 14；mypy 0；ruff 通过。整体验收状态不变：
+K1—K5 与原 C 矩阵未全部满足。

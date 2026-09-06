@@ -42,8 +42,10 @@ async def env(tmp_path, monkeypatch):
             raise RuntimeError("chroma down")
         if where and "$and" in where:
             for cond in where["$and"]:
-                if "md5" in cond and cond["md5"] in box["fail_md5"]:
-                    raise RuntimeError(f"chroma down for {cond['md5']}")
+                # K2：清理目标已切换为 document_id 元数据（切片精确身份），
+                # 故障注入按 document_id 触发，保留原失败语义
+                if "document_id" in cond and cond["document_id"] in box["fail_md5"]:
+                    raise RuntimeError(f"chroma down for {cond['document_id']}")
 
     class FakeVSCls:
         def __new__(cls):
@@ -56,6 +58,11 @@ async def env(tmp_path, monkeypatch):
 
     async def _save_md5(m, filename=None, original=None, u=None):
         store_impl.save_md5_hex_seen.append((m, filename))
+
+    async def _get_file_document(path, md5=None, user_id=None):
+        return [NS(page_content="默认正文", metadata={"source": path})]
+
+    store_impl.get_file_document = _get_file_document
 
     store_impl.save_md5_hex = _save_md5
 
@@ -123,15 +130,15 @@ async def test_delete_pending_doc_attempts_vector_cleanup(env):
     out = await dis.delete_index_record(doc_id, "u1")
     assert out["success"] is True
     assert env.box["delete_calls"], "pending 文档删除未尝试向量清理（S03）"
-    # 向量清理按 user_id + md5 定位
-    assert any(md5 in str(c) for c in env.box["delete_calls"])
+    # K2：清理按 user_id + document_id 精确定位（切片携带资源身份）
+    assert any(doc_id in str(c) for c in env.box["delete_calls"])
 
 
 @pytest.mark.asyncio
 async def test_delete_pending_vector_failure_keeps_record(env):
     """pending 文档向量清理失败：保留记录（deleting）可重试，不删 SQL。"""
     doc_id, md5 = await _seed_doc(env, status=DocumentIndexStatus.PENDING_INDEX)
-    env.box["fail_md5"].add(md5)
+    env.box["fail_md5"].add(doc_id)
     out = await dis.delete_index_record(doc_id, "u1")
     assert out["success"] is False
     assert await _row(env, doc_id) is not None
@@ -154,7 +161,7 @@ async def test_batch_delete_partial_failure_reports_per_item(env):
     """批删两文档、一个向量失败：逐项结果、计数正确，失败项保留 SQL。"""
     ok_id, ok_md5 = await _seed_doc(env, status=DocumentIndexStatus.INDEXED)
     bad_id, bad_md5 = await _seed_doc(env, status=DocumentIndexStatus.INDEXED)
-    env.box["fail_md5"].add(bad_md5)
+    env.box["fail_md5"].add(bad_id)
 
     res = await dis.clean_user_index_records("u1")
     assert res["deleted_count"] == 1, "只有确认清理完成的条目才能计入 deleted_count"
