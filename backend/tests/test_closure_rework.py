@@ -583,3 +583,66 @@ async def test_t12b_v1_publish_rejected_closes_execution_and_raises(env):
         e = (await s.execute(select(DocumentIndexExecution)
                              .where(DocumentIndexExecution.document_id == doc_id))).scalar_one()
         assert e.status == ExecutionStatus.CLOSED, "v1 发布被拒后执行必须关闭自身记录"
+
+
+# ---------- N3 返修 #2：主记录删除后写入异常仍收敛 ----------
+
+@pytest.mark.asyncio
+async def test_t15_record_deleted_before_write_failure_still_converges(env):
+    """领取 → 物理删除主记录 → 写入抛错 → 执行 unknown → 核验解决 → 清理收敛。"""
+    from app.router.knowledge_service import KnowledgeService
+    from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+    from app.models.cleanup_task import DocumentCleanupTask, CleanupTaskStatus
+    from app.services.document_index_service import _ExecutionRepository
+
+    doc_id, md5 = await _seed_doc(env)  # PENDING_INDEX
+    space_id = ""
+
+    # 领取（按已有行的 md5）→ 登记 writing 执行
+    svc = KnowledgeService()
+    generation, allocated_doc = await svc._allocate_v1_generation_by_md5(
+        md5, "t15.txt", "u1", space_id)
+    assert generation == 1 and allocated_doc == doc_id
+
+    # 物理删除主记录（模拟删除编排已提交）
+    async with env.factory() as s:
+        repo = DocumentIndexRepository(s)
+        assert await repo.delete_by_id(doc_id, "u1")
+        await s.commit()
+
+    # 写入抛错收尾：文档已不存在，执行仍必须标 unknown
+    await svc._fail_v1_generation(None, "u1", generation, document_id=doc_id)
+
+    async with env.factory() as s:
+        e = (await s.execute(select(DocumentIndexExecution)
+                             .where(DocumentIndexExecution.document_id == doc_id))).scalar_one()
+        assert e.status == ExecutionStatus.UNKNOWN, "主记录删除后执行不得遗留 writing"
+
+    # 删除编排的持久清理任务（此处手工等价构造）+ 写入者关闭（unknown 核验解决）
+    async with env.factory() as s:
+        s.add(DocumentCleanupTask(
+            id="t15-task", document_id=doc_id, user_id="u1", md5=md5,
+            generation=0, reason="document_deleted",
+            status=CleanupTaskStatus.PENDING))
+        await s.commit()
+
+    # 未解决 unknown：清理不得 done
+    await _run_cleanup_worker_once(env)
+    async with env.factory() as s:
+        task = (await s.execute(select(DocumentCleanupTask)
+                                .where(DocumentCleanupTask.id == "t15-task"))).scalar_one()
+        assert task.status != "done"
+
+    # 经核验解决 unknown → 清理收敛 done
+    execution_id = e.execution_id
+    async with env.factory() as s:
+        assert await _ExecutionRepository(s).resolve_unknown(
+            execution_id, "维护窗口核验：远端无残留写入")
+        await s.commit()
+    await _run_cleanup_worker_once(env)
+    await _run_cleanup_worker_once(env)
+
+    async with env.factory() as s:
+        task = (await s.execute(select(DocumentCleanupTask)
+                                .where(DocumentCleanupTask.id == "t15-task"))).scalar_one()
+        assert task.status == "done", "unknown 解决后清理应收敛"

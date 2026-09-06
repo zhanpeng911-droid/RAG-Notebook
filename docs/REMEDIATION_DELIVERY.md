@@ -417,3 +417,15 @@ N5 真实集成证据（需推送 CI）。
 验证：后端全量连续 2 次 **1073 passed / 9 skipped**（无 xfail）；functional 14；
 mypy 0；ruff 通过。N3 关闭路径与写入口登记至此完成；剩余点名：C3 读取侧统一可见性、
 存量映射回填、N5 真实集成证据（需推送 CI）。
+
+### 收口补充返修第七批（评审 N3 遗漏：主记录删除后写入异常仍收敛）
+
+- `_fail_v1_generation` 两件事解耦：文档存在 → 条件更新失败状态；**无论文档是否存在**
+  → 按已持有的执行身份（document_id/generation/token）将不确定写入标 unknown 并提交。
+  主记录被删不再遗留 writing（此前 row is None 直接返回，清理经 resolve_unknown 也无法收敛）。
+- 新增 T15 回归：领取 → 物理删除主记录 → 写入抛错 → 执行 unknown → 未解决时清理不 done
+  → 核验解决 unknown → 清理收敛 done。
+
+验证：后端全量连续 2 次 **1074 passed / 9 skipped**（无 xfail）；functional 14；
+mypy 0；ruff 通过。N3 清单余项（不转移、不省略）：取消/进程崩溃/提交结果不确定的
+生命周期验证仍待补；C3 读取侧统一可见性、存量映射回填、N5 真实集成证据未实施。

@@ -391,6 +391,8 @@ class KnowledgeService:
 
         async with AsyncSessionLocal() as session:
             repo = DocumentIndexRepository(session)
+            # 两件事分开（评审）：
+            # a) 文档还在 → 条件更新文档失败状态
             if document_id:
                 row = await repo.get_by_id(document_id, user_id)
             else:
@@ -398,18 +400,19 @@ class KnowledgeService:
                 await file.seek(0)
                 md5_hex = hashlib.md5(content).hexdigest()
                 row = await repo.get_by_md5(md5_hex, user_id)
-            if row is None:
-                return
-            await repo.mark_index_failed_if_indexing(
-                row.id, "v1 上传向量写入失败", generation=generation
-            )
-            # 评审 #2：写入异常的远端结果不确定 → unknown（不得伪称 closed）
-            from app.services.document_index_service import _ExecutionRepository
-            await _ExecutionRepository(session).close_execution(
-                document_id=row.id, generation=generation,
-                token=f"v1-{row.id}-g{generation}",
-                status="unknown", reason="v1 写入异常，远端结果未知")
-            await session.commit()
+            if row is not None:
+                await repo.mark_index_failed_if_indexing(
+                    row.id, "v1 上传向量写入失败", generation=generation
+                )
+            # b) 无论文档是否存在：按已持有的执行身份将不确定写入标 unknown
+            #    并提交——主记录被删也不能遗留 writing（否则清理无法收敛）
+            if document_id:
+                from app.services.document_index_service import _ExecutionRepository
+                await _ExecutionRepository(session).close_execution(
+                    document_id=document_id, generation=generation,
+                    token=f"v1-{document_id}-g{generation}",
+                    status="unknown", reason="v1 写入异常，远端结果未知")
+                await session.commit()
 
     async def handle_add_vector_multiple(self, files: List[UploadFile], user_id: str, space_id: str = "") -> List[str]:
         """
