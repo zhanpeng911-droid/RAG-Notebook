@@ -429,3 +429,23 @@ mypy 0；ruff 通过。N3 关闭路径与写入口登记至此完成；剩余点
 验证：后端全量连续 2 次 **1074 passed / 9 skipped**（无 xfail）；functional 14；
 mypy 0；ruff 通过。N3 清单余项（不转移、不省略）：取消/进程崩溃/提交结果不确定的
 生命周期验证仍待补；C3 读取侧统一可见性、存量映射回填、N5 真实集成证据未实施。
+
+### P1 生命周期恢复（方案 §11.3，基线 ce24ab6 后）
+
+- 迁移 013：执行表加 `lease_expires_at`（已应用真实 MySQL，head=013）。
+- 取消独立分支：执行器 `except asyncio.CancelledError` → 独立短会话标记 unknown →
+  向上传播（不转成功、不吞取消）；收尾失败由协调失联判定兜底。
+- 崩溃恢复：执行登记设租约；`mark_expired_writers_unknown` 公平有界把租约过期的
+  writing 列为失联 unknown（不证明远端停止）；新 Beat 协调任务每 5 分钟执行；
+  unknown 关联清理任务不得 done，人工经 `resolve_unknown` 核验后收敛。
+- 关闭协议放宽：writer 持令牌可将 writing 与协调标记的 unknown 收敛为 closed，
+  但不得无条件覆盖已确认的 closed。
+- 提交结果判定：发布事务 commit 异常时用新会话读持久事实——已 INDEXED 则按
+  "确认丢失但已提交"返回已发布（不误删新代次）；未持久化则标记 unknown 返回
+  publish_commit_uncertain。
+- 回归：T16（取消线程继续写 → unknown，关闭后收敛）、T17（commit 成功但确认丢失
+  → 返回 INDEXED，新代次不被误删）、T18（领取后崩溃 → 协调标 unknown → 清理不 done
+  → 核验解决 → 收敛）。
+
+验证：后端全量连续 2 次 **1077 passed / 9 skipped**（无 xfail）；functional 14；
+mypy 0；ruff 通过。P1 完成；P2 读取统一、P3 存量映射、P4 真实集成未实施（见方案 §11）。

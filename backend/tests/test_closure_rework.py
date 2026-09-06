@@ -646,3 +646,168 @@ async def test_t15_record_deleted_before_write_failure_still_converges(env):
         task = (await s.execute(select(DocumentCleanupTask)
                                 .where(DocumentCleanupTask.id == "t15-task"))).scalar_one()
         assert task.status == "done", "unknown 解决后清理应收敛"
+
+
+# ---------- P1：取消、提交结果不明、崩溃协调、确认丢失 ----------
+
+@pytest.mark.asyncio
+async def test_t16_cancel_while_writing_marks_unknown(env):
+    """上传协程取消但线程仍可能继续写：执行标 unknown、不 done；关闭后收敛。"""
+    import threading
+    from app.services.document_index_service import execute_index_document
+    from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+
+    doc_id, _ = await _seed_doc(env)
+    gate = threading.Event()
+    released = threading.Event()
+
+    real_add = env.vs.add_documents
+
+    def gated_add(docs, ids=None, **kwargs):
+        gate.wait(timeout=5)       # 模拟远端写入卡住
+        return real_add(docs, ids=ids, **kwargs)
+
+    env.vs.add_documents = gated_add
+
+    import asyncio
+    task = asyncio.ensure_future(execute_index_document(doc_id, "u1"))
+    # 等待进入写入（轮询执行清单出现）
+    for _ in range(50):
+        async with env.factory() as s:
+            e = (await s.execute(select(DocumentIndexExecution)
+                                 .where(DocumentIndexExecution.document_id == doc_id))).scalars().all()
+            if e:
+                break
+        await asyncio.sleep(0.02)
+    await asyncio.sleep(0.05)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    gate.set()                      # 释放线程：远端写入实际发生
+    released.set()
+
+    # 取消后：执行 unknown（不是 closed），清理任务不得 done
+    async with env.factory() as s:
+        e = (await s.execute(select(DocumentIndexExecution)
+                             .where(DocumentIndexExecution.document_id == doc_id))).scalar_one()
+        assert e.status == ExecutionStatus.UNKNOWN
+
+    # writer 侧收尾（持令牌收敛）后：清理可收敛
+    from app.services.document_index_service import _ExecutionRepository
+    async with env.factory() as s:
+        assert await _ExecutionRepository(s).close_execution(
+            document_id=doc_id, generation=e.generation, token=e.token,
+            status="closed", reason="writer finished after cancel")
+        await s.commit()
+    # 触发一次 document_deleted 流程外的收敛路径：直接跑删除编排清理任务
+    from app.services.document_index_service import delete_index_record
+    # 文档已在？未删——此处用删除编排产生清理任务并收敛
+    out = await delete_index_record(doc_id, "u1")
+    assert out["state"] == "deleted"
+    await _run_cleanup_worker_once(env)
+    await _run_cleanup_worker_once(env)
+    tasks = await _cleanup_tasks(env)
+    assert all(t.status == "done" for t in tasks if t.reason == "document_deleted")
+
+
+@pytest.mark.asyncio
+async def test_t17_commit_succeeded_but_confirm_lost(env, monkeypatch):
+    """commit 实际成功后确认丢失：按持久事实返回已发布，不误删新代次。"""
+    import app.services.document_index_service as dis
+    from app.db import db_config as db_cfg
+
+    doc_id, _ = await _seed_doc(env)
+    orig_factory = db_cfg.AsyncSessionLocal
+    commit_calls = {"n": 0}
+
+    class ConfirmLossSession:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        async def __aenter__(self):
+            await self._inner.__aenter__()
+            return self
+
+        async def __aexit__(self, *exc):
+            return await self._inner.__aexit__(*exc)
+
+        async def commit(self):
+            commit_calls["n"] += 1
+            if commit_calls["n"] == 2:      # 发布事务的提交
+                await self._inner.commit()   # 真实提交成功
+                raise RuntimeError("connection lost after commit")
+            return await self._inner.commit()
+
+    class ConfirmLossFactory:
+        def __call__(self):
+            return ConfirmLossSession(orig_factory())
+
+    monkeypatch.setattr(db_cfg, "AsyncSessionLocal", ConfirmLossFactory())
+    result = await dis.execute_index_document(doc_id, "u1")
+    monkeypatch.undo()
+
+    # 按持久事实：已发布（不得误判失败并补偿删除新代次）
+    assert result["status"] == DocumentIndexStatus.INDEXED
+    from app.models.cleanup_task import DocumentCleanupTask
+    async with env.factory() as s:
+        tasks = (await s.execute(select(DocumentCleanupTask))).scalars().all()
+        assert len(tasks) == 1 and tasks[0].status == "pending"
+    assert env.vs.docs.get(f"u1:{doc_id}:g1:0") is not None, "已发布新代次被误删"
+
+
+@pytest.mark.asyncio
+async def test_t18_crash_recovery_via_lease(env):
+    """领取后进程退出：协调任务把租约过期的 writing 列为失联 unknown；
+    人工核验解决后清理收敛，不得无条件 closed。"""
+    from app.services.document_index_service import _ExecutionRepository
+    from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+    from datetime import datetime, timedelta, timezone
+    from app.models.cleanup_task import DocumentCleanupTask, CleanupTaskStatus
+
+    doc_id, md5 = await _seed_doc(env)
+    # 模拟崩溃遗留：writing 执行 + 过期租约 + 删除编排的清理任务
+    stale = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=30)
+    async with env.factory() as s:
+        s.add(DocumentIndexExecution(
+            execution_id="exec-crash", document_id=doc_id, user_id="u1",
+            generation=1, token="tok-crash", status=ExecutionStatus.WRITING,
+            lease_expires_at=stale))
+        s.add(DocumentCleanupTask(
+            id="t18-task", document_id=doc_id, user_id="u1", md5=md5,
+            generation=0, reason="document_deleted",
+            status=CleanupTaskStatus.PENDING))
+        await s.commit()
+
+    # 协调：失联 unknown（不是 closed）
+    async with env.factory() as s:
+        repo = _ExecutionRepository(s)
+        marked = await repo.mark_expired_writers_unknown(limit=10)
+        await s.commit()
+        assert marked == 1
+        e = (await s.execute(select(DocumentIndexExecution)
+                             .where(DocumentIndexExecution.execution_id == "exec-crash"))).scalar_one()
+        assert e.status == ExecutionStatus.UNKNOWN
+
+    # 协调后：清理不得 done
+    await _run_cleanup_worker_once(env)
+    async with env.factory() as s:
+        task = (await s.execute(select(DocumentCleanupTask)
+                                .where(DocumentCleanupTask.id == "t18-task"))).scalar_one()
+        assert task.status != "done"
+
+    # 人工核验解决 → 清理收敛（删除编排此时才安全执行）
+    async with env.factory() as s:
+        assert await _ExecutionRepository(s).resolve_unknown(
+            "exec-crash", "维护窗口核验：旧进程已停止，远端无残留写入")
+        await s.commit()
+    await _run_cleanup_worker_once(env)
+    await _run_cleanup_worker_once(env)
+    async with env.factory() as s:
+        task = (await s.execute(select(DocumentCleanupTask)
+                                .where(DocumentCleanupTask.id == "t18-task"))).scalar_one()
+        assert task.status == "done"

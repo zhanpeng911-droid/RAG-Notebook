@@ -66,6 +66,11 @@ celery_app.conf.beat_schedule = {
         "schedule": 300.0,  # 每 5 分钟执行一次（持久清理队列，公平领取）
         "args": (20,),
     },
+    "coordinate-index-executions-every-5-minutes": {
+        "task": "app.tasks.agent_maintenance_task.coordinate_index_executions_task",
+        "schedule": 300.0,  # 每 5 分钟执行一次（失联写执行判定）
+        "args": (50,),
+    },
 }
 
 

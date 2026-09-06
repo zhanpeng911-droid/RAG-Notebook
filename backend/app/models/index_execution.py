@@ -39,4 +39,6 @@ class DocumentIndexExecution(Base):
                     comment="writing / closed / unknown")
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     closed_at = Column(DateTime(timezone=True), nullable=True, comment="关闭时间")
+    lease_expires_at = Column(DateTime(timezone=True), nullable=True,
+                              comment="执行租约到期（失联判定依据；不证明远端停止）")
     close_reason = Column(String(200), nullable=True, comment="关闭依据/错误码")

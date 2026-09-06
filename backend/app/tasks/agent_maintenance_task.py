@@ -31,6 +31,25 @@ def _run_async(coro):
 
 
 @celery_app.task(ignore_result=True)
+def coordinate_index_executions_task(limit: int = 50):
+    """P1 协调：把租约过期的索引写执行标记为失联 unknown（不证明远端停止）。"""
+    _run_async(_coordinate_executions_async(limit))
+
+
+async def _coordinate_executions_async(limit: int) -> int:
+    from app.db.db_config import AsyncSessionLocal
+    from app.services.document_index_service import _ExecutionRepository
+
+    async with AsyncSessionLocal() as session:
+        repo = _ExecutionRepository(session)
+        marked = await repo.mark_expired_writers_unknown(limit=limit)
+        await session.commit()
+    if marked:
+        logger.warning(f"【执行协调】{marked} 条过期写执行标记为失联 unknown（待核验）")
+    return marked
+
+
+@celery_app.task(ignore_result=True)
 def reclaim_stale_agent_runs_task(max_age_minutes: int = None):
     """回收过期运行：lease（COALESCE(heartbeat_at, created_at)）超过期限的运行置为 timeout。"""
     _run_async(_reclaim_stale_async(max_age_minutes or _stale_after_minutes()))
