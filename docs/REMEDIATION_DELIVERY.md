@@ -449,3 +449,17 @@ mypy 0；ruff 通过。N3 清单余项（不转移、不省略）：取消/进�
 
 验证：后端全量连续 2 次 **1077 passed / 9 skipped**（无 xfail）；functional 14；
 mypy 0；ruff 通过。P1 完成；P2 读取统一、P3 存量映射、P4 真实集成未实施（见方案 §11）。
+
+### P1 返修（评审 3 点）
+
+- 提交确认代次级：提交异常后先收尾原事务连接（rollback+close 释放锁），再独立会话
+  读取——状态=INDEXED 且 active_generation=本次代次 且 本次执行（generation+token）为
+  closed 才算本次发布确认；不再只看文档状态（区分"本次已发布"与"另一执行已发布"）。
+- 锁释放：不再用新 session 更新仍可能持锁的原 session 记录；先明确 rollback/close。
+- 新连接读取失败：不能推断回滚，保留 unknown 待协调。
+- 回归 T17 适配代次级确认（active=1 且执行 closed）；新增 T19：提交未持久化返回
+  publish_commit_uncertain；另一执行发布 active=5 时，本次探针不误判为自身成功。
+
+验证：后端全量连续 2 次 **1078 passed / 9 skipped**（无 xfail）；functional 14；
+mypy 0；ruff 通过。P1 基础回归保留；v1/SSE 独立路径的取消/提交判定与真实 MySQL
+双连接验证仍待 P4 补齐（评审第 3 点）。

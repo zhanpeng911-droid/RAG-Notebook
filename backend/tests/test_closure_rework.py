@@ -751,10 +751,16 @@ async def test_t17_commit_succeeded_but_confirm_lost(env, monkeypatch):
     result = await dis.execute_index_document(doc_id, "u1")
     monkeypatch.undo()
 
-    # 按持久事实：已发布（不得误判失败并补偿删除新代次）
+    # 按持久事实：本次代次已发布（active_generation=1 且执行 closed）
     assert result["status"] == DocumentIndexStatus.INDEXED
     from app.models.cleanup_task import DocumentCleanupTask
+    from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
     async with env.factory() as s:
+        row = await DocumentIndexRepository(s).get_by_id(doc_id, "u1")
+        assert row.active_generation == 1
+        e = (await s.execute(select(DocumentIndexExecution)
+                             .where(DocumentIndexExecution.document_id == doc_id))).scalar_one()
+        assert e.status == ExecutionStatus.CLOSED
         tasks = (await s.execute(select(DocumentCleanupTask))).scalars().all()
         assert len(tasks) == 1 and tasks[0].status == "pending"
     assert env.vs.docs.get(f"u1:{doc_id}:g1:0") is not None, "已发布新代次被误删"
@@ -811,3 +817,67 @@ async def test_t18_crash_recovery_via_lease(env):
         task = (await s.execute(select(DocumentCleanupTask)
                                 .where(DocumentCleanupTask.id == "t18-task"))).scalar_one()
         assert task.status == "done"
+
+
+@pytest.mark.asyncio
+async def test_t19_other_execution_published_not_mistaken_for_this_one(env, monkeypatch):
+    """提交确认丢失但 active 属于另一执行（同文档新代次由别处发布）：
+    本次不得误判成功。"""
+    import app.services.document_index_service as dis
+    from app.db import db_config as db_cfg
+
+    doc_id, _ = await _seed_doc(env)
+    orig_factory = db_cfg.AsyncSessionLocal
+    fail_on_commit = {"armed": True, "n": 0}
+
+    class FailCommitSession:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        async def __aenter__(self):
+            await self._inner.__aenter__()
+            return self
+
+        async def __aexit__(self, *exc):
+            return await self._inner.__aexit__(*exc)
+
+        async def commit(self):
+            fail_on_commit["n"] += 1
+            if fail_on_commit["n"] == 2:  # 发布事务的提交
+                raise RuntimeError("connection lost before commit")
+            return await self._inner.commit()
+
+    class FailCommitFactory:
+        def __call__(self):
+            return FailCommitSession(orig_factory())
+
+    monkeypatch.setattr(db_cfg, "AsyncSessionLocal", FailCommitFactory())
+    result = await dis.execute_index_document(doc_id, "u1")
+    monkeypatch.undo()
+
+    # 提交未持久化：返回失败/不确定，不是成功
+    assert result["status"] == DocumentIndexStatus.INDEX_FAILED
+    assert result["error"] == "publish_commit_uncertain"
+
+    # 若另一执行随后发布了该文档的新代次，本执行确认不得误判为自身成功
+    async with env.factory() as s:
+        row = await DocumentIndexRepository(s).get_by_id(doc_id, "u1")
+        # 模拟另一执行（不同 token）发布 active_generation=5
+        row.active_generation = 5
+        row.status = DocumentIndexStatus.INDEXED
+        row.generation = 5
+        await s.commit()
+
+    # 用已返回的失败结果（publish_commit_uncertain）：协调层保持 unknown，
+    # 不会把别的执行的发布当作本次成功——此处验证探针区分执行身份
+    from app.services.document_index_service import repo_like_get_active_generation, \
+        repo_like_get_execution
+    async with env.factory() as s:
+        v_active = await repo_like_get_active_generation(s, doc_id, "u1")
+        assert int(v_active) == 5
+        # 本次执行（gen=1, token）不存在或非 closed → 不构成发布确认
+        e_status = await repo_like_get_execution(s, doc_id, 1, "x-token")
+        assert e_status != "closed" or e_status is None

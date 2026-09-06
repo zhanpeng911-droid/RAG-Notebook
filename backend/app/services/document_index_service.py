@@ -379,6 +379,31 @@ async def repo_like_get_status(session, doc_id: str, user_id: str):
     return result.scalar_one_or_none()
 
 
+async def repo_like_get_active_generation(session, doc_id: str, user_id: str):
+    """读取 active_generation（确认本次代次已发布）。"""
+    from sqlalchemy import select as _select
+    from app.models.document_index import DocumentIndex
+    result = await session.execute(
+        _select(DocumentIndex.active_generation).where(
+            DocumentIndex.id == doc_id, DocumentIndex.user_id == user_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def repo_like_get_execution(session, doc_id: str, generation: int, token: str):
+    """读取本次执行的持久状态（closed 才确认发布成功）。"""
+    from sqlalchemy import select as _select
+    from app.models.index_execution import DocumentIndexExecution
+    result = await session.execute(
+        _select(DocumentIndexExecution.status).where(
+            DocumentIndexExecution.document_id == doc_id,
+            DocumentIndexExecution.generation == generation,
+            DocumentIndexExecution.token == token,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 class _ExecutionRepository:
     """执行清单仓库（K1）——登记/关闭/查询未关闭执行。"""
 
@@ -636,18 +661,54 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
             try:
                 await session.commit()
             except Exception as commit_err:
-                # P1：提交结果不明——用新会话读取持久事实判定，
-                # 不盲目按失败补偿（可能已发布的新代次不得误删）
+                # P1：提交结果不明。先收尾本事务连接（回滚并关闭，释放可能
+                # 持有的行锁——不能假定提交异常必然已回滚，也不能用同一
+                # session 阻塞后续协调），再用独立短会话读取持久事实判定。
                 commit_err_msg = str(commit_err)[:200]
-                async with AsyncSessionLocal() as verify_session:
-                    v_status = await repo_like_get_status(verify_session,
-                                                          document_id, user_id)
-                if v_status == DocumentIndexStatus.INDEXED:
+                try:
+                    await session.rollback()
+                except Exception:
+                    pass
+                try:
+                    await session.close()
+                except Exception:
+                    pass
+
+                # 独立会话协调：确认按 文档状态 + 本次代次 + active_generation
+                # + 执行身份（本次 generation/token） + 对应清理任务 是否一致
+                try:
+                    async with AsyncSessionLocal() as verify_session:
+                        v_status = await repo_like_get_status(
+                            verify_session, document_id, user_id)
+                        v_active = await repo_like_get_active_generation(
+                            verify_session, document_id, user_id)
+                        v_exec = await repo_like_get_execution(
+                            verify_session, document_id, generation,
+                            execution_token)
+                except Exception as read_err:
+                    # 新连接读取失败：不能推断回滚；保留 unknown 待协调
+                    logger.error(
+                        f"【文档索引】提交确认读取失败，待协调: id={document_id}, "
+                        f"error={str(read_err)[:200]}"
+                    )
+                    return {"status": DocumentIndexStatus.INDEX_FAILED,
+                            "retryable": True, "error": "publish_commit_uncertain"}
+
+                published_ok = (
+                    v_status == DocumentIndexStatus.INDEXED
+                    and v_active is not None
+                    and int(v_active) == int(generation)
+                    and v_exec is not None
+                    and v_exec == "closed"
+                )
+                if published_ok:
                     logger.warning(
-                        f"【文档索引】发布事务确认丢失但事实已提交: id={document_id}"
+                        f"【文档索引】发布事务确认丢失但事实已提交: id={document_id}, "
+                        f"gen={generation}"
                     )
                     return {"status": DocumentIndexStatus.INDEXED,
                             "retryable": False, "error": None}
+
                 logger.error(
                     f"【文档索引】发布事务提交失败（未持久化）: id={document_id}, "
                     f"error={commit_err_msg}"
