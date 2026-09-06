@@ -400,3 +400,20 @@ mypy 0；ruff 通过。剩余：N3 关闭路径全覆盖、存量映射回填、
 验证：后端全量连续 2 次 **1069 passed / 9 skipped**（无 xfail）；functional 14；
 mypy 0；ruff 通过。剩余点名：C3 读取侧（列表/详情/分块统一可见性）、存量映射回填、
 N5 真实集成证据（需推送 CI）。
+
+### 收口补充返修第六批（N3 返修：三条分支的执行关闭 + 回归）
+
+- v1/SSE 发布被拒的所有 False 路径（文档已删除、条件发布失败）在 `_publish_v1_generation`
+  内部关闭执行（closed, publish_rejected / document deleted before publish）——不再停留
+  writing，SSE 的 execution_open 兜底跳过不再漏关（评审 #1）。
+- `_fail_v1_generation`：写入异常远端结果不确定 → 执行标 **unknown**（不得伪称 closed）；
+  定位改用传入的 document_id，不再重读文件按 md5 查行（评审 #2）。
+- 空文档/空切片的**条件失败分支**（删除获胜、mark_index_failed_if_indexing 返回 False）
+  补关闭执行，reason 注明"删除获胜"（评审 #3）。
+- 新增回归：T12（执行器发布被拒 → closed/publish_rejected）、T12b（v1 409 → 执行 closed）、
+  T13（v1 写入异常 → unknown，resolve_unknown 单向解决且不可重复）、T14（空切片+删除获胜
+  → closed）。
+
+验证：后端全量连续 2 次 **1073 passed / 9 skipped**（无 xfail）；functional 14；
+mypy 0；ruff 通过。N3 关闭路径与写入口登记至此完成；剩余点名：C3 读取侧统一可见性、
+存量映射回填、N5 真实集成证据（需推送 CI）。

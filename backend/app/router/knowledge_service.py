@@ -344,10 +344,24 @@ class KnowledgeService:
             repo = DocumentIndexRepository(session)
             row = await repo.get_by_md5(md5_hex, user_id)
             if row is None:
+                # 文档已被删除：写入者已停止，关闭自身执行记录（评审 #1）
+                from app.services.document_index_service import _ExecutionRepository
+                await _ExecutionRepository(session).close_execution(
+                    document_id=document_id, generation=generation,
+                    token=f"v1-{document_id}-g{generation}",
+                    status="closed", reason="document deleted before publish")
+                await session.commit()
                 return False
             if not await repo.publish_indexed(row.id, chunk_count=chunk_count, generation=generation):
                 from app.core.logger_handler import logger
                 logger.warning(f"【知识库】v1 代次发布被拒（状态/代次已变化）: md5={md5_hex}, gen={generation}")
+                # 评审 #1：发布被拒（删除获胜）= 写入者已停止，关闭自身执行记录
+                from app.services.document_index_service import _ExecutionRepository
+                await _ExecutionRepository(session).close_execution(
+                    document_id=document_id, generation=generation,
+                    token=f"v1-{document_id}-g{generation}",
+                    status="closed", reason="publish_rejected")
+                await session.commit()
                 return False
             # K1：发布成功即关闭执行（同一事务）
             from app.services.document_index_service import _ExecutionRepository
@@ -369,28 +383,32 @@ class KnowledgeService:
     @staticmethod
     async def _fail_v1_generation(file, user_id: str, generation: int,
                                   document_id: str = None) -> None:
+        """写入异常收尾：远端结果不确定 → 执行标 unknown（关闭协议，评审 #2）。"""
         """v1 写入失败：条件写回失败状态（仅仍处于 INDEXING 的本代次行）。"""
         import hashlib
         from app.db.db_config import AsyncSessionLocal
         from app.repositories.document_index_repository import DocumentIndexRepository
 
-        content = await file.read()
-        await file.seek(0)
-        md5_hex = hashlib.md5(content).hexdigest()
-
         async with AsyncSessionLocal() as session:
             repo = DocumentIndexRepository(session)
-            row = await repo.get_by_md5(md5_hex, user_id)
+            if document_id:
+                row = await repo.get_by_id(document_id, user_id)
+            else:
+                content = await file.read()
+                await file.seek(0)
+                md5_hex = hashlib.md5(content).hexdigest()
+                row = await repo.get_by_md5(md5_hex, user_id)
             if row is None:
                 return
             await repo.mark_index_failed_if_indexing(
                 row.id, "v1 上传向量写入失败", generation=generation
             )
+            # 评审 #2：写入异常的远端结果不确定 → unknown（不得伪称 closed）
             from app.services.document_index_service import _ExecutionRepository
             await _ExecutionRepository(session).close_execution(
                 document_id=row.id, generation=generation,
                 token=f"v1-{row.id}-g{generation}",
-                status="closed", reason="v1 上传向量写入失败")
+                status="unknown", reason="v1 写入异常，远端结果未知")
             await session.commit()
 
     async def handle_add_vector_multiple(self, files: List[UploadFile], user_id: str, space_id: str = "") -> List[str]:

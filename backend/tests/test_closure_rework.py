@@ -426,3 +426,160 @@ async def test_t06b_superseded_scoped_to_document(env):
     assert sup.status == "done"
     b_vec = env.vs.docs.get(f"u1:{b_id}:g1:0")
     assert b_vec is not None and b_vec["content"] == "B的g1", "B 的 g1 向量被 A 的旧代次清理误删"
+
+
+# ---------- N3 返修：删除获胜后执行仍能关闭自身记录 ----------
+
+@pytest.mark.asyncio
+async def test_t12_publish_rejected_closes_execution(env):
+    """删除获胜 → 发布被拒 → 执行不得停在 writing（评审 N3 #1）。"""
+    from app.services.document_index_service import execute_index_document
+    from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+
+    doc_id, _ = await _seed_doc(env)
+
+    async def loader(path, md5=None, user_id=None):
+        # 执行器 claim 后、发布前，删除获胜
+        async with env.factory() as s:
+            await DocumentIndexRepository(s).update_status(
+                doc_id, DocumentIndexStatus.DELETING)
+            await s.commit()
+        return [NS(page_content="正文", metadata={"source": path})]
+
+    env.store.get_file_document = loader
+
+    r = await execute_index_document(doc_id, "u1")
+    assert r["status"] == DocumentIndexStatus.DELETING
+
+    async with env.factory() as s:
+        e = (await s.execute(select(DocumentIndexExecution)
+                             .where(DocumentIndexExecution.document_id == doc_id))).scalar_one()
+        assert e.status == ExecutionStatus.CLOSED, "发布被拒后执行必须关闭自身记录"
+        assert e.close_reason == "publish_rejected"
+
+
+@pytest.mark.asyncio
+async def test_t13_v1_write_failure_unknown_then_resolvable(env):
+    """v1 写入异常：执行标 unknown（远端结果不确定），可经解决路径关闭。"""
+    from app.router.knowledge_service import KnowledgeService
+    from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+
+    async def boom(**kwargs):
+        raise RuntimeError("chroma 连接中断")
+
+    env.store.get_document = boom
+
+    class _Up:
+        filename = "v1unk.txt"
+        size = 5
+
+        async def read(self, size=-1):
+            return "未知".encode("utf-8")
+
+        async def seek(self, pos):
+            return None
+
+    svc = KnowledgeService()
+    with pytest.raises(Exception):
+        await svc.handle_add_vector_single(_Up(), "u-unk", space_id="")
+
+    async with env.factory() as s:
+        e = (await s.execute(select(DocumentIndexExecution))).scalar_one()
+        assert e.status == ExecutionStatus.UNKNOWN, "写入异常远端结果未知，不得伪称 closed"
+
+    # 人工解决路径：unknown → closed（带审计原因），且不可重复解决
+    from app.services.document_index_service import _ExecutionRepository
+    async with env.factory() as s:
+        ok = await _ExecutionRepository(s).resolve_unknown(
+            e.execution_id, "维护窗口核验：远端无残留写入")
+        await s.commit()
+        assert ok is True
+        e2 = (await s.execute(select(DocumentIndexExecution)
+                              .where(DocumentIndexExecution.execution_id == e.execution_id))).scalar_one()
+        assert e2.status == ExecutionStatus.CLOSED
+        assert e2.close_reason.startswith("resolved:")
+    async with env.factory() as s:
+        assert await _ExecutionRepository(s).resolve_unknown(
+            e.execution_id, "重复解决") is False
+
+
+@pytest.mark.asyncio
+async def test_t14_empty_slice_conditional_fail_closes_execution(env):
+    """空切片 + 删除获胜（条件失败写回被拒）：执行仍须关闭。"""
+    from app.services.document_index_service import execute_index_document
+    from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+
+    doc_id, _ = await _seed_doc(env)
+
+    async def loader(path, md5=None, user_id=None):
+        async with env.factory() as s:
+            await DocumentIndexRepository(s).update_status(
+                doc_id, DocumentIndexStatus.DELETING)
+            await s.commit()
+        return [NS(page_content="正文", metadata={"source": path})]
+
+    env.store.get_file_document = loader
+    env.store.split_documents_sync = lambda docs: []  # 空切片
+
+    r = await execute_index_document(doc_id, "u1")
+    assert r["status"] == DocumentIndexStatus.DELETING
+
+    async with env.factory() as s:
+        e = (await s.execute(select(DocumentIndexExecution)
+                             .where(DocumentIndexExecution.document_id == doc_id))).scalar_one()
+        assert e.status == ExecutionStatus.CLOSED, "条件失败分支不得遗留 writing"
+        assert "删除获胜" in e.close_reason
+
+
+# ---------- 评审 N3 #1 的 v1/SSE 对应回归 ----------
+
+@pytest.mark.asyncio
+async def test_t12b_v1_publish_rejected_closes_execution_and_raises(env):
+    """v1：删除获胜 → 发布被拒 → 409 且执行关闭（不停在 writing）。"""
+    from app.router.knowledge_service import KnowledgeService
+    from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+    from fastapi import HTTPException
+
+    doc_id, md5 = await _seed_doc(env)
+
+    async def loader_with_delete(files=None, user_id=None, progress_callback=None,
+                                 space_id="", generation=None, document_id=None):
+        # 向量写入后、发布前，删除获胜
+        async with env.factory() as s:
+            await DocumentIndexRepository(s).update_status(
+                doc_id, DocumentIndexStatus.DELETING)
+            await s.commit()
+        return None
+
+    env.store.get_document = loader_with_delete
+
+    class _Up:
+        filename = "v1race.txt"
+        size = 5
+
+        async def read(self, size=-1):
+            # md5 命中已存在行 → 走领取路径
+            return "正文".encode("utf-8")
+
+        async def seek(self, pos):
+            return None
+
+    svc = KnowledgeService()
+    # 领取需要命中已存在的 doc 行：allocate 内部按内容 md5 查行，
+    # 这里让内容哈希与 _seed_doc 的 md5 不同 → 会创建新行；改用直接方式：
+    # 先删除种子行，创建与 _Up 内容 md5 一致的行
+    import hashlib
+    content_md5 = hashlib.md5("正文".encode("utf-8")).hexdigest()
+    async with env.factory() as s:
+        row = await DocumentIndexRepository(s).get_by_id(doc_id, "u1")
+        row.md5 = content_md5
+        await s.commit()
+
+    with pytest.raises(HTTPException) as ei:
+        await svc.handle_add_vector_single(_Up(), "u1", space_id="")
+    assert ei.value.status_code == 409
+
+    async with env.factory() as s:
+        e = (await s.execute(select(DocumentIndexExecution)
+                             .where(DocumentIndexExecution.document_id == doc_id))).scalar_one()
+        assert e.status == ExecutionStatus.CLOSED, "v1 发布被拒后执行必须关闭自身记录"

@@ -497,6 +497,11 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
                 if not await repo.mark_index_failed_if_indexing(
                     document_id, "文档加载为空", generation=generation
                 ):
+                    # 删除获胜：写入者已停止且未写入向量 → 可关闭自身记录
+                    await execution_repo.close_execution(
+                        document_id=document_id, generation=generation,
+                        token=execution_token, status="closed",
+                        reason="文档加载为空（删除获胜）")
                     current = await repo.get_status(document_id, user_id)
                     await session.commit()
                     return {"status": current or DocumentIndexStatus.INDEX_FAILED,
@@ -523,6 +528,10 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
                 if not await repo.mark_index_failed_if_indexing(
                     document_id, "文档切片为空", generation=generation
                 ):
+                    await execution_repo.close_execution(
+                        document_id=document_id, generation=generation,
+                        token=execution_token, status="closed",
+                        reason="文档切片为空（删除获胜）")
                     current = await repo.get_status(document_id, user_id)
                     await session.commit()
                     return {"status": current or DocumentIndexStatus.INDEX_FAILED,
