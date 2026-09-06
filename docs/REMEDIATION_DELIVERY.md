@@ -384,3 +384,19 @@ superseded 条件收编与存量映射、N5 真实集成证据。
 
 验证：后端全量连续 2 次 **1069 passed / 9 skipped**（无 xfail）；functional 14；
 mypy 0；ruff 通过。剩余：N3 关闭路径全覆盖、存量映射回填、N5 真实集成证据。
+
+### 收口补充返修第五批（N3 完成执行清单全覆盖 + unknown 解决路径 + SSE 收编）
+
+- 空切片分支关闭执行（此前直接返回遗留 writing）——执行器全部退出路径均有关闭。
+- 新增 `resolve_unknown(execution_id, reason)`：unknown → closed 的唯一人工解决路径，
+  带审计原因，不得触及 writing（方案 §10.4 要求）。
+- v1 写入口执行全覆盖：allocate 领取事务登记 writing；发布/失败/幂等跳过均有关闭——
+  v1 流程结束后无未关闭执行（"查不到未关闭执行"自此等价于"v1 写入者全部关闭"）。
+- SSE 收编（K4 三项之一）：`_process_slice_results` 按文件走执行协议——按 md5 领取
+  （deleting/indexing → 409 语义写错误事件）、登记执行、代次化稳定 ID 写入、条件发布；
+  **completed 事件移到发布成功之后**，发布被拒发写错误事件；异常兜底标记 unknown。
+  回归：SSE 成功路径执行全部 closed。
+
+验证：后端全量连续 2 次 **1069 passed / 9 skipped**（无 xfail）；functional 14；
+mypy 0；ruff 通过。剩余点名：C3 读取侧（列表/详情/分块统一可见性）、存量映射回填、
+N5 真实集成证据（需推送 CI）。

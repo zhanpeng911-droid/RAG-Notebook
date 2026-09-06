@@ -284,13 +284,15 @@ async def test_process_slice_success_and_fail():
             pass
 
     class FakeStore:
-        vectors_store = NS(add_documents=lambda d: None)
+        vectors_store = NS(add_documents=lambda d, ids=None: None,
+                           get=lambda ids=None, where=None, include=None:
+                           {"ids": [], "documents": [], "metadatas": []})
 
         async def save_md5_hex(self, *a, **k):
             return None
 
     ok_res = NS(success=True, file_index=1, filename="ok.txt",
-                documents=[NS(page_content="x")], md5="m1", chunk_count=1)
+                documents=[NS(page_content="x", metadata={})], md5="m1", chunk_count=1)
     fail_res = NS(success=False, file_index=2, filename="bad.txt", error="解析失败")
     queue = FakeQueue([ok_res, fail_res])
     state = ProcessingState(total_files=2, total_valid=2)
@@ -298,6 +300,14 @@ async def test_process_slice_success_and_fail():
     events = [e async for e in svc._process_slice_results(
         queue, 2, FakeStore(), state, USER_A)]
     assert state.success_count == 1
+    # K1：SSE 写入收编执行协议——成功路径执行已关闭，无未关闭执行
+    from sqlalchemy import select as _select
+    from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+    import app.db.db_config as _db_cfg
+    async with _db_cfg.AsyncSessionLocal() as s:
+        execs = (await s.execute(_select(DocumentIndexExecution))).scalars().all()
+        assert execs, "SSE 成功路径应登记执行清单"
+        assert all(e.status == ExecutionStatus.CLOSED for e in execs)
     assert state.failed_count == 1
     assert state.slice_success_count == 1
     # 成功文件 3 事件 + 失败文件 1 事件
@@ -318,7 +328,7 @@ async def test_process_slice_write_error():
                 raise Exception("empty")
             self.exhausted = True
             return NS(success=True, file_index=1, filename="ok.txt",
-                      documents=[NS(page_content="x")], md5="m1", chunk_count=1)
+                      documents=[NS(page_content="x", metadata={})], md5="m1", chunk_count=1)
 
         def task_done(self):
             pass

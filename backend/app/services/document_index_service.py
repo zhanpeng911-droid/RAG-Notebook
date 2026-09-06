@@ -413,6 +413,26 @@ class _ExecutionRepository:
         )
         return result.scalar_one_or_none() is not None
 
+    async def resolve_unknown(self, execution_id: str, reason: str) -> bool:
+        """unknown 的解决路径（K1）：人工核验后经此关闭，带审计原因。
+
+        只允许 unknown → closed；writing（可能仍在写）不可经此关闭。
+        调用前提：维护窗口、写入口已停、远端请求已排空（方案 §3.3）。
+        """
+        from datetime import datetime, timezone
+        from sqlalchemy import update
+        from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+        result = await self.session.execute(
+            update(DocumentIndexExecution)
+            .where(DocumentIndexExecution.execution_id == execution_id)
+            .where(DocumentIndexExecution.status == ExecutionStatus.UNKNOWN)
+            .values(status="closed",
+                    closed_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                    close_reason=f"resolved: {reason[:180]}")
+        )
+        await self.session.flush()
+        return result.rowcount > 0
+
 
 async def execute_index_document(document_id: str, user_id: str) -> dict:
     """统一索引执行服务（R2C）：HTTP 同步模式与 Celery worker 共用唯一实现。
@@ -507,6 +527,9 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
                     await session.commit()
                     return {"status": current or DocumentIndexStatus.INDEX_FAILED,
                             "retryable": False, "error": None}
+                await execution_repo.close_execution(
+                    document_id=document_id, generation=generation,
+                    token=execution_token, status="closed", reason="文档切片为空")
                 await session.commit()
                 return {"status": DocumentIndexStatus.INDEX_FAILED,
                         "retryable": False, "error": "文档切片为空"}

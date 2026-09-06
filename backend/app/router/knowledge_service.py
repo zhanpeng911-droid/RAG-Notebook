@@ -205,7 +205,7 @@ class KnowledgeService:
             )
         except Exception:
             # 写入失败：登记行条件标记失败，保留可重试依据（不留 indexed 幽灵行）
-            await self._fail_v1_generation(file, user_id, generation)
+            await self._fail_v1_generation(file, user_id, generation, document_id)
             raise
         published = await self._publish_v1_generation(
             store, user_id, md5_hex, generation, document_id)
@@ -217,6 +217,51 @@ class KnowledgeService:
                 detail="文档正在删除中，上传未生效",
             )
         return filename
+
+    @staticmethod
+    async def _allocate_v1_generation_by_md5(md5_hex: str, filename: str,
+                                             user_id: str, space_id: str = ""):
+        """按内容 md5 领取 v1 执行代次（SSE 收编用，文件已切片无需再读）。
+
+        返回 (generation 或 None, document_id)。语义与 _allocate_v1_generation
+        一致：deleting/indexing 抛 409；已 indexed 返回 (None, id) 幂等跳过。
+        """
+        from fastapi import HTTPException as _HTTPException
+        from app.db.db_config import AsyncSessionLocal
+        from app.repositories.document_index_repository import DocumentIndexRepository
+        from app.models.document_index import DocumentIndexStatus
+        from app.services.document_index_service import _ExecutionRepository
+
+        async with AsyncSessionLocal() as session:
+            repo = DocumentIndexRepository(session)
+            row = await repo.get_by_md5(md5_hex, user_id)
+            if row is None:
+                row = await repo.create(
+                    user_id=user_id,
+                    filename=f"kb_{md5_hex}",
+                    original_filename=filename or md5_hex,
+                    file_path="",
+                    md5=md5_hex,
+                    space_id=space_id or None,
+                    status=DocumentIndexStatus.UPLOADED,
+                )
+            elif row.status == DocumentIndexStatus.INDEXED:
+                await session.commit()
+                return None, row.id
+
+            generation = await repo.claim_upload_generation(row.id)
+            if generation is None:
+                status_value = row.status.value if row.status else "unknown"
+                await session.rollback()
+                raise _HTTPException(
+                    status_code=409,
+                    detail=f"文档正在删除或索引中（当前状态 {status_value}），请稍后重试",
+                )
+            await _ExecutionRepository(session).open_execution(
+                document_id=row.id, user_id=user_id,
+                generation=generation, token=f"v1-{row.id}-g{generation}")
+            await session.commit()
+            return generation, row.id
 
     @staticmethod
     async def _allocate_v1_generation(file, user_id: str, space_id: str = ""):
@@ -264,6 +309,11 @@ class KnowledgeService:
                     status_code=409,
                     detail=f"文档正在删除或索引中（当前状态 {status_value}），请稍后重试",
                 )
+            # K1：领取事务内登记 writing 执行（写入口全覆盖）
+            from app.services.document_index_service import _ExecutionRepository
+            await _ExecutionRepository(session).open_execution(
+                document_id=row.id, user_id=user_id,
+                generation=generation, token=f"v1-{row.id}-g{generation}")
             await session.commit()
             return generation, md5_hex, row.id
 
@@ -299,6 +349,12 @@ class KnowledgeService:
                 from app.core.logger_handler import logger
                 logger.warning(f"【知识库】v1 代次发布被拒（状态/代次已变化）: md5={md5_hex}, gen={generation}")
                 return False
+            # K1：发布成功即关闭执行（同一事务）
+            from app.services.document_index_service import _ExecutionRepository
+            await _ExecutionRepository(session).close_execution(
+                document_id=document_id, generation=generation,
+                token=f"v1-{document_id}-g{generation}",
+                status="closed", reason="published")
             # C4：与发布同事务登记旧代次清理任务
             cleanup_repo = CleanupTaskRepository(session)
             async with session.begin_nested():
@@ -311,7 +367,8 @@ class KnowledgeService:
             return True
 
     @staticmethod
-    async def _fail_v1_generation(file, user_id: str, generation: int) -> None:
+    async def _fail_v1_generation(file, user_id: str, generation: int,
+                                  document_id: str = None) -> None:
         """v1 写入失败：条件写回失败状态（仅仍处于 INDEXING 的本代次行）。"""
         import hashlib
         from app.db.db_config import AsyncSessionLocal
@@ -329,6 +386,11 @@ class KnowledgeService:
             await repo.mark_index_failed_if_indexing(
                 row.id, "v1 上传向量写入失败", generation=generation
             )
+            from app.services.document_index_service import _ExecutionRepository
+            await _ExecutionRepository(session).close_execution(
+                document_id=row.id, generation=generation,
+                token=f"v1-{row.id}-g{generation}",
+                status="closed", reason="v1 上传向量写入失败")
             await session.commit()
 
     async def handle_add_vector_multiple(self, files: List[UploadFile], user_id: str, space_id: str = "") -> List[str]:
@@ -550,11 +612,50 @@ class KnowledgeService:
 
                     yield self._yield_slicing_completed_event(result, state)
 
+                    execution_open = False
                     try:
                         yield self._yield_writing_event(result, state)
 
-                        await asyncio.to_thread(store.vectors_store.add_documents, result.documents)
+                        # K1/K4：SSE 写入收编执行协议——领取、登记执行、
+                        # 代次化写入、条件发布；发布成功后才发 completed
+                        generation, document_id = await self._allocate_v1_generation_by_md5(
+                            result.md5, result.filename, user_id,
+                            getattr(state, "space_id", "") or "")
+                        if generation is None:
+                            # 同内容已发布：幂等跳过，不重写向量
+                            state.written_count += 1
+                            state.success_count += 1
+                            yield self._yield_completed_event(result, state)
+                            continue
+
+                        for d in result.documents:
+                            d.metadata["user_id"] = user_id
+                            d.metadata["original_filename"] = result.filename
+                            d.metadata["md5"] = result.md5
+                            d.metadata["space_id"] = getattr(state, "space_id", "") or ""
+                            d.metadata["generation"] = int(generation)
+                            d.metadata["document_id"] = document_id
+                        stable_ids = [
+                            f"{user_id}:{document_id}:g{int(generation)}:{i}"
+                            for i in range(len(result.documents))
+                        ]
+                        execution_open = True
+
+                        await asyncio.to_thread(
+                            store.vectors_store.add_documents,
+                            result.documents, ids=stable_ids)
                         await store.save_md5_hex(result.md5, result.filename, result.filename, user_id)
+
+                        published = await self._publish_v1_generation(
+                            store, user_id, result.md5, generation, document_id)
+                        execution_open = False
+                        if not published:
+                            # 发布被拒（删除获胜）：报告错误，不发成功终态
+                            state.written_count += 1
+                            state.failed_count += 1
+                            yield self._yield_write_error_event(
+                                result, state, "文档正在删除中，上传未生效")
+                            continue
 
                         state.success_count += 1
                         state.written_count += 1
@@ -567,6 +668,21 @@ class KnowledgeService:
                         state.failed_count += 1
                         logger.error(f"【SSE上传】写入文件 {result.filename} 时出错: {e}")
                         yield self._yield_write_error_event(result, state, str(e))
+                    finally:
+                        if execution_open:
+                            # 兜底：异常路径执行未正常关闭 → 标记 unknown，
+                            # 由清理任务的"写入者已关闭"门槛阻止终局完成
+                            try:
+                                from app.services.document_index_service import _ExecutionRepository
+                                from app.db.db_config import AsyncSessionLocal as _ASL
+                                async with _ASL() as s:
+                                    await _ExecutionRepository(s).close_execution(
+                                        document_id=document_id, generation=generation,
+                                        token=f"v1-{document_id}-g{generation}",
+                                        status="unknown", reason="SSE 写入异常")
+                                    await s.commit()
+                            except Exception:
+                                pass
 
                 else:
                     state.written_count += 1
