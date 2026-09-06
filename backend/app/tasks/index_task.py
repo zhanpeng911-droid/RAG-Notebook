@@ -122,7 +122,9 @@ async def _process_cleanup_tasks_async(limit: int) -> int:
     from sqlalchemy import select
     from app.db.db_config import AsyncSessionLocal
 
-    from app.repositories.cleanup_task_repository import CleanupTaskRepository
+    from app.repositories.cleanup_task_repository import (
+        CleanupTaskRepository, UnresolvedCleanupError, WaitingWriterDeferred,
+    )
 
     async with AsyncSessionLocal() as session:
         # K3：领取统一走仓库实现（两阶段物化 + 状态/租约复核），worker 不再自持 SQL
@@ -140,7 +142,9 @@ async def _process_cleanup_tasks_async(limit: int) -> int:
         logger.warning(f"【清理任务】向量服务不可用，任务保留待下轮: {e}")
         return 0
 
-    from app.repositories.cleanup_task_repository import CleanupTaskRepository
+    from app.repositories.cleanup_task_repository import (
+        CleanupTaskRepository,
+    )
 
 
     done = 0
@@ -179,7 +183,7 @@ async def _process_cleanup_tasks_async(limit: int) -> int:
                             store.vectors_store.delete,
                             where={"$and": [{"user_id": task.user_id}, {"md5": task.md5}]},
                         )
-                    # 核验：文档范围必须为空；md5 范围仅在其他文档不存在时要求为空
+                    # 核验：文档范围必须为空
                     remain_doc = await _aio.to_thread(
                         store.vectors_store.get,
                         where={"$and": [
@@ -189,13 +193,20 @@ async def _process_cleanup_tasks_async(limit: int) -> int:
                         include=[],
                     )
                     residual = len(remain_doc.get("ids", [])) if isinstance(remain_doc, dict) else 1
-                    if other_doc is None:
-                        remain_md5 = await _aio.to_thread(
+                    # 评审 T09：同 MD5 存在其它文档时，无法归属的遗留向量
+                    # 进入 blocked（人工/映射处理），不得 md5 盲删、不得 done
+                    if other_doc is not None:
+                        remain_all = await _aio.to_thread(
                             store.vectors_store.get,
                             where={"$and": [{"user_id": task.user_id}, {"md5": task.md5}]},
                             include=[],
                         )
-                        residual += len(remain_md5.get("ids", [])) if isinstance(remain_md5, dict) else 0
+                        doc_scoped = set(remain_doc.get("ids", [])) if isinstance(remain_doc, dict) else set()
+                        all_ids = set(remain_all.get("ids", [])) if isinstance(remain_all, dict) else set()
+                        if all_ids - doc_scoped:
+                            raise UnresolvedCleanupError(
+                                f"存在 {len(all_ids - doc_scoped)} 条无法归属的遗留向量（同 MD5 有其它文档），需映射处理"
+                            )
                     if residual:
                         raise RuntimeError(
                             f"删除后仍有 {residual} 条向量残留（迟到写入或遗留格式，继续重试）"
@@ -232,9 +243,19 @@ async def _process_cleanup_tasks_async(limit: int) -> int:
                 # 关闭证明来自执行清单。关闭 + 核验为空 → done。
                 from app.services.document_index_service import _ExecutionRepository
                 if await _ExecutionRepository(session).has_open_executions(task.document_id):
-                    raise RuntimeError("存在未关闭的写入执行（waiting_writer），暂缓完成")
+                    raise WaitingWriterDeferred(
+                        "存在未关闭的写入执行（waiting_writer），暂缓完成")
                 if await repo.mark_done(task.id, task.claim_token):
                     done += 1
+            except WaitingWriterDeferred:
+                # 挂起：不消耗重试预算、不退避，写入者关闭后立即可再核验
+                if await repo.defer_for_writer(task.id, task.claim_token):
+                    logger.info(f"【清理任务】等待写入者关闭: doc={task.document_id}")
+            except UnresolvedCleanupError as e:
+                if await repo.mark_blocked(task.id, task.claim_token, str(e)):
+                    logger.warning(
+                        f"【清理任务】归属不清进入 blocked（人工处理）: doc={task.document_id}, error={e}"
+                    )
             except Exception as e:
                 outcome = await repo.mark_failed(task.id, task.claim_token, str(e))
                 logger.warning(

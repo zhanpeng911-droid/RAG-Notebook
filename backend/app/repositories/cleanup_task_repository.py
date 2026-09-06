@@ -17,6 +17,14 @@ CLAIM_LEASE_MINUTES = 10
 MAX_ATTEMPTS = 5
 
 
+class WaitingWriterDeferred(Exception):
+    """存在未关闭写入执行——挂起重试（不计失败、不退避），关闭后再核验。"""
+
+
+class UnresolvedCleanupError(Exception):
+    """清理目标无法精确归属（遗留向量/映射缺失）——进入 blocked，不重试。"""
+
+
 def _now():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -84,6 +92,11 @@ class CleanupTaskRepository:
                 CleanupTaskStatus.PENDING, CleanupTaskStatus.FAILED,
                 CleanupTaskStatus.CLAIMED,
             ]))
+            .where((DocumentCleanupTask.next_retry_at.is_(None))
+                   | (DocumentCleanupTask.next_retry_at <= now))
+            .where((DocumentCleanupTask.status != CleanupTaskStatus.CLAIMED)
+                   | (DocumentCleanupTask.lease_expires_at.is_(None))
+                   | (DocumentCleanupTask.lease_expires_at <= now))
             .values(status=CleanupTaskStatus.CLAIMED, claim_token=token,
                     lease_expires_at=lease, updated_at=now)
         )
@@ -107,17 +120,29 @@ class CleanupTaskRepository:
         )
         return result.rowcount > 0
 
-    async def has_open_executions(self, document_id: str) -> bool:
-        """K1：该文档是否存在未关闭（writing/unknown）的执行——
-        写入者未确定关闭前，清理任务不得判 done。"""
-        from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+    async def defer_for_writer(self, task_id: str, token: str) -> bool:
+        """waiting_writer 挂起：回 pending、立即到期、不计失败次数。"""
         result = await self.session.execute(
-            select(DocumentIndexExecution.execution_id).where(
-                DocumentIndexExecution.document_id == document_id,
-                DocumentIndexExecution.status != ExecutionStatus.CLOSED,
-            ).limit(1)
+            update(DocumentCleanupTask)
+            .where(DocumentCleanupTask.id == task_id)
+            .where(DocumentCleanupTask.claim_token == token)
+            .where(DocumentCleanupTask.status == CleanupTaskStatus.CLAIMED)
+            .values(status=CleanupTaskStatus.PENDING, next_retry_at=_now(),
+                    claim_token=None, lease_expires_at=None, updated_at=_now())
         )
-        return result.scalar_one_or_none() is not None
+        return result.rowcount > 0
+
+    async def mark_blocked(self, task_id: str, token: str, reason: str) -> bool:
+        """归属不清等不可自动恢复情形：进入 blocked（人工可见），不消耗重试预算。"""
+        result = await self.session.execute(
+            update(DocumentCleanupTask)
+            .where(DocumentCleanupTask.id == task_id)
+            .where(DocumentCleanupTask.claim_token == token)
+            .where(DocumentCleanupTask.status == CleanupTaskStatus.CLAIMED)
+            .values(status=CleanupTaskStatus.BLOCKED, last_error=reason[:500],
+                    updated_at=_now())
+        )
+        return result.rowcount > 0
 
     async def mark_done(self, task_id: str, token: str) -> bool:
         result = await self.session.execute(

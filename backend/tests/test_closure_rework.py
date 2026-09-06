@@ -150,7 +150,6 @@ async def _run_cleanup_worker_once(env, limit=20):
 # ---------- T01：两次查空之后旧写入者才写入，任务不得 done ----------
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="K1 done 门槛在清理 worker 未生效（N1 待接线修复），保持红色登记", strict=False)
 async def test_t01_late_write_after_empty_check_not_done(env):
     """K1：写入者未关闭（execution open）时，查空不得判 done；
     关闭后清理收敛。"""
@@ -166,32 +165,51 @@ async def test_t01_late_write_after_empty_check_not_done(env):
     tasks = await _cleanup_tasks(env)
     task = next(t for t in tasks if t.reason == "document_deleted")
 
-    # 旧写入者（持有旧代次）在两次核验之间写入迟到数据
+    # 显式创建 writing 执行并提交（模拟删除前已领取、删除后仍在写）
+    from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+    from app.services.document_index_service import _ExecutionRepository
+    async with env.factory() as s:
+        s.add(DocumentIndexExecution(
+            execution_id="exec-late", document_id=doc_id, user_id="u1",
+            generation=2, token="tok-late", status=ExecutionStatus.WRITING))
+        await s.commit()
+    # 断言前置状态：数据库确实存在 writing 执行
+    async with env.factory() as s:
+        e = (await s.execute(select(DocumentIndexExecution)
+                             .where(DocumentIndexExecution.execution_id == "exec-late"))).scalar_one()
+        assert e.status == ExecutionStatus.WRITING
+
     def late_write():
         env.vs.add_documents(
             [NS(page_content="迟到", metadata={"user_id": "u1", "md5": md5,
                                               "document_id": doc_id,
-                                              "generation": 1})],
-            ids=[f"u1:{doc_id}:g1:late"],
+                                              "generation": 2})],
+            ids=[f"u1:{doc_id}:g2:late"],
         )
 
-    # 第一次 worker：核验通过 → 不 done（首空登记/宽限）
+    # 第一次 worker：写入者未关闭 → 不得 done
     await _run_cleanup_worker_once(env)
-    # 迟到写入发生在首空之后
     late_write()
-    # 第二次 worker：迟到数据必须被捕获，不得 done
+    # 第二次 worker：仍未关闭 → 不得 done
     await _run_cleanup_worker_once(env)
     tasks = await _cleanup_tasks(env)
     task = next(t for t in tasks if t.reason == "document_deleted")
-    assert task.status != "done", "迟到写入后任务不得标完成"
+    assert task.status != "done", "写入者未关闭时任务不得标完成"
 
-    # 写入者关闭（execution closed）后：清理最终收敛
+    # 经生产关闭接口提交 closed（不直接改任务状态）
+    async with env.factory() as s:
+        ok = await _ExecutionRepository(s).close_execution(
+            document_id=doc_id, generation=2, token="tok-late",
+            status="closed", reason="writer finished")
+        await s.commit()
+        assert ok is True
+    # 写入者关闭后：清理最终收敛（迟到向量被精确清除）
     await _run_cleanup_worker_once(env)
     await _run_cleanup_worker_once(env)
     tasks = await _cleanup_tasks(env)
     task = next(t for t in tasks if t.reason == "document_deleted")
     assert task.status == "done"
-    assert f"u1:{doc_id}:g1:late" not in env.vs.docs
+    assert f"u1:{doc_id}:g2:late" not in env.vs.docs
 
 
 # ---------- T05/T06：同 MD5 A/B 资源互不影响 ----------
@@ -300,7 +318,6 @@ async def test_t07_claim_respects_next_retry_change(env, monkeypatch):
 # ---------- T09：遗留向量无法精确归属 → blocked，不盲删不假完成 ----------
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="document_deleted 遗留向量归属判断未接入 blocked 语义（N4 待实施）", strict=False)
 async def test_t09_unresolvable_legacy_vectors_blocked(env):
     """删除后遗留的无 document_id 元数据向量（旧格式）在同 md5 存在其它
     文档时：任务进入 blocked，不 md5 盲删、不标 done。"""

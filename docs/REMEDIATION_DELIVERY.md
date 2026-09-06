@@ -353,3 +353,19 @@ C2 待真实集成，C3 部分完成（三项点名），C4 队列缺陷已修�
 验证：后端全量**连续 2 次 1065 passed / 9 skipped / 2 xfailed**（xfail 为登记中的
 K1 接线缺陷，非跳过）；functional 14；mypy 0；ruff 通过。整体验收状态不变：
 K1—K5 与原 C 矩阵未全部满足。
+
+### 收口补充返修第三批（评审 xfail 核查后，落实 §10.2/§10.5 第一部分）
+
+- 移除 T01/T09 的 xfail 标记（恢复硬性断言）；T01 重构为：显式 writing 执行 → 断言
+  前置状态 → 删除 → 两次清理不得 done → **经生产关闭接口**关闭（含 commit）→ 收敛断言。
+- 根因修复：waiting_writer 曾走指数退避导致任务不可再领取；新增
+  `WaitingWriterDeferred`/`defer_for_writer`——挂起回 pending、立即到期、不计失败次数
+  （方案 §10.3 "waiting_writer 不消耗重试预算"）。
+- T09：worker 检测同 MD5 存在其它文档时的无法归属遗留向量 → `UnresolvedCleanupError`
+  → `mark_blocked`（token+claimed 条件），不 md5 盲删、不 done、不耗重试预算。
+- 删除 `CleanupTaskRepository.has_open_executions` 重复实现（评审第 3 项）。
+- 领取第二阶段 UPDATE 补 `next_retry_at` 到期与租约过期复核（评审第 4 项）。
+
+验证：后端全量连续 2 次 **1067 passed / 9 skipped**（无 xfail）；functional 14；
+mypy 0；ruff 通过。剩余：N3 关闭路径全覆盖（取消/崩溃/提交失败用例）、N4 worker 内
+superseded 条件收编与存量映射、N5 真实集成证据。
