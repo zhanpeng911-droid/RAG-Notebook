@@ -119,7 +119,6 @@ def process_cleanup_tasks_task(self, limit: int = 20):
 
 async def _process_cleanup_tasks_async(limit: int) -> int:
     import asyncio as _aio
-    from sqlalchemy import select
     from app.db.db_config import AsyncSessionLocal
 
     from app.repositories.cleanup_task_repository import (
@@ -152,99 +151,81 @@ async def _process_cleanup_tasks_async(limit: int) -> int:
         repo = CleanupTaskRepository(session)
         for task in tasks:
             try:
-                if task.reason == "document_deleted":
-                    # 评审 #3：精确到文档身份，不按 md5 盲删——
-                    # a) 携带 document_id 元数据的向量（当前写入协议）
-                    await _aio.to_thread(
-                        store.vectors_store.delete,
-                        where={"$and": [
-                            {"user_id": task.user_id},
-                            {"document_id": task.document_id},
-                        ]},
-                    )
-                    # b) 旧版固定 ID（pre-008 v2 文档，ID 含 doc_id，数量已知）
-                    if task.legacy_chunk_count and task.legacy_chunk_count > 0:
-                        legacy_ids = [f"{task.user_id}:{task.document_id}:v1:{i}"
-                                      for i in range(task.legacy_chunk_count)]
-                        await _aio.to_thread(store.vectors_store.delete, ids=legacy_ids)
-                    # c) 遗留向量（无 document_id 元数据，仅能按 md5 定位）：
-                    #    仅当同用户同 md5 下不存在其它文档时才允许 md5 清理，
-                    #    否则跳过 md5 清理（重传同内容的新资源不受旧任务影响）
-                    from app.models.document_index import DocumentIndex as _DI
-                    other_doc = (await session.execute(
-                        select(_DI.id).where(
-                            _DI.user_id == task.user_id,
-                            _DI.md5 == task.md5,
-                            _DI.id != task.document_id,
-                        ).limit(1)
-                    )).scalar_one_or_none()
-                    if other_doc is None:
-                        await _aio.to_thread(
-                            store.vectors_store.delete,
-                            where={"$and": [{"user_id": task.user_id}, {"md5": task.md5}]},
-                        )
-                    # 核验：文档范围必须为空
-                    remain_doc = await _aio.to_thread(
-                        store.vectors_store.get,
-                        where={"$and": [
-                            {"user_id": task.user_id},
-                            {"document_id": task.document_id},
-                        ]},
-                        include=[],
-                    )
-                    residual = len(remain_doc.get("ids", [])) if isinstance(remain_doc, dict) else 1
-                    # 评审 T09：同 MD5 存在其它文档时，无法归属的遗留向量
-                    # 进入 blocked（人工/映射处理），不得 md5 盲删、不得 done
-                    if other_doc is not None:
-                        remain_all = await _aio.to_thread(
-                            store.vectors_store.get,
-                            where={"$and": [{"user_id": task.user_id}, {"md5": task.md5}]},
-                            include=[],
-                        )
-                        doc_scoped = set(remain_doc.get("ids", [])) if isinstance(remain_doc, dict) else set()
-                        all_ids = set(remain_all.get("ids", [])) if isinstance(remain_all, dict) else set()
-                        if all_ids - doc_scoped:
-                            raise UnresolvedCleanupError(
-                                f"存在 {len(all_ids - doc_scoped)} 条无法归属的遗留向量（同 MD5 有其它文档），需映射处理"
-                            )
-                    if residual:
-                        raise RuntimeError(
-                            f"删除后仍有 {residual} 条向量残留（迟到写入或遗留格式，继续重试）"
-                        )
-                else:
-                    # superseded_generation：清理 generation < 目标代次 + legacy 前缀
-                    await _aio.to_thread(
-                        store.vectors_store.delete,
-                        where={"$and": [
-                            {"user_id": task.user_id},
-                            {"md5": task.md5},
-                            {"generation": {"$lt": int(task.generation)}},
-                        ]},
-                    )
-                    if task.legacy_chunk_count and task.legacy_chunk_count > 0:
-                        legacy_ids = [f"{task.user_id}:{task.document_id}:v1:{i}"
-                                      for i in range(task.legacy_chunk_count)]
-                        await _aio.to_thread(store.vectors_store.delete, ids=legacy_ids)
-                    remain = await _aio.to_thread(
-                        store.vectors_store.get,
-                        where={"$and": [
-                            {"user_id": task.user_id},
-                            {"md5": task.md5},
-                            {"generation": {"$lt": int(task.generation)}},
-                        ]},
-                        include=[],
-                    )
-                    residual = len(remain.get("ids", [])) if isinstance(remain, dict) else 1
-                    if residual:
-                        raise RuntimeError(f"旧代次仍有 {residual} 条向量未清空")
-
-                # K1：写入者未确定关闭（writing/unknown）→ 不得判 done。
-                # 查空只是观测（verified_empty_at 保留为观测字段）；
-                # 关闭证明来自执行清单。关闭 + 核验为空 → done。
+                # 评审 #3（核验顺序）：先确认写入者已全部关闭，再执行最终
+                # 清理与查空——关闭之后不可能再有协议内写入，查空才是终局
+                # 证据。写入者未关闭时只做挂起（不清理不查空）。
                 from app.services.document_index_service import _ExecutionRepository
                 if await _ExecutionRepository(session).has_open_executions(task.document_id):
                     raise WaitingWriterDeferred(
                         "存在未关闭的写入执行（waiting_writer），暂缓完成")
+
+                # K2：目标 = 本文档身份（document_id 元数据）+ 已知旧版 ID 清单；
+                # 禁止 user+md5 宽泛删除
+                if task.reason == "document_deleted":
+                    await _aio.to_thread(
+                        store.vectors_store.delete,
+                        where={"$and": [
+                            {"user_id": task.user_id},
+                            {"document_id": task.document_id},
+                        ]},
+                    )
+                    if task.legacy_chunk_count and task.legacy_chunk_count > 0:
+                        legacy_ids = [f"{task.user_id}:{task.document_id}:v1:{i}"
+                                      for i in range(task.legacy_chunk_count)]
+                        await _aio.to_thread(store.vectors_store.delete, ids=legacy_ids)
+                else:
+                    # superseded_generation：本文档 generation < 目标代次
+                    await _aio.to_thread(
+                        store.vectors_store.delete,
+                        where={"$and": [
+                            {"user_id": task.user_id},
+                            {"document_id": task.document_id},
+                            {"generation": {"$lt": int(task.generation)}},
+                        ]},
+                    )
+                    if task.legacy_chunk_count and task.legacy_chunk_count > 0:
+                        legacy_ids = [f"{task.user_id}:{task.document_id}:v1:{i}"
+                                      for i in range(task.legacy_chunk_count)]
+                        await _aio.to_thread(store.vectors_store.delete, ids=legacy_ids)
+
+                # 归属分类（读取 metadata，非 ID 差集）：
+                # - 属于本文档：必须为空（否则重试）
+                # - 明确属于其它资源（document_id 非空且不同）：不是遗留，跳过
+                # - 无 document_id 的同 md5 向量：无法归属 → blocked 待映射
+                remain_all = await _aio.to_thread(
+                    store.vectors_store.get,
+                    where={"$and": [{"user_id": task.user_id}, {"md5": task.md5}]},
+                    include=["metadatas"],
+                )
+                metas = remain_all.get("metadatas", []) if isinstance(remain_all, dict) else []
+                own_left = 0
+                unattributed = 0
+                is_superseded = task.reason == "superseded_generation"
+                target_gen = int(task.generation)
+                for m in metas:
+                    if not isinstance(m, dict):
+                        unattributed += 1
+                        continue
+                    m_doc = m.get("document_id")
+                    if m_doc == task.document_id:
+                        # superseded 任务只对旧代次（gen < target）负责：
+                        # 当前已发布代次的向量是清理的保护对象
+                        if is_superseded and int(m.get("generation", 0)) >= target_gen:
+                            continue
+                        own_left += 1
+                    elif m_doc:
+                        pass  # 明确归属其它资源：不受本任务影响
+                    else:
+                        unattributed += 1
+                if own_left:
+                    raise RuntimeError(
+                        f"本文档仍有 {own_left} 条向量残留（迟到写入，继续重试）"
+                    )
+                if unattributed:
+                    raise UnresolvedCleanupError(
+                        f"存在 {unattributed} 条无法归属的遗留向量（无 document_id 元数据），需映射处理"
+                    )
+
                 if await repo.mark_done(task.id, task.claim_token):
                     done += 1
             except WaitingWriterDeferred:

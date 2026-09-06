@@ -354,3 +354,75 @@ async def test_t09_unresolvable_legacy_vectors_blocked(env):
     tasks = await _cleanup_tasks(env)
     task = next(t for t in tasks if t.reason == "document_deleted")
     assert task.status == "blocked", "归属不清的遗留数据不得标 done"
+
+
+# ---------- 评审第四批补充回归 ----------
+
+@pytest.mark.asyncio
+async def test_t11_only_attributed_other_doc_not_blocked(env):
+    """同 MD5 存在正常 B（无遗留向量）时：A 删除清理正常 done，不进入 blocked。"""
+    from app.services.document_index_service import execute_index_document, delete_index_record
+
+    a_id, md5 = await _seed_doc(env)
+    b_id, _ = await _seed_doc(env)
+    async with env.factory() as s:
+        repo = DocumentIndexRepository(s)
+        brow = await repo.get_by_id(b_id, "u1")
+        brow.md5 = md5
+        await s.commit()
+    await execute_index_document(a_id, "u1")
+    await execute_index_document(b_id, "u1")
+
+    out = await delete_index_record(a_id, "u1")
+    assert out["state"] == "deleted"
+    await _run_cleanup_worker_once(env)
+    await _run_cleanup_worker_once(env)
+
+    tasks = await _cleanup_tasks(env)
+    task = next(t for t in tasks if t.reason == "document_deleted")
+    assert task.status == "done", "只有正常归属的其它文档时不得 blocked"
+    # B 完整
+    b_remain = env.vs.get(where={"$and": [{"user_id": "u1"}, {"document_id": b_id}]},
+                          include=[])
+    assert len(b_remain["ids"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_t06b_superseded_scoped_to_document(env):
+    """A 发布到 g2、B 保持有效 g1：A 的 superseded 任务不删除 B 的 g1 向量。"""
+    from app.services.document_index_service import execute_index_document
+
+    a_id, _ = await _seed_doc(env)
+    b_id, md5 = await _seed_doc(env)
+    async with env.factory() as s:
+        repo = DocumentIndexRepository(s)
+        brow = await repo.get_by_id(b_id, "u1")
+        brow.md5 = md5
+        await s.commit()
+
+    # A 发布到 g1，再重跑到 g2
+    await execute_index_document(a_id, "u1")
+    async with env.factory() as s:
+        repo = DocumentIndexRepository(s)
+        await repo.update_status(a_id, DocumentIndexStatus.INDEX_FAILED)
+        await repo.reset_to_pending_if_failed(a_id)
+        await s.commit()
+    await execute_index_document(a_id, "u1")
+
+    # B 的 g1 向量（同 md5、document_id=b_id）
+    env.vs.add_documents(
+        [NS(page_content="B的g1", metadata={"user_id": "u1", "md5": md5,
+                                            "document_id": b_id, "generation": 1})],
+        ids=[f"u1:{b_id}:g1:0"],
+    )
+
+    # 执行 A 的 superseded（gen=2）任务
+    await _run_cleanup_worker_once(env)
+    await _run_cleanup_worker_once(env)
+
+    tasks = await _cleanup_tasks(env)
+    sup = next(t for t in tasks if t.reason == "superseded_generation"
+               and t.document_id == a_id and t.generation == 2)
+    assert sup.status == "done"
+    b_vec = env.vs.docs.get(f"u1:{b_id}:g1:0")
+    assert b_vec is not None and b_vec["content"] == "B的g1", "B 的 g1 向量被 A 的旧代次清理误删"

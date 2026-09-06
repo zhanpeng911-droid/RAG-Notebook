@@ -369,3 +369,18 @@ K1—K5 与原 C 矩阵未全部满足。
 验证：后端全量连续 2 次 **1067 passed / 9 skipped**（无 xfail）；functional 14；
 mypy 0；ruff 通过。剩余：N3 关闭路径全覆盖（取消/崩溃/提交失败用例）、N4 worker 内
 superseded 条件收编与存量映射、N5 真实集成证据。
+
+### 收口补充返修第四批（评审 3 项误判/漏洞修复）
+
+- 误判修复：遗留向量判定改按 metadata 分类——明确归属其它资源（document_id 不同）
+  的向量不算遗留，只有无 document_id 元数据的同 md5 向量才进 blocked（T11 回归：
+  只有正常 B 时任务 done 不 blocked）。
+- superseded 目标收编：清理条件从 user+md5+gen<n 改为 user+document_id+gen<n，
+  核验范围匹配任务目标（当前已发布代次是保护对象）；T06b 回归：A 发布到 g2、B 保持
+  g1，A 的 superseded 任务执行后 B 的 g1 向量完整。
+- 核验顺序：先确认写入者全部关闭（open → defer 挂起，不清理不查空），再执行最终
+  清理与查空——关闭后协议内不可能再写入，查空才是终局证据。
+- 移除 document_deleted 残留的 other_doc 条件下 user+md5 删除（重传窗口闭合）。
+
+验证：后端全量连续 2 次 **1069 passed / 9 skipped**（无 xfail）；functional 14；
+mypy 0；ruff 通过。剩余：N3 关闭路径全覆盖、存量映射回填、N5 真实集成证据。
