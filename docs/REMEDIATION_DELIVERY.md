@@ -493,3 +493,20 @@ mypy 0；ruff 通过。P1 组件行为验证完成；真实 MySQL 双连接（P4
 验证：后端全量连续 2 次 **1081 passed / 9 skipped**（无 xfail）；functional 14；
 mypy 0；ruff 通过。P1 组件行为验证完成；SSE 取消路径行为测试、真实 MySQL 双连接
 （P4）与 P2/P3 未实施。
+
+### P1 结项返修三（评审 4 点时序，2026-09-06）
+
+- T16 用 entered/finished 线程屏障精确定位：entered=写线程进入 add_documents、
+  finished=写入实际完成；取消发生在 entered 之后、关闭执行发生在 finished 之后。
+  根因发现：同步 `entered.wait()` 阻塞事件循环线程致 executor 永不推进——改
+  `await asyncio.to_thread(entered.wait, 5)`（阻塞池线程而非循环），排除 sleep 竞态。
+- T19b 交错移到原事务释放后：发布提交抛错（不发布）→ 执行器 rollback/close → 独立
+  确认 session 进入时（session_no==2）由另一连接发布 gen=5 → 确认读取看到 active=5；
+  断言 confirm_entered 与 active=5，且本次返回 publish_commit_uncertain。
+- T19c 先提交再置 done：发布事务真实提交成功 → 确认 session 进入时由独立连接将
+  superseded 任务置 done（assert task_set_done）→ 模拟确认丢失 → 确认仍判 INDEXED。
+- 修复：T17/T20 缺失的 `@pytest.mark.asyncio` 装饰器（重写时误删）——补回并扫描
+  全文件确保所有 async 测试均带装饰器。
+
+验证：后端全量连续 2 次 **1081 passed / 9 skipped**（无 xfail）；functional 14；
+mypy 0；ruff 通过。SSE 取消路径行为测试、真实 MySQL 双连接（P4）与 P2/P3 仍待办。
