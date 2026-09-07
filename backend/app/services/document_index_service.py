@@ -390,6 +390,21 @@ async def repo_like_get_active_generation(session, doc_id: str, user_id: str):
     return result.scalar_one_or_none()
 
 
+async def repo_like_get_cleanup_task(session, doc_id: str, generation: int,
+                                         user_id: str, md5: str):
+    """读取本次发布对应的旧代次清理任务是否存在（确认发布配套持久记录）。"""
+    from sqlalchemy import select as _select
+    from app.models.cleanup_task import DocumentCleanupTask
+    result = await session.execute(
+        _select(DocumentCleanupTask.status).where(
+            DocumentCleanupTask.document_id == doc_id,
+            DocumentCleanupTask.generation == generation,
+            DocumentCleanupTask.reason == "superseded_generation",
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 async def repo_like_get_execution(session, doc_id: str, generation: int, token: str):
     """读取本次执行的持久状态（closed 才确认发布成功）。"""
     from sqlalchemy import select as _select
@@ -685,6 +700,9 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
                         v_exec = await repo_like_get_execution(
                             verify_session, document_id, generation,
                             execution_token)
+                        v_cleanup = await repo_like_get_cleanup_task(
+                            verify_session, document_id, generation,
+                            user_id, doc.md5)
                 except Exception as read_err:
                     # 新连接读取失败：不能推断回滚；保留 unknown 待协调
                     logger.error(
@@ -700,6 +718,8 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
                     and int(v_active) == int(generation)
                     and v_exec is not None
                     and v_exec == "closed"
+                    and v_cleanup is not None
+                    and v_cleanup in ("pending", "failed", "blocked", "claimed")
                 )
                 if published_ok:
                     logger.warning(

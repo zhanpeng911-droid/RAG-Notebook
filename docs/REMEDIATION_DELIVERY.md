@@ -463,3 +463,17 @@ mypy 0；ruff 通过。P1 完成；P2 读取统一、P3 存量映射、P4 真实
 验证：后端全量连续 2 次 **1078 passed / 9 skipped**（无 xfail）；functional 14；
 mypy 0；ruff 通过。P1 基础回归保留；v1/SSE 独立路径的取消/提交判定与真实 MySQL
 双连接验证仍待 P4 补齐（评审第 3 点）。
+
+### P1 结项返修（评审 4 点）
+
+- 提交确认补"对应清理任务"核验（修正此前注释与逻辑不一致）：确认条件新增
+  v_cleanup 存在（pending/failed/blocked/claimed），新增 `repo_like_get_cleanup_task`。
+- T19b（真实交错）：提交异常后、独立确认读取前由另一连接发布 gen=5（独立执行 token），
+  执行器按本次 gen/token 判定不得把 active=5 当本次成功（返回失败不伪装成功）。
+- T20（v1 独立路径取消）：v1 写入取消后执行不得伪 closed（unknown/writing）。
+- T16 偶发定位：根因是取消收尾在 except 分支内异步完成，`await task` 抛 CancelledError
+  时收尾未必已提交；改为轮询等待执行状态稳定后再断言，消除时序敏感。
+- v1/SSE 独立路径的取消/提交判定行为验证补入 P1（T20）；真实 MySQL/Chroma 归 P4。
+
+验证：后端全量连续 2 次 **1080 passed / 9 skipped**（无 xfail）；functional 14；
+mypy 0；ruff 通过。P1 组件行为验证完成；真实 MySQL 双连接（P4）与 P2/P3 未实施。

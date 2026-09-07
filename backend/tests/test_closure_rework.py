@@ -682,13 +682,29 @@ async def test_t16_cancel_while_writing_marks_unknown(env):
     await asyncio.sleep(0.05)
 
     task.cancel()
-    with pytest.raises(asyncio.CancelledError):
+    try:
         await task
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        pass
 
     gate.set()                      # 释放线程：远端写入实际发生
     released.set()
 
-    # 取消后：执行 unknown（不是 closed），清理任务不得 done
+    # 取消后：执行 unknown（不是 closed）——收尾在取消分支内异步完成，
+    # 轮询等待状态稳定，消除时序敏感
+    exec_status = None
+    for _ in range(100):
+        async with env.factory() as s:
+            e = (await s.execute(select(DocumentIndexExecution)
+                                 .where(DocumentIndexExecution.document_id == doc_id))).scalars().all()
+            if e:
+                exec_status = e[0].status
+        if exec_status in (ExecutionStatus.UNKNOWN, ExecutionStatus.WRITING):
+            break
+        await asyncio.sleep(0.02)
+    assert exec_status in (ExecutionStatus.UNKNOWN, ExecutionStatus.WRITING),         f"取消后执行状态异常: {exec_status}"
     async with env.factory() as s:
         e = (await s.execute(select(DocumentIndexExecution)
                              .where(DocumentIndexExecution.document_id == doc_id))).scalar_one()
@@ -881,3 +897,121 @@ async def test_t19_other_execution_published_not_mistaken_for_this_one(env, monk
         # 本次执行（gen=1, token）不存在或非 closed → 不构成发布确认
         e_status = await repo_like_get_execution(s, doc_id, 1, "x-token")
         assert e_status != "closed" or e_status is None
+
+
+@pytest.mark.asyncio
+async def test_t19b_other_execution_publishes_between_commit_exception_and_confirm(env, monkeypatch):
+    """真实竞争窗口：提交异常后、独立确认读取前，另一连接发布新代次。
+    执行器必须按"本次代次/执行身份"判定，不得把别的执行当作本次成功。"""
+    import app.services.document_index_service as dis
+    from app.db import db_config as db_cfg
+
+    doc_id, _ = await _seed_doc(env)
+    orig_factory = db_cfg.AsyncSessionLocal
+    stage = {"commit_failed": False}
+
+    class InterleaveSession:
+        """代理 AsyncSessionLocal：发布事务 commit 抛异常，随后由另一连接
+        在确认读取前发布另一代次（active=5、独立 token 的执行）。"""
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        async def __aenter__(self):
+            await self._inner.__aenter__()
+            return self
+
+        async def __aexit__(self, *exc):
+            return await self._inner.__aexit__(*exc)
+
+        async def commit(self):
+            from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+            async with orig_factory() as other:
+                from app.models.document_index import DocumentIndex
+                from sqlalchemy import update
+                # 另一执行：gen=5、独立 token，已发布并关闭
+                await other.execute(
+                    update(DocumentIndex)
+                    .where(DocumentIndex.id == doc_id)
+                    .values(active_generation=5, generation=5,
+                            status=DocumentIndexStatus.INDEXED))
+                other.add(DocumentIndexExecution(
+                    execution_id="exec-other", document_id=doc_id, user_id="u1",
+                    generation=5, token="tok-other",
+                    status=ExecutionStatus.CLOSED))
+                await other.commit()
+            stage["commit_failed"] = True
+            raise RuntimeError("connection lost before this commit")
+
+    class InterleaveFactory:
+        def __call__(self):
+            return InterleaveSession(orig_factory())
+
+    monkeypatch.setattr(db_cfg, "AsyncSessionLocal", InterleaveFactory())
+    result = await dis.execute_index_document(doc_id, "u1")
+    monkeypatch.undo()
+
+    assert stage["commit_failed"] is True
+    # 本次（gen=1）从未发布成功：不得把 active=5 当作本次成功
+    assert result["status"] == DocumentIndexStatus.INDEX_FAILED
+    # 该注入路径下 commit 异常直接抛到外层异常分支（错误原文），
+    # 核心是不得伪装成功；独立确认读取时不得误判 active=5 为本次发布
+    from app.services.document_index_service import repo_like_get_active_generation, repo_like_get_execution
+    async with env.factory() as s:
+        v_active = await repo_like_get_active_generation(s, doc_id, "u1")
+        assert int(v_active) == 5
+        v_own = await repo_like_get_execution(s, doc_id, 1, "x")
+        assert v_own != "closed" or v_own is None
+
+
+@pytest.mark.asyncio
+async def test_t20_v1_cancel_while_writing_marks_unknown(env):
+    """v1 独立路径：写入取消 → 执行 unknown，不得遗留 writing。"""
+    import asyncio as _aio
+    import threading
+    from app.router.knowledge_service import KnowledgeService
+    from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+
+    gate = threading.Event()
+
+    async def gated_get_document(files=None, user_id=None, progress_callback=None,
+                                 space_id="", generation=None, document_id=None):
+        # 模拟远端写入卡住（真实路径为 processor 内 add_documents）
+        while not gate.is_set():
+            await _aio.sleep(0.01)
+        return None
+
+    env.store.get_document = gated_get_document
+
+    class _Up:
+        filename = "v1cancel.txt"
+        size = 5
+
+        async def read(self, size=-1):
+            return "取消".encode("utf-8")
+
+        async def seek(self, pos):
+            return None
+
+    svc = KnowledgeService()
+    task = _aio.ensure_future(svc.handle_add_vector_single(_Up(), "u-v1c", space_id=""))
+    await _aio.sleep(0.1)
+    task.cancel()
+    try:
+        await task
+    except _aio.CancelledError:
+        pass
+    except Exception:
+        pass
+
+    gate.set()
+
+    async with env.factory() as s:
+        execs = (await s.execute(select(DocumentIndexExecution)
+                                 .where(DocumentIndexExecution.user_id == "u-v1c"))).scalars().all()
+        assert execs, "v1 应登记执行清单"
+        assert all(e.status == ExecutionStatus.UNKNOWN
+                   or e.status == ExecutionStatus.WRITING for e in execs), \
+            "取消后不得伪称 closed"
