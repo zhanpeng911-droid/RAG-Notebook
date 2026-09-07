@@ -719,7 +719,7 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
                     and v_exec is not None
                     and v_exec == "closed"
                     and v_cleanup is not None
-                    and v_cleanup in ("pending", "failed", "blocked", "claimed")
+                    and v_cleanup in ("pending", "failed", "blocked", "claimed", "done")
                 )
                 if published_ok:
                     logger.warning(

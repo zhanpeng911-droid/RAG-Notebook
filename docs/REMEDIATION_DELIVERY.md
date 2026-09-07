@@ -477,3 +477,19 @@ mypy 0；ruff 通过。P1 基础回归保留；v1/SSE 独立路径的取消/提�
 
 验证：后端全量连续 2 次 **1080 passed / 9 skipped**（无 xfail）；functional 14；
 mypy 0；ruff 通过。P1 组件行为验证完成；真实 MySQL 双连接（P4）与 P2/P3 未实施。
+
+### P1 结项返修二（评审 4 点，2026-09-06）
+
+- T19b 重写：只拦截发布提交（同一 session 内第 2 次 commit，claim 为第 1 次），
+  在抛错前由另一连接发布 gen=5；断言执行器进入独立确认分支并返回
+  publish_commit_uncertain（不得把另一执行 active=5 当本次成功）。
+- T16 恢复取消传播断言：`await task` 必须在收尾（unknown + commit）完成后重新抛出
+  CancelledError（执行器取消分支先收尾后 raise）——不再吞异常、不再轮询遇 writing 即退出。
+- 清理任务确认含 done：superseded 任务被 worker 完成 done 时，确认仍判本次发布成功
+  （此前 done 反而误判不成功）；新增 T19c 回归。
+- T20 强化：取消必须传播（pytest.raises CancelledError，不吞）；执行保留可追踪状态；
+  恢复路径验证——协调把过期 writing 标 unknown → resolve_unknown → 收敛。
+
+验证：后端全量连续 2 次 **1081 passed / 9 skipped**（无 xfail）；functional 14；
+mypy 0；ruff 通过。P1 组件行为验证完成；SSE 取消路径行为测试、真实 MySQL 双连接
+（P4）与 P2/P3 未实施。
