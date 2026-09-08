@@ -199,24 +199,47 @@ class KnowledgeService:
             return filename
 
         try:
-            await store.get_document(
-                files=[file], user_id=user_id, space_id=space_id,
-                generation=generation, document_id=document_id,
-            )
-        except Exception:
-            # 写入失败：登记行条件标记失败，保留可重试依据（不留 indexed 幽灵行）
-            await self._fail_v1_generation(file, user_id, generation, document_id)
+            try:
+                await store.get_document(
+                    files=[file], user_id=user_id, space_id=space_id,
+                    generation=generation, document_id=document_id,
+                )
+            except Exception:
+                # 写入失败：登记行条件标记失败，保留可重试依据（不留 indexed 幽灵行）
+                await self._fail_v1_generation(file, user_id, generation, document_id)
+                raise
+            published = await self._publish_v1_generation(
+                store, user_id, md5_hex, generation, document_id)
+            if not published:
+                # 评审 #5：发布被拒（删除获胜）不得返回上传成功
+                from fastapi import HTTPException as _HTTPException
+                raise _HTTPException(
+                    status_code=409,
+                    detail="文档正在删除中，上传未生效",
+                )
+            return filename
+        except asyncio.CancelledError:
+            # P1：取消时写入结果不确定，先用已持有的执行身份记录 unknown，
+            # 再继续传播原始取消；收尾失败由租约协调任务兜底。
+            try:
+                from app.db.db_config import AsyncSessionLocal
+                from app.services.document_index_service import _ExecutionRepository
+
+                async with AsyncSessionLocal() as cancel_session:
+                    await _ExecutionRepository(cancel_session).close_execution(
+                        document_id=document_id,
+                        generation=generation,
+                        token=f"v1-{document_id}-g{generation}",
+                        status="unknown",
+                        reason="v1 上传取消，远端结果未知",
+                    )
+                    await cancel_session.commit()
+            except (Exception, asyncio.CancelledError) as cleanup_error:
+                logger.warning(
+                    "【知识库】v1 取消收尾失败，交由租约协调: %s",
+                    type(cleanup_error).__name__,
+                )
             raise
-        published = await self._publish_v1_generation(
-            store, user_id, md5_hex, generation, document_id)
-        if not published:
-            # 评审 #5：发布被拒（删除获胜）不得返回上传成功
-            from fastapi import HTTPException as _HTTPException
-            raise _HTTPException(
-                status_code=409,
-                detail="文档正在删除中，上传未生效",
-            )
-        return filename
 
     @staticmethod
     async def _allocate_v1_generation_by_md5(md5_hex: str, filename: str,
@@ -318,6 +341,69 @@ class KnowledgeService:
             return generation, md5_hex, row.id
 
     @staticmethod
+    async def _recover_v1_publish_commit(session, *, user_id: str, md5_hex: str,
+                                         generation: int, document_id: str) -> bool:
+        """确认 v1 发布提交结果；未确认时保留 unknown 并返回 503。"""
+        from app.db.db_config import AsyncSessionLocal
+        from app.services.document_index_service import (
+            _ExecutionRepository,
+            confirm_publish_commit,
+        )
+
+        try:
+            await session.rollback()
+        except Exception:
+            pass
+        try:
+            await session.close()
+        except Exception:
+            pass
+
+        token = f"v1-{document_id}-g{generation}"
+        confirmed = False
+        try:
+            async with AsyncSessionLocal() as verify_session:
+                confirmed = await confirm_publish_commit(
+                    verify_session,
+                    document_id=document_id,
+                    user_id=user_id,
+                    md5=md5_hex,
+                    generation=generation,
+                    execution_token=token,
+                )
+        except Exception as read_err:
+            logger.error(
+                "【知识库】v1 发布提交确认读取失败，待协调: id=%s, error_type=%s",
+                document_id,
+                type(read_err).__name__,
+            )
+
+        if confirmed:
+            logger.warning(
+                "【知识库】v1 发布提交结果不明但持久事实已确认: id=%s, gen=%s",
+                document_id,
+                generation,
+            )
+            return True
+
+        try:
+            async with AsyncSessionLocal() as unknown_session:
+                await _ExecutionRepository(unknown_session).close_execution(
+                    document_id=document_id,
+                    generation=generation,
+                    token=token,
+                    status="unknown",
+                    reason="v1 publish commit failed, result unconfirmed",
+                )
+                await unknown_session.commit()
+        except Exception as close_err:
+            logger.warning(
+                "【知识库】v1 发布提交不确定，unknown 收尾失败: %s",
+                type(close_err).__name__,
+            )
+        raise HTTPException(status_code=503, detail="publish_commit_uncertain")
+
+    @staticmethod
     async def _publish_v1_generation(store, user_id: str, md5_hex: str, generation: int,
                                      document_id: str) -> bool:
         """条件发布 v1 代次（评审 #5）：发布被拒向上传播，不吞成上传成功。
@@ -333,7 +419,11 @@ class KnowledgeService:
         try:
             ids = await _aio.to_thread(
                 store.vectors_store.get,
-                where={"$and": [{"user_id": user_id}, {"md5": md5_hex}]},
+                where={"$and": [
+                    {"user_id": user_id},
+                    {"document_id": document_id},
+                    {"generation": int(generation)},
+                ]},
                 include=[],
             )
             chunk_count = len(ids.get("ids", [])) if isinstance(ids, dict) else 0
@@ -342,7 +432,7 @@ class KnowledgeService:
 
         async with AsyncSessionLocal() as session:
             repo = DocumentIndexRepository(session)
-            row = await repo.get_by_md5(md5_hex, user_id)
+            row = await repo.get_by_id(document_id, user_id)
             if row is None:
                 # 文档已被删除：写入者已停止，关闭自身执行记录（评审 #1）
                 from app.services.document_index_service import _ExecutionRepository
@@ -350,7 +440,16 @@ class KnowledgeService:
                     document_id=document_id, generation=generation,
                     token=f"v1-{document_id}-g{generation}",
                     status="closed", reason="document deleted before publish")
-                await session.commit()
+                try:
+                    await session.commit()
+                except Exception:
+                    return await KnowledgeService._recover_v1_publish_commit(
+                        session,
+                        user_id=user_id,
+                        md5_hex=md5_hex,
+                        generation=generation,
+                        document_id=document_id,
+                    )
                 return False
             if not await repo.publish_indexed(row.id, chunk_count=chunk_count, generation=generation):
                 from app.core.logger_handler import logger
@@ -361,7 +460,16 @@ class KnowledgeService:
                     document_id=document_id, generation=generation,
                     token=f"v1-{document_id}-g{generation}",
                     status="closed", reason="publish_rejected")
-                await session.commit()
+                try:
+                    await session.commit()
+                except Exception:
+                    return await KnowledgeService._recover_v1_publish_commit(
+                        session,
+                        user_id=user_id,
+                        md5_hex=md5_hex,
+                        generation=generation,
+                        document_id=document_id,
+                    )
                 return False
             # K1：发布成功即关闭执行（同一事务）
             from app.services.document_index_service import _ExecutionRepository
@@ -377,7 +485,16 @@ class KnowledgeService:
                     generation=generation, reason="superseded_generation",
                     legacy_chunk_count=0,
                 )
-            await session.commit()
+            try:
+                await session.commit()
+            except Exception:
+                return await KnowledgeService._recover_v1_publish_commit(
+                    session,
+                    user_id=user_id,
+                    md5_hex=md5_hex,
+                    generation=generation,
+                    document_id=document_id,
+                )
             return True
 
     @staticmethod

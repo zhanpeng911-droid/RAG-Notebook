@@ -617,6 +617,21 @@ class VectorStoreService:
         """分割文档（同步版本）—— 用于多线程场景"""
         return self.document_processor.split_documents_sync(documents)
 
-    async def get_document(self, files: list = None, user_id: str = None, progress_callback=None, space_id: str = ""):
+    async def get_document(
+            self,
+            files: list = None,
+            user_id: str = None,
+            progress_callback=None,
+            space_id: str = "",
+            generation: int = None,
+            document_id: str = None,
+    ):
         """处理文档 —— 加载、分割、向量化、存储"""
-        await self.document_processor.get_document(files, user_id, progress_callback, space_id=space_id)
+        await self.document_processor.get_document(
+            files,
+            user_id,
+            progress_callback,
+            space_id=space_id,
+            generation=generation,
+            document_id=document_id,
+        )

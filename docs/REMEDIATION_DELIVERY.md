@@ -510,3 +510,43 @@ mypy 0；ruff 通过。P1 组件行为验证完成；SSE 取消路径行为测�
 
 验证：后端全量连续 2 次 **1081 passed / 9 skipped**（无 xfail）；functional 14；
 mypy 0；ruff 通过。SSE 取消路径行为测试、真实 MySQL 双连接（P4）与 P2/P3 仍待办。
+
+### P1 组件补齐与发布提交恢复（2026-09-07，基线 b0c3ec6，未提交工作区）
+
+- **取消与迟到写入回归**：T16/T20/T21 使用真实线程屏障验证取消传播；执行进入
+  `unknown` 后，删除编排与清理 worker 在向量已迟到落地、`unknown` 未解决时不得删除
+  向量或将任务置 `done`；写线程完成后经 `resolve_unknown` 才收敛为 `done`、向量为空，
+  且执行记录为 `CLOSED`。
+- **v1 取消收尾**：v1 入口中写入处于 `writing` 时取消的红证据已固化；修复为使用已持有
+  执行身份独立标记 `unknown`，保留并传播原始 `CancelledError`。
+- **接口契约**：`VectorStoreService.get_document` 新增并透传 `generation`、`document_id`；
+  真实类调用的 TypeError 红证据已转绿。
+- **v1/SSE 发布提交不确定**：v1 与 SSE 的 commit 前/后连接丢失共 4 条红证据已转绿。
+  v1 改为按 `user_id + document_id + generation` 精确统计向量；v1/v2 共用单 SQL 完整
+  身份确认（owner、document、md5、active generation、execution token/status、
+  superseded task，含 `done`）。提交异常先 rollback/close 原会话，再独立确认；md5 在
+  事务早期复制为普通值。事实未确认时保留 `unknown`，v1 对外返回
+  `503 publish_commit_uncertain`，不误报为 `409`；真实提交已发生则返回成功且不删除新向量。
+
+验证：三文件定向回归 **49 passed**；mypy **25 source files clean**；functional 本地
+**11 passed / 3 real_api deselected**。第一轮全量 **1087 passed / 9 skipped / 无 xfail**，
+coverage **86.61%**（门槛 85%），ruff `app tests` 通过；第二轮全量已于 **2026-09-08** 重跑通过：**1087 passed / 9 skipped / 无 xfail**，耗时 **124.04s**；仅有 1 条既有 Redis `retry_on_timeout` 弃用 warning。原中断会话结果不可恢复，不计成功，以此次重跑结果为准。
+首次全量中的 8 个失败来源已区分为：4 个发布提交红证据；2 个鉴权
+测试进程配置问题（使用专用 blacklist/cache URL，Python `os.environ` 显式空字符串覆盖
+`.env`，Redis 仍为隔离的 `127.0.0.1:1`）；2 个视觉测试配置问题（`OLLAMA` 触发当前
+环境缺少依赖）。仅调整测试进程配置后，两组定向验证 **36 passed**，未修改鉴权或 vision
+业务代码。
+
+复现口径（`backend` 目录、每次独立进程）：设置 `ENV=test`、dummy `SECRET_KEY`、
+`MYSQL_HOST=127.0.0.1`/`MYSQL_PORT=1`、`REDIS_HOST=127.0.0.1`/`REDIS_PORT=1`、
+`LLM_TYPE=OLLAMA`、`VISION_MODEL_TYPE=OPENAI`、dummy `OPENAI_API_KEY`、
+`OPENAI_API_BASE=http://127.0.0.1:1/v1`、`PYTHONUTF8=1`；并在 Python `os.environ`
+中显式置 `REDIS_CACHE_URL=""`、`JWT_BLACKLIST_REDIS_URL=""`，防止 `.env` 回填。
+第一轮命令：`pytest tests -q --tb=short --cov=app --cov-report=term
+--cov-fail-under=85 --ignore=tests/functional --runxfail -p no:cacheprovider`；第二轮
+使用同一配置，将 coverage 参数替换为 `--no-cov`。
+
+本轮未做迁移、真实 MySQL/Chroma/Compose、提交或推送。仍未验证/未实施：P2 读取统一、
+P3 存量映射回填、P4 真实 MySQL + Chroma + Compose 与当前 SHA CI；领取阶段提交不确定、
+真实进程崩溃及数据库断连等场景未由本轮组件测试证明，不能据此宣称 P1 全风险结项。
+只读复审提示（非本轮复现实测）：提交结果未确认时文档可能保持 `indexing`，而现有重试重置入口仅接 `index_failed`；恢复流程需后续独立核查，本轮未扩修，也不据此声称已解决。

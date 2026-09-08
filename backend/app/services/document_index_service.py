@@ -419,6 +419,66 @@ async def repo_like_get_execution(session, doc_id: str, generation: int, token: 
     return result.scalar_one_or_none()
 
 
+async def confirm_publish_commit(session, *, document_id: str, user_id: str,
+                                md5: str, generation: int,
+                                execution_token: str) -> bool:
+    """在一个数据库快照内确认一次发布事务是否完整落库。
+
+    发布事实必须同时包含：文档归属与 md5 正确、当前代次已发布、
+    本次执行身份已关闭，以及同一文档/用户/md5/代次的 superseded 清理
+    任务已登记。清理任务允许处于 pending/failed/blocked/claimed/done，
+    因为 worker 可能已经抢占或完成它。
+
+    这是提交结果不确定时的唯一确认入口。使用一条带精确连接条件的
+    查询，避免多次独立读取混合不同时间点的事实。
+    """
+    from sqlalchemy import and_, select
+    from app.models.cleanup_task import CleanupTaskStatus, DocumentCleanupTask
+    from app.models.document_index import DocumentIndex, DocumentIndexStatus
+    from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+
+    allowed_task_statuses = (
+        CleanupTaskStatus.PENDING.value,
+        CleanupTaskStatus.FAILED.value,
+        CleanupTaskStatus.BLOCKED.value,
+        CleanupTaskStatus.CLAIMED.value,
+        CleanupTaskStatus.DONE.value,
+    )
+    result = await session.execute(
+        select(DocumentIndex.id)
+        .select_from(DocumentIndex)
+        .join(
+            DocumentIndexExecution,
+            and_(
+                DocumentIndexExecution.document_id == DocumentIndex.id,
+                DocumentIndexExecution.user_id == DocumentIndex.user_id,
+                DocumentIndexExecution.generation == generation,
+                DocumentIndexExecution.token == execution_token,
+                DocumentIndexExecution.status == ExecutionStatus.CLOSED,
+            ),
+        )
+        .join(
+            DocumentCleanupTask,
+            and_(
+                DocumentCleanupTask.document_id == DocumentIndex.id,
+                DocumentCleanupTask.user_id == DocumentIndex.user_id,
+                DocumentCleanupTask.md5 == DocumentIndex.md5,
+                DocumentCleanupTask.generation == generation,
+                DocumentCleanupTask.reason == "superseded_generation",
+                DocumentCleanupTask.status.in_(allowed_task_statuses),
+            ),
+        )
+        .where(
+            DocumentIndex.id == document_id,
+            DocumentIndex.user_id == user_id,
+            DocumentIndex.md5 == md5,
+            DocumentIndex.status == DocumentIndexStatus.INDEXED,
+            DocumentIndex.active_generation == generation,
+        )
+    )
+    return result.first() is not None
+
+
 class _ExecutionRepository:
     """执行清单仓库（K1）——登记/关闭/查询未关闭执行。"""
 
@@ -543,6 +603,9 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
                 logger.warning(f"【文档索引】文档不存在（可能已被删除），跳过: id={document_id}")
                 return {"status": DocumentIndexStatus.INDEX_FAILED,
                         "retryable": False, "error": "document_not_found"}
+            # 提交异常后原 ORM 会话会 rollback/close；后续确认只能使用这些
+            # 已复制的普通值，不能再读取可能失效的 doc 属性。
+            document_md5 = str(doc.md5)
 
             # 原子抢占 INDEXING（仅 pending_index 可进入），同时取得执行代次
             generation = await repo.claim_for_indexing(document_id)
@@ -579,7 +642,7 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
 
             # 加载文档
             documents = await store.get_file_document(
-                doc.file_path, md5=doc.md5, user_id=user_id
+                doc.file_path, md5=document_md5, user_id=user_id
             )
             if not documents:
                 if not await repo.mark_index_failed_if_indexing(
@@ -605,7 +668,7 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
             for d in documents:
                 d.metadata['user_id'] = user_id
                 d.metadata['original_filename'] = doc.original_filename
-                d.metadata['md5'] = doc.md5
+                d.metadata['md5'] = document_md5
                 d.metadata['space_id'] = doc.space_id or ''
                 d.metadata['generation'] = int(generation)
                 d.metadata['document_id'] = document_id
@@ -641,7 +704,7 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
             )
 
             # 保存 MD5 记录
-            await store.save_md5_hex(doc.md5, doc.filename, doc.original_filename, user_id)
+            await store.save_md5_hex(document_md5, doc.filename, doc.original_filename, user_id)
 
             # 条件发布 indexed：状态仍为 indexing 且代次匹配（执行身份）
             if not await repo.publish_indexed(
@@ -665,7 +728,7 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
             cleanup_repo = CleanupTaskRepository(session)
             async with session.begin_nested():
                 await cleanup_repo.create_task(
-                    document_id=document_id, user_id=user_id, md5=doc.md5,
+                    document_id=document_id, user_id=user_id, md5=document_md5,
                     generation=generation, reason="superseded_generation",
                     legacy_chunk_count=legacy_chunk_count,
                 )
@@ -676,9 +739,8 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
             try:
                 await session.commit()
             except Exception as commit_err:
-                # P1：提交结果不明。先收尾本事务连接（回滚并关闭，释放可能
-                # 持有的行锁——不能假定提交异常必然已回滚，也不能用同一
-                # session 阻塞后续协调），再用独立短会话读取持久事实判定。
+                # P1：提交结果不明。先释放发布会话，再以单查询在独立
+                # 会话内核对本次文档/代次/执行身份/清理任务的完整事实。
                 commit_err_msg = str(commit_err)[:200]
                 try:
                     await session.rollback()
@@ -689,38 +751,24 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
                 except Exception:
                     pass
 
-                # 独立会话协调：确认按 文档状态 + 本次代次 + active_generation
-                # + 执行身份（本次 generation/token） + 对应清理任务 是否一致
                 try:
                     async with AsyncSessionLocal() as verify_session:
-                        v_status = await repo_like_get_status(
-                            verify_session, document_id, user_id)
-                        v_active = await repo_like_get_active_generation(
-                            verify_session, document_id, user_id)
-                        v_exec = await repo_like_get_execution(
-                            verify_session, document_id, generation,
-                            execution_token)
-                        v_cleanup = await repo_like_get_cleanup_task(
-                            verify_session, document_id, generation,
-                            user_id, doc.md5)
+                        published_ok = await confirm_publish_commit(
+                            verify_session,
+                            document_id=document_id,
+                            user_id=user_id,
+                            md5=document_md5,
+                            generation=generation,
+                            execution_token=execution_token,
+                        )
                 except Exception as read_err:
                     # 新连接读取失败：不能推断回滚；保留 unknown 待协调
                     logger.error(
                         f"【文档索引】提交确认读取失败，待协调: id={document_id}, "
                         f"error={str(read_err)[:200]}"
                     )
-                    return {"status": DocumentIndexStatus.INDEX_FAILED,
-                            "retryable": True, "error": "publish_commit_uncertain"}
+                    published_ok = False
 
-                published_ok = (
-                    v_status == DocumentIndexStatus.INDEXED
-                    and v_active is not None
-                    and int(v_active) == int(generation)
-                    and v_exec is not None
-                    and v_exec == "closed"
-                    and v_cleanup is not None
-                    and v_cleanup in ("pending", "failed", "blocked", "claimed", "done")
-                )
                 if published_ok:
                     logger.warning(
                         f"【文档索引】发布事务确认丢失但事实已提交: id={document_id}, "
@@ -797,6 +845,102 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
                 current = None
             return {"status": current or DocumentIndexStatus.INDEX_FAILED,
                     "retryable": False, "error": error_msg[:200]}
+
+
+async def reconcile_index_execution(*, document_id: str, user_id: str,
+                                        generation: int,
+                                        execution_token: str) -> dict:
+    """N1 恢复编排：把"提交未确认、执行已核验停止"的悬挂索引恢复到可重试协议。
+
+    恢复判定表（方案 §5.2）：
+    - 执行未关闭（writing/unknown 未证明停止）→ waiting，不恢复；
+    - 确认已发布（confirm_publish_commit）→ published，幂等不重置；
+    - 文档已不在本次 indexing（删除/新代次/其它状态）→ conflict，不覆盖；
+    - 执行 closed + 确认未发布 + 文档仍为本次 indexing → 条件恢复 index_failed，
+      使现有重试协议（Celery 重试 / Beat 补偿 / reindex / 前端按钮）可接手。
+    原文件缺失 → error_message 注明 needs_reupload；文件存在 → 可直接走重试。
+
+    所有变更用带 owner/document/generation/源状态 的条件更新，两个恢复者
+    同时操作最多一方推进（rowcount）；重放不会重复分配代次。
+    """
+    from sqlalchemy import and_, select, update
+    from app.models.document_index import DocumentIndex, DocumentIndexStatus
+    from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+    from datetime import datetime, timezone
+    import os as _os
+    from app.db.db_config import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as session:
+        # 1) 执行身份：必须已关闭（人工核验停止证明）才可恢复
+        exec_result = await session.execute(
+            select(DocumentIndexExecution.status).where(and_(
+                DocumentIndexExecution.document_id == document_id,
+                DocumentIndexExecution.user_id == user_id,
+                DocumentIndexExecution.generation == generation,
+                DocumentIndexExecution.token == execution_token,
+            ))
+        )
+        exec_status = exec_result.scalar_one_or_none()
+        if exec_status != ExecutionStatus.CLOSED.value:
+            await session.commit()
+            return {"outcome": "waiting",
+                    "message": "执行未关闭，等待核验停止证明"}
+
+        # 2) 确认发布事实：已发布则幂等返回，不重置不删向量
+        from app.models.document_index import DocumentIndex as _DI
+        doc_result = await session.execute(
+            select(_DI.md5, _DI.status, _DI.generation, _DI.file_path).where(and_(
+                _DI.id == document_id, _DI.user_id == user_id))
+        )
+        doc_row = doc_result.one_or_none()
+        if doc_row is None:
+            await session.commit()
+            return {"outcome": "gone", "message": "文档不存在（已删除），不恢复"}
+        doc_md5, doc_status, doc_gen, file_path = doc_row
+
+        if doc_status == DocumentIndexStatus.INDEXED.value                 and int(doc_gen or 0) == int(generation):
+            # 已发布：确认发布事实完整
+            published_ok = await confirm_publish_commit(
+                session, document_id=document_id, user_id=user_id,
+                md5=doc_md5, generation=generation,
+                execution_token=execution_token)
+            await session.commit()
+            if published_ok:
+                return {"outcome": "published",
+                        "message": "确认已发布，保持现状（幂等）"}
+
+        # 3) 文档必须仍为本次 indexing 才恢复（删除/新代次/其它状态 → 冲突不覆盖）
+        if doc_status != DocumentIndexStatus.INDEXING.value                 or int(doc_gen or 0) != int(generation):
+            await session.commit()
+            return {"outcome": "conflict",
+                    "message": f"文档状态/代次已变化（{doc_status}/gen={doc_gen}），不覆盖"}
+
+        # 4) 条件恢复 index_failed（带 owner/document/源状态/代次条件）
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        has_file = bool(file_path) and _os.path.exists(file_path)
+        error_note = ("publish commit unconfirmed, writer verified stopped"
+                      if has_file else
+                      "publish commit unconfirmed; 原文件缺失，需要重新上传")
+        result = await session.execute(
+            update(DocumentIndex)
+            .where(and_(
+                DocumentIndex.id == document_id,
+                DocumentIndex.user_id == user_id,
+                DocumentIndex.status == DocumentIndexStatus.INDEXING,
+                DocumentIndex.generation == int(generation),
+            ))
+            .values(
+                status=DocumentIndexStatus.INDEX_FAILED,
+                error_message=error_note,
+                updated_at=now,
+            )
+        )
+        await session.commit()
+        if result.rowcount == 0:
+            return {"outcome": "conflict",
+                    "message": "恢复条件未命中（并发删除/新代次/其它恢复者已推进）"}
+        return {"outcome": "needs_reupload" if not has_file else "recovered",
+                "message": error_note}
 
 
 async def _sync_index(document_id: str, user_id: str) -> DocumentIndexStatus:

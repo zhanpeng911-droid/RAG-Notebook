@@ -147,6 +147,27 @@ async def _run_cleanup_worker_once(env, limit=20):
     return await _process_cleanup_tasks_async(limit)
 
 
+def _patch_real_sse_event(monkeypatch):
+    """conftest 将 sse_models 放入 MagicMock；行为测试注入真实序列化类。"""
+    import importlib.util
+    from pathlib import Path
+    import app.router.knowledge_service as ks
+
+    path = Path(__file__).resolve().parents[1] / "app" / "rag" / "sse_models.py"
+    spec = importlib.util.spec_from_file_location("_closure_real_sse_models", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(ks.sse, "SSEEvent", module.SSEEvent)
+    return ks
+
+
+def _sse_payload(event):
+    import json
+    data = next(line[6:] for line in event.splitlines() if line.startswith("data:"))
+    return json.loads(data)
+
+
 # ---------- T01：两次查空之后旧写入者才写入，任务不得 done ----------
 
 @pytest.mark.asyncio
@@ -652,16 +673,19 @@ async def test_t15_record_deleted_before_write_failure_still_converges(env):
 
 @pytest.mark.asyncio
 async def test_t16_cancel_while_writing_marks_unknown(env):
-    """上传协程取消但线程仍可能继续写：执行标 unknown、不 done；关闭后收敛。
+    """取消后，真实删除编排与清理 worker 仍要等待迟到写入者收敛。
 
-    用 entered/finished 线程屏障精确定位：entered 表示写线程已进入远端写入，
-    finished 表示写入已实际完成——取消发生在 entered 之后、关闭执行发生在
-    finished 之后，排除 sleep 残留竞态。"""
+    ``entered``/``finished`` 是线程屏障，不用同步 sleep：取消发生在远端
+    ``add_documents`` 已进入但尚未返回时；删除先获胜并删除 SQL 行，随后放行
+    线程产生迟到向量。只有人工解决 unknown 后，持久清理任务才允许 done。
+    """
     import threading
     import asyncio
     from app.services.document_index_service import execute_index_document
     from app.services.document_index_service import _ExecutionRepository
     from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+    from app.services.document_index_service import delete_index_record
+    from app.models.cleanup_task import DocumentCleanupTask
 
     doc_id, _ = await _seed_doc(env)
     entered = threading.Event()
@@ -672,8 +696,8 @@ async def test_t16_cancel_while_writing_marks_unknown(env):
 
     def gated_add(docs, ids=None, **kwargs):
         entered.set()               # 写线程已进入 add_documents
-        release.wait(timeout=5)     # 阻塞，直到主线程确认 entered 后放行
         try:
+            assert release.wait(timeout=5), "测试未在 5 秒内放行写线程"
             return real_add(docs, ids=ids, **kwargs)
         finally:
             finished.set()          # 写线程已完成（远端写入确已完成）
@@ -681,32 +705,68 @@ async def test_t16_cancel_while_writing_marks_unknown(env):
     env.vs.add_documents = gated_add
 
     task = asyncio.ensure_future(execute_index_document(doc_id, "u1"))
-    # 屏障等待不得阻塞事件循环线程（executor 在同一循环运行）：
-    # 用 to_thread 阻塞池线程，等写线程进入 add_documents
-    await asyncio.to_thread(entered.wait, 5)
-    assert entered.is_set(), "写线程未进入 add_documents"
-    async with env.factory() as s:
-        e = (await s.execute(select(DocumentIndexExecution)
-                             .where(DocumentIndexExecution.document_id == doc_id))).scalar_one()
-        assert e.status == ExecutionStatus.WRITING
 
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    async with env.factory() as s:
-        e = (await s.execute(select(DocumentIndexExecution)
-                             .where(DocumentIndexExecution.document_id == doc_id))).scalar_one()
-        assert e.status == ExecutionStatus.UNKNOWN
+    async def wait_for_writer_started():
+        # 屏障等待不得阻塞事件循环线程（executor 在同一循环运行）。
+        await asyncio.to_thread(entered.wait, 5)
+        assert entered.is_set(), "写线程未进入 add_documents"
+        assert not finished.is_set(), "取消前写线程不应已完成"
+        async with env.factory() as s:
+            e = (await s.execute(select(DocumentIndexExecution)
+                                 .where(DocumentIndexExecution.document_id == doc_id))).scalar_one()
+            assert e.status == ExecutionStatus.WRITING
+            return e.execution_id, e.generation
 
-    release.set()                   # 放行写线程：远端写入实际发生
-    await asyncio.to_thread(finished.wait, 5)
-    assert finished.is_set(), "写线程未完成"
+    try:
+        execution_id, generation = await wait_for_writer_started()
+    except BaseException:
+        release.set()
+        await asyncio.to_thread(finished.wait, 5)
+        raise
+
+    try:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        async with env.factory() as s:
+            e = (await s.execute(select(DocumentIndexExecution)
+                                 .where(DocumentIndexExecution.execution_id == execution_id))).scalar_one()
+            assert e.status == ExecutionStatus.UNKNOWN
+
+        # 删除必须发生在迟到线程放行之前，这样清理队列才有真实残留可处理。
+        out = await delete_index_record(doc_id, "u1")
+        assert out["state"] == "deleted"
+        await _run_cleanup_worker_once(env)
+        async with env.factory() as s:
+            task_row = (await s.execute(select(DocumentCleanupTask))).scalar_one()
+            assert task_row.status != "done", "unknown 写入者未解决前不得完成清理"
+    finally:
+        release.set()
+        await asyncio.to_thread(finished.wait, 5)
+    assert finished.is_set(), "写线程未完成，测试不得放行清理"
+
+    # 迟到写入确实落地，且仍因 unknown 被清理门阻挡。
+    late_id = f"u1:{doc_id}:g{generation}:0"
+    assert late_id in env.vs.docs
+    await _run_cleanup_worker_once(env)
+    async with env.factory() as s:
+        task_row = (await s.execute(select(DocumentCleanupTask))).scalar_one()
+        assert task_row.status != "done"
+    assert late_id in env.vs.docs
 
     async with env.factory() as s:
-        assert await _ExecutionRepository(s).close_execution(
-            document_id=doc_id, generation=e.generation, token=e.token,
-            status="closed", reason="writer finished after cancel")
+        assert await _ExecutionRepository(s).resolve_unknown(
+            execution_id, "取消后线程已结束，确认远端写入可清理")
         await s.commit()
+    await _run_cleanup_worker_once(env)
+    async with env.factory() as s:
+        task_row = (await s.execute(select(DocumentCleanupTask))).scalar_one()
+        assert task_row.status == "done"
+        execution = (await s.execute(
+            select(DocumentIndexExecution)
+            .where(DocumentIndexExecution.execution_id == execution_id))).scalar_one()
+        assert execution.status == ExecutionStatus.CLOSED
+    assert late_id not in env.vs.docs
 
 
 
@@ -957,20 +1017,48 @@ async def test_t19b_other_execution_publishes_between_commit_exception_and_confi
 
 @pytest.mark.asyncio
 async def test_t20_v1_cancel_while_writing_marks_unknown(env):
-    """v1 独立路径：写入取消 → 执行 unknown，不得遗留 writing。"""
+    """v1 真实服务取消后，迟到向量经删除编排最终可清理。"""
     import asyncio as _aio
     import threading
+    import hashlib
     from app.router.knowledge_service import KnowledgeService
     from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+    from app.models.cleanup_task import DocumentCleanupTask
     from app.services.document_index_service import _ExecutionRepository
+    from app.services.document_index_service import delete_index_record
 
-    gate = threading.Event()
+    user_id = "u-v1c"
+    content = "取消"
+    doc_id, _ = await _seed_doc(env, user_id=user_id)
+    content_md5 = hashlib.md5(content.encode("utf-8")).hexdigest()
+    async with env.factory() as s:
+        row = await DocumentIndexRepository(s).get_by_id(doc_id, user_id)
+        row.md5 = content_md5
+        await s.commit()
+
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
 
     async def gated_get_document(files=None, user_id=None, progress_callback=None,
                                  space_id="", generation=None, document_id=None):
-        # 模拟远端写入卡住（真实路径为 processor 内 add_documents）
-        while not gate.is_set():
-            await _aio.sleep(0.01)
+        def write_late_vector():
+            entered.set()
+            try:
+                assert release.wait(timeout=5), "测试未在 5 秒内放行写线程"
+                env.vs.add_documents(
+                    [NS(page_content="v1迟到", metadata={
+                        "user_id": user_id,
+                        "md5": content_md5,
+                        "document_id": document_id,
+                        "generation": int(generation),
+                    })],
+                    ids=[f"{user_id}:{document_id}:g{generation}:0"],
+                )
+            finally:
+                finished.set()
+
+        await _aio.to_thread(write_late_vector)
         return None
 
     env.store.get_document = gated_get_document
@@ -980,53 +1068,86 @@ async def test_t20_v1_cancel_while_writing_marks_unknown(env):
         size = 5
 
         async def read(self, size=-1):
-            return "取消".encode("utf-8")
+            return content.encode("utf-8")
 
         async def seek(self, pos):
             return None
 
     svc = KnowledgeService()
-    task = _aio.ensure_future(svc.handle_add_vector_single(_Up(), "u-v1c", space_id=""))
-    await _aio.sleep(0.1)
-    task.cancel()
-    # 取消必须传播（不吞）；v1 无独立取消收尾 → 执行停在可追踪的 writing
-    with pytest.raises(_aio.CancelledError):
-        await task
+    task = _aio.ensure_future(svc.handle_add_vector_single(_Up(), user_id, space_id=""))
 
-    gate.set()
+    async def wait_for_v1_writer_started():
+        await _aio.to_thread(entered.wait, 5)
+        assert entered.is_set(), "v1 写线程未进入向量写入"
+        assert not finished.is_set(), "取消前写线程不应已完成"
+        async with env.factory() as s:
+            e = (await s.execute(select(DocumentIndexExecution)
+                                 .where(DocumentIndexExecution.document_id == doc_id))).scalar_one()
+            assert e.status == ExecutionStatus.WRITING
+            return e.execution_id, e.generation
 
+    try:
+        execution_id, generation = await wait_for_v1_writer_started()
+    except BaseException:
+        release.set()
+        await _aio.to_thread(finished.wait, 5)
+        raise
+
+    try:
+        task.cancel()
+        # 取消必须传播（不吞）；v1 入口也必须将不确定写入标为 unknown。
+        with pytest.raises(_aio.CancelledError):
+            await task
+
+        async with env.factory() as s:
+            execs = (await s.execute(select(DocumentIndexExecution)
+                                     .where(DocumentIndexExecution.execution_id == execution_id))).scalars().all()
+            assert execs, "v1 应登记执行清单"
+            assert execs[0].status == ExecutionStatus.UNKNOWN, \
+                "取消后的 v1 执行必须进入 unknown"
+
+        # 删除必须先于迟到写入，确保清理 worker 有真实残留向量可处理。
+        out = await delete_index_record(doc_id, user_id)
+        assert out["state"] == "deleted"
+        await _run_cleanup_worker_once(env)
+        async with env.factory() as s:
+            task_row = (await s.execute(select(DocumentCleanupTask))).scalar_one()
+            assert task_row.status != "done", "取消/失联执行未解决前清理不得 done"
+    finally:
+        release.set()
+        await _aio.to_thread(finished.wait, 5)
+    assert finished.is_set(), "v1 写线程未完成，测试不得放行恢复"
+    late_id = f"{user_id}:{doc_id}:g{generation}:0"
+    assert late_id in env.vs.docs
+
+    # unknown 仍未解决时，清理不得丢失迟到向量。
+    await _run_cleanup_worker_once(env)
     async with env.factory() as s:
-        execs = (await s.execute(select(DocumentIndexExecution)
-                                 .where(DocumentIndexExecution.user_id == "u-v1c"))).scalars().all()
-        assert execs, "v1 应登记执行清单"
-        assert all(e.status == ExecutionStatus.UNKNOWN
-                   or e.status == ExecutionStatus.WRITING for e in execs),             "取消后不得伪称 closed"
-        exec_id = execs[0].execution_id
+        task_row = (await s.execute(select(DocumentCleanupTask))).scalar_one()
+        assert task_row.status != "done"
+    assert late_id in env.vs.docs
 
-    # 恢复路径：协调把过期 writing 标 unknown → resolve → 可收敛
-    from datetime import datetime, timedelta, timezone
-    from app.models.index_execution import DocumentIndexExecution as _E
-    from sqlalchemy import update as _upd
-    async with env.factory() as s:
-        await s.execute(_upd(_E).where(_E.execution_id == exec_id)
-                        .values(lease_expires_at=datetime.now(timezone.utc).replace(tzinfo=None)
-                                - timedelta(minutes=5)))
-        await s.commit()
-        repo = _ExecutionRepository(s)
-        marked = await repo.mark_expired_writers_unknown(limit=10)
-        await s.commit()
-        assert marked == 1
+    # 人工核验关闭 unknown 后，清理任务才可收敛。
     async with env.factory() as s:
         assert await _ExecutionRepository(s).resolve_unknown(
-            exec_id, "维护窗口核验：远端无残留")
+            execution_id, "取消后线程已结束，确认远端写入可清理")
         await s.commit()
+    await _run_cleanup_worker_once(env)
+    async with env.factory() as s:
+        task_row = (await s.execute(select(DocumentCleanupTask))).scalar_one()
+        assert task_row.status == "done"
+        execution = (await s.execute(
+            select(DocumentIndexExecution)
+            .where(DocumentIndexExecution.execution_id == execution_id))).scalar_one()
+        assert execution.status == ExecutionStatus.CLOSED
+    assert late_id not in env.vs.docs
 
 
 @pytest.mark.asyncio
 async def test_t19c_cleanup_already_done_still_confirms_publish(env, monkeypatch):
-    """提交成功 → 确认丢失，且对应清理任务已被 worker 完成 done：
-    确认不得因任务为 done 而误判发布未成功。任务置 done 必须发生在
-    发布事务真正提交之后（独立连接才能看到该任务）。"""
+    """提交成功 → 确认丢失，且对应清理任务已被独立连接置为 done：
+    确认不得因任务为 done 而误判发布未成功。置 done 必须发生在发布
+    事务真正提交之后（独立连接才能看到该任务）。"""
     import app.services.document_index_service as dis
     from app.db import db_config as db_cfg
 
@@ -1085,3 +1206,408 @@ async def test_t19c_cleanup_already_done_still_confirms_publish(env, monkeypatch
     assert result["status"] == DocumentIndexStatus.INDEXED
 
 
+@pytest.mark.asyncio
+async def test_t21_sse_cancel_late_write_cleanup_converges(env, monkeypatch):
+    """真实 SSE 消费取消：无 completed，迟到向量经删除/核验后清理收敛。"""
+    import asyncio
+    import hashlib
+    import threading
+
+    ks = _patch_real_sse_event(monkeypatch)
+    from app.models.cleanup_task import DocumentCleanupTask
+    from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+    from app.router.knowledge_service import ProcessingState
+    from app.services.document_index_service import _ExecutionRepository, delete_index_record
+
+    user_id = "u-sse-cancel"
+    content = "SSE取消"
+    doc_id, _ = await _seed_doc(env, user_id=user_id)
+    md5 = hashlib.md5(content.encode("utf-8")).hexdigest()
+    async with env.factory() as s:
+        row = await DocumentIndexRepository(s).get_by_id(doc_id, user_id)
+        row.md5 = md5
+        await s.commit()
+
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    real_add = env.vs.add_documents
+
+    def gated_add(docs, ids=None, **kwargs):
+        entered.set()
+        try:
+            assert release.wait(timeout=5), "SSE 写线程未在 5 秒内放行"
+            return real_add(docs, ids=ids, **kwargs)
+        finally:
+            finished.set()
+
+    env.vs.add_documents = gated_add
+
+    class FakeQueue:
+        def __init__(self, item):
+            self.item = item
+
+        def get(self, block=True, timeout=0.1):
+            if self.item is None:
+                raise RuntimeError("queue exhausted")
+            item, self.item = self.item, None
+            return item
+
+        def task_done(self):
+            return None
+
+    result = NS(
+        success=True,
+        file_index=1,
+        filename="sse-cancel.txt",
+        documents=[NS(page_content="SSE迟到", metadata={})],
+        md5=md5,
+        chunk_count=1,
+    )
+    state = ProcessingState(total_files=1, total_valid=1)
+    svc = ks.KnowledgeService()
+    events = []
+
+    async def consume():
+        async for event in svc._process_slice_results(
+                FakeQueue(result), 1, env.store, state, user_id):
+            events.append(event)
+
+    task = asyncio.ensure_future(consume())
+
+    async def wait_for_sse_writer_started():
+        await asyncio.to_thread(entered.wait, 5)
+        assert entered.is_set(), "SSE 写线程未进入向量写入"
+        assert not finished.is_set(), "取消前 SSE 写线程不应已完成"
+        async with env.factory() as s:
+            execution = (await s.execute(
+                select(DocumentIndexExecution)
+                .where(DocumentIndexExecution.document_id == doc_id))).scalar_one()
+            assert execution.status == ExecutionStatus.WRITING
+            return execution.execution_id, execution.generation
+
+    try:
+        execution_id, generation = await wait_for_sse_writer_started()
+    except BaseException:
+        release.set()
+        await asyncio.to_thread(finished.wait, 5)
+        raise
+
+    try:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        payloads = [_sse_payload(event) for event in events]
+        assert "completed" not in [p.get("step") for p in payloads]
+
+        async with env.factory() as s:
+            execution = (await s.execute(
+                select(DocumentIndexExecution)
+                .where(DocumentIndexExecution.execution_id == execution_id))).scalar_one()
+            assert execution.status == ExecutionStatus.UNKNOWN, \
+                "SSE 取消不得伪称执行已 closed"
+
+        # 真实删除编排先删除 SQL 行；迟到线程随后写入，交给持久清理任务。
+        out = await delete_index_record(doc_id, user_id)
+        assert out["state"] == "deleted"
+        await _run_cleanup_worker_once(env)
+        async with env.factory() as s:
+            task_row = (await s.execute(select(DocumentCleanupTask))).scalar_one()
+            assert task_row.status != "done"
+    finally:
+        release.set()
+        await asyncio.to_thread(finished.wait, 5)
+    assert finished.is_set(), "SSE 写线程未完成"
+    late_id = f"{user_id}:{doc_id}:g{generation}:0"
+    assert late_id in env.vs.docs
+
+    # unknown 未解决时仍不得清理迟到向量。
+    await _run_cleanup_worker_once(env)
+    async with env.factory() as s:
+        task_row = (await s.execute(select(DocumentCleanupTask))).scalar_one()
+        assert task_row.status != "done", "unknown 未解决前清理不得 done"
+    assert late_id in env.vs.docs
+
+    async with env.factory() as s:
+        assert await _ExecutionRepository(s).resolve_unknown(
+            execution_id, "SSE 线程已结束，确认远端写入可清理")
+        await s.commit()
+    await _run_cleanup_worker_once(env)
+    async with env.factory() as s:
+        task_row = (await s.execute(select(DocumentCleanupTask))).scalar_one()
+        assert task_row.status == "done"
+        execution = (await s.execute(
+            select(DocumentIndexExecution)
+            .where(DocumentIndexExecution.execution_id == execution_id))).scalar_one()
+        assert execution.status == ExecutionStatus.CLOSED
+    assert late_id not in env.vs.docs
+
+
+@pytest.mark.asyncio
+async def test_t21_vector_store_forwards_generation_and_document_id(monkeypatch):
+    """真实 VectorStoreService 契约：代次/文档身份必须原样透传 processor。"""
+    import importlib.util
+    from pathlib import Path
+    import sys
+    from types import ModuleType
+
+    path = Path(__file__).resolve().parents[1] / "app" / "rag" / "vector_store.py"
+    # 只替换真实类导入时的重量依赖；被测 VectorStoreService 本身仍来自源码。
+    hybrid = ModuleType("app.rag.retrievers.hybrid_retriever")
+    hybrid.HybridRetriever = type("HybridRetriever", (), {})
+    md5 = ModuleType("app.rag.md5_manager")
+    md5.MD5Store = type("MD5Store", (), {})
+    handler = ModuleType("app.rag.document_handler")
+    handler.DocumentProcessor = type("DocumentProcessor", (), {})
+    factory = ModuleType("app.utils.factory")
+    factory.embed_model = object()
+    for name, module_stub in {
+        "app.rag.retrievers.hybrid_retriever": hybrid,
+        "app.rag.md5_manager": md5,
+        "app.rag.document_handler": handler,
+        "app.utils.factory": factory,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module_stub)
+
+    spec = importlib.util.spec_from_file_location(
+        "app.rag._closure_real_vector_store", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    calls = []
+
+    class Processor:
+        async def get_document(self, *args, **kwargs):
+            calls.append((args, kwargs))
+
+    service = object.__new__(module.VectorStoreService)
+    service.document_processor = Processor()
+    await service.get_document(
+        files=["file"], user_id="u-contract", progress_callback="progress",
+        space_id="sp-contract", generation=7, document_id="doc-contract")
+    assert calls == [(
+        (["file"], "u-contract", "progress"),
+        {"space_id": "sp-contract", "generation": 7,
+         "document_id": "doc-contract"},
+    )]
+
+
+# ---------- N1：提交未确认后文档停在 indexing 的恢复链 ----------
+
+@pytest.mark.asyncio
+async def test_n1_01_indexing_stuck_after_uncertain_commit(env):
+    """红证据：发布提交未落库 → 文档停在 indexing → 现有重试入口全部无法恢复。"""
+    from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+    from app.models.document_index import DocumentIndexStatus
+
+    doc_id, _ = await _seed_doc(env)
+    # 构造：claim 已提交（文档 indexing、generation=1）+ execution unknown
+    async with env.factory() as s:
+        repo = DocumentIndexRepository(s)
+        await repo.update_status(doc_id, DocumentIndexStatus.INDEXING)
+        row = await repo.get_by_id(doc_id, "u1")
+        row.generation = 1
+        s.add(DocumentIndexExecution(
+            execution_id="exec-n1", document_id=doc_id, user_id="u1",
+            generation=1, token="tok-n1", status=ExecutionStatus.UNKNOWN))
+        await s.commit()
+
+    # 现有重试入口逐一验证无法接手：
+    # a) Celery 的 retryable 分支 reset_to_pending_if_failed 只认 index_failed
+    async with env.factory() as s:
+        assert await DocumentIndexRepository(s).reset_to_pending_if_failed(doc_id) is False
+    # b) reindex_document 只接受 failed/pending
+    from app.services.document_index_service import reindex_document
+    res = await reindex_document(doc_id, "u1")
+    assert res["success"] is False and "不允许" in res["message"]
+
+    # 文档仍卡在 indexing：无法恢复（红）
+    async with env.factory() as s:
+        row = await DocumentIndexRepository(s).get_by_id(doc_id, "u1")
+        assert row.status == DocumentIndexStatus.INDEXING
+
+
+# ---------- N1 绿路径：reconcile 恢复 ----------
+
+@pytest.mark.asyncio
+async def test_n1_01_reconcile_recovers_stuck_indexing(env, monkeypatch):
+    """执行已核验关闭 + 确认未发布 + 文档仍 indexing → reconcile 恢复
+    index_failed → 现有重试协议可接手 → 新代次只领取一次并成功发布。"""
+    from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+    from app.models.document_index import DocumentIndexStatus
+    from app.services.document_index_service import (
+        reconcile_index_execution, _ExecutionRepository, execute_index_document)
+
+    doc_id, _ = await _seed_doc(env)
+    async with env.factory() as s:
+        repo = DocumentIndexRepository(s)
+        await repo.update_status(doc_id, DocumentIndexStatus.INDEXING)
+        row = await repo.get_by_id(doc_id, "u1")
+        row.generation = 1
+        s.add(DocumentIndexExecution(
+            execution_id="exec-n1b", document_id=doc_id, user_id="u1",
+            generation=1, token="tok-n1b", status=ExecutionStatus.UNKNOWN))
+        await s.commit()
+
+    # 未核验（execution 仍 unknown）→ waiting，不恢复
+    out = await reconcile_index_execution(
+        document_id=doc_id, user_id="u1", generation=1, execution_token="tok-n1b")
+    assert out["outcome"] == "waiting"
+
+    # 人工核验停止 → resolve_unknown 关闭执行
+    async with env.factory() as s:
+        assert await _ExecutionRepository(s).resolve_unknown(
+            "exec-n1b", "维护窗口核验：远端无残留写入")
+        await s.commit()
+
+    # reconcile → recovered（原文件存在），文档回 index_failed
+    out2 = await reconcile_index_execution(
+        document_id=doc_id, user_id="u1", generation=1, execution_token="tok-n1b")
+    assert out2["outcome"] == "recovered"
+    async with env.factory() as s:
+        row = await DocumentIndexRepository(s).get_by_id(doc_id, "u1")
+        assert row.status == DocumentIndexStatus.INDEX_FAILED
+        assert "unconfirmed" in (row.error_message or "")
+
+    # 现有重试协议接手：reindex 的条件重置（index_failed→pending）→ 领取
+    # → 新代次只领取一次并成功发布
+    add_calls = []
+    orig_add = env.vs.add_documents
+
+    def spy_add(docs, ids=None, **kwargs):
+        add_calls.append(ids)
+        return orig_add(docs, ids=ids, **kwargs)
+
+    env.vs.add_documents = spy_add
+    # reindex 会 delay；此处用其内部同一条件重置路径（方案允许参数化组件矩阵）
+    async with env.factory() as s:
+        repo = DocumentIndexRepository(s)
+        assert await repo.reset_to_pending_if_retryable(doc_id)
+        await s.commit()
+    res = await execute_index_document(doc_id, "u1")
+    assert res["status"] == DocumentIndexStatus.INDEXED
+    async with env.factory() as s:
+        row = await DocumentIndexRepository(s).get_by_id(doc_id, "u1")
+        assert row.active_generation == 2  # 新代次
+    assert len(add_calls) == 1
+    assert add_calls[0] == [f"u1:{doc_id}:g2:0"]
+
+
+@pytest.mark.asyncio
+async def test_n1_03_reconcile_respects_delete_and_new_generation(env):
+    """交错：文档已删除或已推进新代次 → reconcile 不覆盖（conflict）。"""
+    from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+    from app.models.document_index import DocumentIndexStatus
+    from app.services.document_index_service import reconcile_index_execution
+
+    # 场景 A：文档已推进新代次（gen=3）
+    doc_id, _ = await _seed_doc(env)
+    async with env.factory() as s:
+        repo = DocumentIndexRepository(s)
+        await repo.update_status(doc_id, DocumentIndexStatus.INDEXING)
+        row = await repo.get_by_id(doc_id, "u1")
+        row.generation = 3
+        s.add(DocumentIndexExecution(
+            execution_id="exec-a", document_id=doc_id, user_id="u1",
+            generation=1, token="tok-a", status=ExecutionStatus.CLOSED))
+        await s.commit()
+    out = await reconcile_index_execution(
+        document_id=doc_id, user_id="u1", generation=1, execution_token="tok-a")
+    assert out["outcome"] == "conflict" or out["outcome"] == "waiting"
+    async with env.factory() as s:
+        row = await DocumentIndexRepository(s).get_by_id(doc_id, "u1")
+        assert row.status == DocumentIndexStatus.INDEXING  # 未被覆盖
+
+    # 场景 B：文档已删除
+    doc2, _ = await _seed_doc(env)
+    async with env.factory() as s:
+        repo = DocumentIndexRepository(s)
+        await repo.update_status(doc2, DocumentIndexStatus.INDEXING)
+        s.add(DocumentIndexExecution(
+            execution_id="exec-b", document_id=doc2, user_id="u1",
+            generation=1, token="tok-b", status=ExecutionStatus.CLOSED))
+        await s.commit()
+        await repo.delete_by_id(doc2, "u1")
+        await s.commit()
+    out2 = await reconcile_index_execution(
+        document_id=doc2, user_id="u1", generation=1, execution_token="tok-b")
+    assert out2["outcome"] == "gone"
+
+
+@pytest.mark.asyncio
+async def test_n1_04_two_reconcilers_single_progress(env):
+    """两个恢复者同时操作：最多一方推进；重放不重复分配代次。"""
+    from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+    from app.models.document_index import DocumentIndexStatus
+    from app.services.document_index_service import reconcile_index_execution
+
+    doc_id, _ = await _seed_doc(env)
+    async with env.factory() as s:
+        repo = DocumentIndexRepository(s)
+        await repo.update_status(doc_id, DocumentIndexStatus.INDEXING)
+        row = await repo.get_by_id(doc_id, "u1")
+        row.generation = 1
+        s.add(DocumentIndexExecution(
+            execution_id="exec-c", document_id=doc_id, user_id="u1",
+            generation=1, token="tok-c", status=ExecutionStatus.CLOSED))
+        await s.commit()
+
+    # 两方顺序调用（条件更新保证只有第一个 rowcount=1）
+    r1 = await reconcile_index_execution(
+        document_id=doc_id, user_id="u1", generation=1, execution_token="tok-c")
+    r2 = await reconcile_index_execution(
+        document_id=doc_id, user_id="u1", generation=1, execution_token="tok-c")
+    recovered = [r for r in (r1, r2) if r["outcome"] == "recovered"]
+    assert len(recovered) == 1
+    other = [r for r in (r1, r2) if r["outcome"] != "recovered"]
+    assert other[0]["outcome"] == "conflict"
+
+    async with env.factory() as s:
+        row = await DocumentIndexRepository(s).get_by_id(doc_id, "u1")
+        assert row.status == DocumentIndexStatus.INDEX_FAILED
+        assert row.generation == 1  # 未重复分配代次
+
+
+@pytest.mark.asyncio
+async def test_n1_06_reconcile_missing_file_needs_reupload(env):
+    """原文件缺失：reconcile 恢复 index_failed 并标记 needs_reupload；重传后可收敛。"""
+    import os
+    from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+    from app.models.document_index import DocumentIndexStatus
+    from app.services.document_index_service import (
+        reconcile_index_execution, _ExecutionRepository)
+
+    doc_id, _ = await _seed_doc(env)
+    # 删除物理文件
+    async with env.factory() as s:
+        row = await DocumentIndexRepository(s).get_by_id(doc_id, "u1")
+        file_path = row.file_path
+        await repo_update_status(doc_id, DocumentIndexStatus.INDEXING, env)
+        row.generation = 1
+        s.add(DocumentIndexExecution(
+            execution_id="exec-n1f", document_id=doc_id, user_id="u1",
+            generation=1, token="tok-n1f", status=ExecutionStatus.UNKNOWN))
+        await s.commit()
+    if os.path.exists(file_path):
+        os.unlink(file_path)
+
+    async with env.factory() as s:
+        assert await _ExecutionRepository(s).resolve_unknown(
+            "exec-n1f", "维护窗口核验：文件已缺失，需重传")
+        await s.commit()
+
+    out = await reconcile_index_execution(
+        document_id=doc_id, user_id="u1", generation=1, execution_token="tok-n1f")
+    assert out["outcome"] == "needs_reupload"
+    assert "需要重新上传" in out["message"]
+    async with env.factory() as s:
+        row = await DocumentIndexRepository(s).get_by_id(doc_id, "u1")
+        assert row.status == DocumentIndexStatus.INDEX_FAILED
+        assert "需要重新上传" in (row.error_message or "")
+
+
+async def repo_update_status(doc_id, status, env):
+    async with env.factory() as s:
+        await DocumentIndexRepository(s).update_status(doc_id, status)
+        await s.commit()
