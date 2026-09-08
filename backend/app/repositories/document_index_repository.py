@@ -279,6 +279,34 @@ class DocumentIndexRepository:
         await self.session.flush()
         return result.rowcount > 0
 
+    async def takeover_upload_row(self, *, doc_id: str, user_id: str,
+                                    filename: str, file_path: str, md5: str,
+                                    file_size: int, file_type: str) -> bool:
+        """N1 原子接管重传：仅 index_failed 且属于该用户的行可接管。
+
+        文件身份与状态在同一条件更新内提交；deleting/新执行（状态已非
+        index_failed）不命中，返回 False——调用方不得继续索引。
+        恢复资格由调用方先经 _row_has_file 判定（缺文件才接管）。
+        """
+        result = await self.session.execute(
+            update(DocumentIndex)
+            .where(DocumentIndex.id == doc_id)
+            .where(DocumentIndex.user_id == user_id)
+            .where(DocumentIndex.status == DocumentIndexStatus.INDEX_FAILED)
+            .values(
+                status=DocumentIndexStatus.PENDING_INDEX,
+                filename=filename,
+                file_path=file_path,
+                md5=md5,
+                file_size=file_size,
+                file_type=file_type,
+                error_message=None,
+                updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            )
+        )
+        await self.session.flush()
+        return result.rowcount > 0
+
     async def reset_to_pending_if_retryable(self, doc_id: str) -> bool:
         """条件人工重试重置：仅 index_failed / pending_index 可重置。
 

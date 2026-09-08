@@ -1558,10 +1558,10 @@ async def test_n1_04_two_reconcilers_single_progress(env):
         document_id=doc_id, user_id="u1", generation=1, execution_token="tok-c")
     r2 = await reconcile_index_execution(
         document_id=doc_id, user_id="u1", generation=1, execution_token="tok-c")
-    recovered = [r for r in (r1, r2) if r["outcome"] == "recovered"]
-    assert len(recovered) == 1
-    other = [r for r in (r1, r2) if r["outcome"] != "recovered"]
-    assert other[0]["outcome"] == "conflict"
+    # 第一次真实恢复；第二次为幂等重放（同 execution_token 标记）→ 均 recovered
+    assert r1["outcome"] == "recovered"
+    assert r2["outcome"] == "recovered"
+    assert "幂等" in r2["message"]
 
     async with env.factory() as s:
         row = await DocumentIndexRepository(s).get_by_id(doc_id, "u1")
@@ -1745,3 +1745,156 @@ async def test_n1_06b_needs_reupload_takeover_loop(env, monkeypatch):
         row = await DocumentIndexRepository(s).get_by_id(doc_id, "u1")
         assert row.status == DocumentIndexStatus.INDEXED
         assert os.path.exists(row.file_path)
+
+
+
+# ---------- N1 第三轮返修：HTTP 运维链路 + writing 拒绝 ----------
+
+@pytest.mark.asyncio
+async def test_n1_07_ops_endpoint_full_chain(env, monkeypatch):
+    """从真实端点走完整链路：unknown → resolve 核验关闭 → reconcile 恢复 →
+    幂等重放。"""
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+    from jose import jwt as jose_jwt
+    from app.config.validator import get_settings as _get_settings
+    from app.router.runtime_config_router import runtime_config_router
+    from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+    from app.models.document_index import DocumentIndexStatus
+    from app.db.db_config import get_db
+
+    SECRET = _get_settings().SECRET_KEY
+    operator_id = "op-admin-0000"
+    monkeypatch.setattr(_get_settings(), "RUNTIME_CONFIG_ADMIN_USER_IDS", operator_id)
+    monkeypatch.setattr(_get_settings(), "RATE_LIMIT_ENABLED", False)
+
+    app = FastAPI()
+    app.include_router(runtime_config_router, prefix="/api/v1")
+    from app.core.failed_response_register import register_exception_handlers
+    register_exception_handlers(app)
+
+    async def override_get_db():
+        async with env.factory() as s:
+            yield s
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    def token(uid):
+        return jose_jwt.encode({"user_id": uid, "user_name": "op"},
+                               SECRET, algorithm="HS256")
+    headers = {"Authorization": f"Bearer {token(operator_id)}"}
+
+    doc_id, _ = await _seed_doc(env)
+    async with env.factory() as s:
+        await DocumentIndexRepository(s).update_status(
+            doc_id, DocumentIndexStatus.INDEXING)
+        row = await DocumentIndexRepository(s).get_by_id(doc_id, "u1")
+        row.generation = 1
+        s.add(DocumentIndexExecution(
+            execution_id="exec-http", document_id=doc_id, user_id="u1",
+            generation=1, token="tok-http", status=ExecutionStatus.UNKNOWN))
+        await s.commit()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://t") as c:
+        # 1) dry-run resolve：不关闭
+        r = await c.post("/api/v1/admin/runtime-config/resolve-index-execution",
+                         headers=headers,
+                         json={"execution_id": "exec-http", "user_id": "u1",
+                               "reason": "维护窗口核验", "evidence": "ops-log#1",
+                               "dry_run": True})
+        assert r.status_code == 200
+        assert r.json()["data"]["dry_run"] is True
+        async with env.factory() as s:
+            e = (await s.execute(select(DocumentIndexExecution)
+                                 .where(DocumentIndexExecution.execution_id == "exec-http"))).scalar_one()
+            assert e.status == ExecutionStatus.UNKNOWN
+
+        # 2) apply resolve：核验关闭 unknown → closed
+        r2 = await c.post("/api/v1/admin/runtime-config/resolve-index-execution",
+                          headers=headers,
+                          json={"execution_id": "exec-http", "user_id": "u1",
+                                "reason": "维护窗口核验：远端已停", "evidence": "ops-log#1",
+                                "dry_run": False})
+        assert r2.status_code == 200
+        assert r2.json()["data"]["closed"] is True
+
+        # 3) dry-run reconcile：评估不写
+        r3 = await c.post("/api/v1/admin/runtime-config/reconcile-index-execution",
+                          headers=headers,
+                          json={"document_id": doc_id, "user_id": "u1",
+                                "generation": 1, "execution_token": "tok-http",
+                                "reason": "恢复", "evidence": "ops-log#1",
+                                "dry_run": True})
+        assert r3.status_code == 200
+        assert r3.json()["data"]["dry_run"] is True
+        async with env.factory() as s:
+            row = await DocumentIndexRepository(s).get_by_id(doc_id, "u1")
+            assert row.status == DocumentIndexStatus.INDEXING
+
+        # 4) apply reconcile：恢复
+        r4 = await c.post("/api/v1/admin/runtime-config/reconcile-index-execution",
+                          headers=headers,
+                          json={"document_id": doc_id, "user_id": "u1",
+                                "generation": 1, "execution_token": "tok-http",
+                                "reason": "恢复", "evidence": "ops-log#1",
+                                "dry_run": False})
+        assert r4.status_code == 200
+        out = r4.json()["data"]
+        assert out["outcome"] in ("recovered", "needs_reupload")
+
+        # 5) 幂等重放：再次 apply → 200 recovered（不 409 conflict）
+        r5 = await c.post("/api/v1/admin/runtime-config/reconcile-index-execution",
+                          headers=headers,
+                          json={"document_id": doc_id, "user_id": "u1",
+                                "generation": 1, "execution_token": "tok-http",
+                                "reason": "恢复", "evidence": "ops-log#1",
+                                "dry_run": False})
+        assert r5.status_code == 200
+        assert r5.json()["data"]["outcome"] in ("recovered", "needs_reupload")
+
+
+@pytest.mark.asyncio
+async def test_n1_07b_resolve_writing_rejected(env, monkeypatch):
+    """resolve 只接受 unknown：writing 执行经端点核验关闭被拒（409）。"""
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+    from jose import jwt as jose_jwt
+    from app.config.validator import get_settings as _get_settings
+    from app.router.runtime_config_router import runtime_config_router
+    from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+    from app.db.db_config import get_db
+
+    SECRET = _get_settings().SECRET_KEY
+    op = "op-admin-0000"
+    monkeypatch.setattr(_get_settings(), "RUNTIME_CONFIG_ADMIN_USER_IDS", op)
+    monkeypatch.setattr(_get_settings(), "RATE_LIMIT_ENABLED", False)
+
+    app = FastAPI()
+    app.include_router(runtime_config_router, prefix="/api/v1")
+    from app.core.failed_response_register import register_exception_handlers
+    register_exception_handlers(app)
+
+    async def override_get_db():
+        async with env.factory() as s:
+            yield s
+
+    app.dependency_overrides[get_db] = override_get_db
+    token = jose_jwt.encode({"user_id": op, "user_name": "op"},
+                            SECRET, algorithm="HS256")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with env.factory() as s:
+        s.add(DocumentIndexExecution(
+            execution_id="exec-w", document_id="d1", user_id="u1",
+            generation=1, token="t", status=ExecutionStatus.WRITING))
+        await s.commit()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://t") as c:
+        r = await c.post("/api/v1/admin/runtime-config/resolve-index-execution",
+                         headers=headers,
+                         json={"execution_id": "exec-w", "user_id": "u1",
+                               "reason": "核验", "evidence": "log",
+                               "dry_run": False})
+        assert r.status_code == 409, "writing 执行不得被核验关闭"

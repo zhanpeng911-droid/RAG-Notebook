@@ -583,3 +583,22 @@ indexing、前端重试按钮仅 failed/pending → 死锁。
 
 后端全量连续 2 次 **1094 passed / 9 skipped**（无 xfail）；覆盖率 86.66%（≥85）；
 functional 11 passed / 3 real_api deselected；mypy 0；ruff 通过。N2—N5 未实施。
+
+### N1 第三轮返修（复验 4 项缺口，2026-09-08）
+
+- **接管原子化 + 同 MD5 接管**：`takeover_upload_row` 条件更新（owner+预期状态
+  index_failed+文件身份同事务），deleting/新执行不命中不接管不索引；未命中抛 409。
+  同 MD5 不同文件名同样走 needs_reupload 接管（原去重分支不再仅 409）。
+- **运维核验关闭 unknown**：`POST /admin/runtime-config/resolve-index-execution`
+  独立受权限/审计保护——非空 reason+evidence、默认 dry-run、只接受 unknown→closed
+  （writing 经端点关闭被拒 409）。恢复端点 reconcile 在 closed 之后才推进文档。
+- **恢复身份绑定**：error_note 携带 `recover:{execution_token[:24]}:{generation}`
+  稳定标记（由调用方 execution_token 派生，跨调用可匹配）；提交确认校验
+  status+代次+recover 标记；幂等重放（同 token 再调）返回 recovered 而非 conflict。
+- **409 修复**：reconcile 冲突端点 `return HTTPException` → `raise`（保证真实状态码）。
+- 新增 N1-07（HTTP 全链路：dry-run resolve→apply resolve→dry-run reconcile→apply
+  reconcile→幂等重放 200）、N1-07b（writing 拒绝 409）、N1-04 幂等重放语义。
+
+验证：后端全量连续 2 次 **1096 passed / 9 skipped**（无 xfail）；覆盖率 86.38%（≥85）；
+functional 11/3；mypy 0；ruff 通过。N1 部分完成（评审口径：N1-03 双上传竞争、
+N1-05 确认读取失败等余项与真实 MySQL 双连接留待 N5）。

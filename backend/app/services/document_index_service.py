@@ -12,7 +12,7 @@ import uuid
 import asyncio
 from typing import Optional, List
 
-from fastapi import UploadFile
+from fastapi import UploadFile, HTTPException
 
 from app.core.logger_handler import logger
 from app.utils.path_tool import get_data_path
@@ -214,17 +214,25 @@ async def save_uploaded_file(
         existing_filename = await repo.get_by_original_filename(filename, user_id)
         if existing_filename:
             # needs_reupload 接管（N1 闭环）：index_failed 且原文件缺失/标记需重传
-            # 的行允许重传接管——更新文件身份并重置为 pending，随后统一索引可领取
-            if existing_filename.status == DocumentIndexStatus.INDEX_FAILED                     and not _row_has_file(existing_filename):
-                await repo.update_status(
-                    existing_filename.id, DocumentIndexStatus.PENDING_INDEX,
-                    error_message=None)
-                existing_filename.filename = unique_filename
-                existing_filename.file_path = file_path
-                existing_filename.md5 = md5_hex
-                existing_filename.file_size = file_size
-                existing_filename.file_type = file_type
+            # 的行允许原子接管（文件身份与状态同事务条件更新；deleting/新执行
+            # 不命中即不接管不索引）
+            if existing_filename.status == DocumentIndexStatus.INDEX_FAILED \
+                    and not _row_has_file(existing_filename):
+                taken = await repo.takeover_upload_row(
+                    doc_id=existing_filename.id, user_id=user_id,
+                    filename=unique_filename, file_path=file_path, md5=md5_hex,
+                    file_size=file_size, file_type=file_type)
                 await session.commit()
+                if not taken:
+                    # 接管未命中：删除获胜或新执行已推进，不继续索引
+                    if os.path.exists(file_path):
+                        os.unlink(file_path)
+                    logger.warning(
+                        f"【文档索引】接管被拒（状态已变化）: id={existing_filename.id}"
+                    )
+                    raise HTTPException(
+                        status_code=409,
+                        detail="文档正在删除或已被重新处理，请刷新后重试")
                 logger.info(
                     f"【文档索引】needs_reupload 接管重传: id={existing_filename.id}, "
                     f"filename={filename}"
@@ -253,9 +261,36 @@ async def save_uploaded_file(
                 "duplicate_filename": True,
             }
 
-        # 检查是否已存在（MD5 内容去重）
+        # 检查是否已存在（MD5 内容去重）——同 MD5 不同文件名同样支持 needs_reupload 接管
         existing = await repo.get_by_md5(md5_hex, user_id)
         if existing:
+            if existing.status == DocumentIndexStatus.INDEX_FAILED \
+                    and not _row_has_file(existing):
+                taken = await repo.takeover_upload_row(
+                    doc_id=existing.id, user_id=user_id,
+                    filename=unique_filename, file_path=file_path, md5=md5_hex,
+                    file_size=file_size, file_type=file_type)
+                await session.commit()
+                if not taken:
+                    if os.path.exists(file_path):
+                        os.unlink(file_path)
+                    raise HTTPException(
+                        status_code=409,
+                        detail="文档正在删除或已被重新处理，请刷新后重试")
+                logger.info(
+                    f"【文档索引】needs_reupload MD5 接管重传: id={existing.id}"
+                )
+                exec_res = await execute_index_document(existing.id, user_id)
+                return {
+                    "document_id": existing.id,
+                    "filename": filename,
+                    "status": exec_res["status"].value,
+                    "message": ("已接管重传并完成索引"
+                                if exec_res["status"] == DocumentIndexStatus.INDEXED
+                                else "已接管重传，索引处理中"),
+                    "duplicate": False,
+                    "takeover": True,
+                }
             # 内容相同的文件已存在，删除刚保存的文件
             if os.path.exists(file_path):
                 os.unlink(file_path)
@@ -952,16 +987,38 @@ async def reconcile_index_execution(*, document_id: str, user_id: str,
 
         # 3) 文档必须仍为本次 indexing 才恢复（删除/新代次/其它状态 → 冲突不覆盖）
         if doc_status != DocumentIndexStatus.INDEXING.value                 or int(doc_gen or 0) != int(generation):
+            # 幂等重放：若已由本次恢复完成（index_failed + 本 recover 身份 + 代次匹配），
+            # 重建 recovered 结果，不误报 conflict
+            if doc_status == DocumentIndexStatus.INDEX_FAILED.value                     and int(doc_gen or 0) == int(generation):
+                from sqlalchemy import select as _sel
+                err = (await session.execute(
+                    _sel(DocumentIndex.error_message).where(
+                        DocumentIndex.id == document_id,
+                        DocumentIndex.user_id == user_id,
+                    )
+                )).scalar_one_or_none() or ""
+                if f"recover:{execution_token[:24]}:{int(generation)}" in err:
+                    replay_has_file = bool(file_path) and _os.path.exists(file_path)
+                    await session.commit()
+                    return {"outcome": "needs_reupload" if not replay_has_file
+                            else "recovered",
+                            "message": "已由本次恢复完成（幂等）"}
             await session.commit()
             return {"outcome": "conflict",
                     "message": f"文档状态/代次已变化（{doc_status}/gen={doc_gen}），不覆盖"}
 
-        # 4) 条件恢复 index_failed（带 owner/document/源状态/代次条件）
+        # 4) 条件恢复 index_failed（带 owner/document/源状态/代次条件）；
+        #    错误文案携带本次恢复身份（唯一令牌 + 代次），供确认与重放区分
         now = datetime.now(timezone.utc).replace(tzinfo=None)
+        # 恢复身份标记由调用方传入的 execution_token 派生（跨调用稳定，
+        # 重放/确认可匹配本次恢复；不随机生成导致无法识别）。
+        recover_marker = f"recover:{execution_token[:24]}:{int(generation)}"
         has_file = bool(file_path) and _os.path.exists(file_path)
-        error_note = ("publish commit unconfirmed, writer verified stopped"
+        error_note = (f"publish commit unconfirmed, writer verified stopped; "
+                      f"{recover_marker}"
                       if has_file else
-                      "publish commit unconfirmed; 原文件缺失，需要重新上传")
+                      f"publish commit unconfirmed; 原文件缺失，需要重新上传; "
+                      f"{recover_marker}")
         result = await session.execute(
             update(DocumentIndex)
             .where(and_(
@@ -993,12 +1050,15 @@ async def reconcile_index_execution(*, document_id: str, user_id: str,
                 pass
             async with AsyncSessionLocal() as v_session:
                 v_row = (await v_session.execute(
-                    select(DocumentIndex.status, DocumentIndex.error_message).where(
+                    select(DocumentIndex.status, DocumentIndex.error_message,
+                           DocumentIndex.generation).where(
                         DocumentIndex.id == document_id,
                         DocumentIndex.user_id == user_id,
                     )
                 )).one_or_none()
-            if v_row is not None                     and v_row[0] == DocumentIndexStatus.INDEX_FAILED.value                     and (v_row[1] or "") == error_note:
+            # 确认必须绑定本次恢复身份：状态 index_failed + 代次匹配 +
+            # error 含本次 recover:<token>:<gen> 标记（其它代次/其它恢复不误认）
+            if v_row is not None                     and v_row[0] == DocumentIndexStatus.INDEX_FAILED.value                     and int(v_row[2] or 0) == int(generation)                     and (v_row[1] or "") == error_note:
                 logger.warning(
                     f"【文档索引】恢复事务确认丢失但事实已提交: id={document_id}, "
                     f"gen={generation}, err={commit_err_msg}"

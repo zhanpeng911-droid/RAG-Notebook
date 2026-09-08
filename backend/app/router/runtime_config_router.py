@@ -114,6 +114,75 @@ async def reset_runtime_configs(
     return success_response(message="配置已重置为默认值", data=result)
 
 
+# ==================== N1：索引执行核验关闭入口 ====================
+
+class IndexExecutionResolveRequest(BaseModel):
+    """核验关闭 unknown 执行（人工确认远端已停止）。"""
+    execution_id: str
+    user_id: str
+    reason: str = ""
+    evidence: str = ""
+    dry_run: bool = True
+
+
+@runtime_config_router.post("/resolve-index-execution")
+async def resolve_index_execution_endpoint(
+        request: IndexExecutionResolveRequest,
+        operator_id: str = Depends(get_current_user_id),
+        db: AsyncSession = Depends(get_db),
+        _: None = Depends(rate_limit(limit=10, window=60)),
+):
+    """N1 核验关闭：人工确认 unknown 执行的远端写入已停止后，将其关闭为 closed。
+
+    权限：仅 RUNTIME_CONFIG_ADMIN 运维；非空 reason+evidence；默认 dry-run。
+    只接受 unknown→closed（不触及 writing）；关闭后恢复端点可据此推进文档状态。
+    写审计日志。
+    """
+    _require_runtime_config_admin(operator_id)
+    if not request.reason.strip():
+        raise HTTPException(status_code=400, detail="必须提供非空核验原因")
+    if not request.evidence.strip():
+        raise HTTPException(status_code=400, detail="必须提供证据位置")
+
+    from app.db.db_config import AsyncSessionLocal
+    from app.services.document_index_service import _ExecutionRepository
+
+    if request.dry_run:
+        from sqlalchemy import select as _select
+        from app.models.index_execution import DocumentIndexExecution
+        async with AsyncSessionLocal() as s:
+            st = (await s.execute(
+                _select(DocumentIndexExecution.status).where(
+                    DocumentIndexExecution.execution_id == request.execution_id,
+                    DocumentIndexExecution.user_id == request.user_id,
+                )
+            )).scalar_one_or_none()
+        await write_audit_log(
+            db, user_id=operator_id, action="resolve_unknown_dry_run",
+            resource_type="document_index_execution",
+            detail={"request": request.model_dump(), "execution_status": st})
+        await db.commit()
+        return success_response(
+            message="dry-run 完成（未关闭执行）",
+            data={"dry_run": True, "execution_status": st})
+
+    async with AsyncSessionLocal() as s:
+        ok = await _ExecutionRepository(s).resolve_unknown(
+            request.execution_id,
+            f"{request.reason[:180]} | evidence: {request.evidence[:120]}")
+        await s.commit()
+    await write_audit_log(
+        db, user_id=operator_id, action="resolve_unknown_apply",
+        resource_type="document_index_execution",
+        detail={"request": request.model_dump(), "closed": ok})
+    await db.commit()
+    if not ok:
+        raise HTTPException(status_code=409,
+                            detail="执行非 unknown 或不存在，无法核验关闭")
+    return success_response(message="执行已核验关闭（closed）",
+                            data={"closed": True, "dry_run": False})
+
+
 # ==================== N1：索引执行恢复运维入口 ====================
 
 class IndexExecutionReconcileRequest(BaseModel):
@@ -197,11 +266,12 @@ async def reconcile_index_execution_endpoint(
     )
     await db.commit()
 
-    status_code = 200 if outcome["outcome"] in ("recovered", "published", "needs_reupload") else 409
-    return success_response(
-        message=outcome["message"],
-        data={"outcome": outcome["outcome"], "dry_run": False,
-              "message": outcome["message"]},
-    ) if status_code == 200 else HTTPException(
-        status_code=status_code,
+    if outcome["outcome"] in ("recovered", "published", "needs_reupload"):
+        return success_response(
+            message=outcome["message"],
+            data={"outcome": outcome["outcome"], "dry_run": False,
+                  "message": outcome["message"]})
+    # 冲突/等待/不确定：显式抛异常保证真实状态码（评审 P2）
+    raise HTTPException(
+        status_code=409,
         detail=f"{outcome['outcome']}: {outcome['message']}")
