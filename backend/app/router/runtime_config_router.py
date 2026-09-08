@@ -112,3 +112,96 @@ async def reset_runtime_configs(
     await db.commit()
 
     return success_response(message="配置已重置为默认值", data=result)
+
+
+# ==================== N1：索引执行恢复运维入口 ====================
+
+class IndexExecutionReconcileRequest(BaseModel):
+    """恢复请求：精确执行身份 + 核验凭据 + dry-run 支持。"""
+    document_id: str
+    user_id: str
+    generation: int
+    execution_token: str
+    reason: str = ""               # 非空：人工核验原因
+    evidence: str = ""             # 证据位置/说明
+    dry_run: bool = True           # 默认 dry-run，apply 需显式 False
+
+
+@runtime_config_router.post("/reconcile-index-execution")
+async def reconcile_index_execution_endpoint(
+        request: IndexExecutionReconcileRequest,
+        operator_id: str = Depends(get_current_user_id),
+        db: AsyncSession = Depends(get_db),
+        _: None = Depends(rate_limit(limit=10, window=60)),
+):
+    """N1 受控恢复：核验停止的执行可在文档仍悬挂时恢复到可重试协议。
+
+    权限：仅 RUNTIME_CONFIG_ADMIN_USER_IDS 内运维；需提供非空原因与证据位置。
+    默认 dry-run 只评估不写；apply（dry_run=False）才执行恢复。
+    每次调用写入审计日志（operator、目标、dry-run、原因、证据、结果）。
+    """
+    _require_runtime_config_admin(operator_id)
+    if not request.reason.strip():
+        raise HTTPException(status_code=400, detail="必须提供非空核验原因")
+    if not request.evidence.strip():
+        raise HTTPException(status_code=400, detail="必须提供证据位置（维护窗口/排空记录）")
+
+    from app.services.document_index_service import reconcile_index_execution
+
+    if request.dry_run:
+        # dry-run：只评估恢复判定（不写文档状态）
+        from app.db.db_config import AsyncSessionLocal
+        from sqlalchemy import select as _select
+        from app.models.document_index import DocumentIndex
+        from app.models.index_execution import DocumentIndexExecution
+        async with AsyncSessionLocal() as s:
+            exec_s = (await s.execute(
+                _select(DocumentIndexExecution.status).where(
+                    DocumentIndexExecution.document_id == request.document_id,
+                    DocumentIndexExecution.user_id == request.user_id,
+                    DocumentIndexExecution.generation == request.generation,
+                    DocumentIndexExecution.token == request.execution_token,
+                )
+            )).scalar_one_or_none()
+            doc_s = (await s.execute(
+                _select(DocumentIndex.status, DocumentIndex.generation).where(
+                    DocumentIndex.id == request.document_id,
+                    DocumentIndex.user_id == request.user_id,
+                )
+            )).one_or_none()
+        dry_eval = {
+            "execution_status": exec_s,
+            "document_status": doc_s[0] if doc_s else None,
+            "document_generation": doc_s[1] if doc_s else None,
+        }
+        await write_audit_log(
+            db, user_id=operator_id, action="reconcile_dry_run",
+            resource_type="document_index_execution",
+            detail={"request": request.model_dump(), "eval": dry_eval},
+        )
+        await db.commit()
+        return success_response(
+            message="dry-run 完成（未写文档状态）",
+            data={"dry_run": True, "evaluation": dry_eval})
+
+    outcome = await reconcile_index_execution(
+        document_id=request.document_id,
+        user_id=request.user_id,
+        generation=request.generation,
+        execution_token=request.execution_token,
+    )
+    await write_audit_log(
+        db, user_id=operator_id, action="reconcile_apply",
+        resource_type="document_index_execution",
+        detail={"request": request.model_dump(), "outcome": outcome},
+    )
+    await db.commit()
+
+    status_code = 200 if outcome["outcome"] in ("recovered", "published", "needs_reupload") else 409
+    return success_response(
+        message=outcome["message"],
+        data={"outcome": outcome["outcome"], "dry_run": False,
+              "message": outcome["message"]},
+    ) if status_code == 200 else HTTPException(
+        status_code=status_code,
+        detail=f"{outcome['outcome']}: {outcome['message']}")

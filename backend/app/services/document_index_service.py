@@ -213,6 +213,35 @@ async def save_uploaded_file(
         # 文件名唯一性校验（按用户隔离，同名拒绝）
         existing_filename = await repo.get_by_original_filename(filename, user_id)
         if existing_filename:
+            # needs_reupload 接管（N1 闭环）：index_failed 且原文件缺失/标记需重传
+            # 的行允许重传接管——更新文件身份并重置为 pending，随后统一索引可领取
+            if existing_filename.status == DocumentIndexStatus.INDEX_FAILED                     and not _row_has_file(existing_filename):
+                await repo.update_status(
+                    existing_filename.id, DocumentIndexStatus.PENDING_INDEX,
+                    error_message=None)
+                existing_filename.filename = unique_filename
+                existing_filename.file_path = file_path
+                existing_filename.md5 = md5_hex
+                existing_filename.file_size = file_size
+                existing_filename.file_type = file_type
+                await session.commit()
+                logger.info(
+                    f"【文档索引】needs_reupload 接管重传: id={existing_filename.id}, "
+                    f"filename={filename}"
+                )
+                # N1 闭环：接管后立即走统一索引执行（新代次，仅领取一次）
+                from app.models.document_index import DocumentIndexStatus as _DIS
+                exec_res = await execute_index_document(existing_filename.id, user_id)
+                takeover_status = exec_res["status"]
+                return {
+                    "document_id": existing_filename.id,
+                    "filename": filename,
+                    "status": takeover_status.value,
+                    "message": ("已接管重传并完成索引" if takeover_status == _DIS.INDEXED
+                                else "已接管重传，索引处理中"),
+                    "duplicate_filename": False,
+                    "takeover": True,
+                }
             # 同名文件已存在，删除刚保存的物理文件，拒绝上传
             if os.path.exists(file_path):
                 os.unlink(file_path)
@@ -324,6 +353,18 @@ async def save_uploaded_file(
             "message": message,
             "duplicate": False,
         }
+
+
+def _row_has_file(row) -> bool:
+    """行是否具备可用的本地原文件（needs_reupload 判定）。"""
+    import os as _os
+    if not row.file_path:
+        return False
+    if not _os.path.exists(row.file_path):
+        return False
+    if (row.error_message or "") and "需要重新上传" in row.error_message:
+        return False
+    return True
 
 
 def _stable_chunk_ids(user_id: str, document_id: str, split_docs,
@@ -935,7 +976,41 @@ async def reconcile_index_execution(*, document_id: str, user_id: str,
                 updated_at=now,
             )
         )
-        await session.commit()
+        try:
+            await session.commit()
+        except Exception as commit_err:
+            # 恢复事务提交结果不明：先释放会话，再用新会话读持久事实——
+            # 若文档已是 index_failed 且 error 为本恢复标记，则幂等重建"已恢复"，
+            # 不因确认丢失误报 conflict，也不二次分配代次。
+            commit_err_msg = str(commit_err)[:200]
+            try:
+                await session.rollback()
+            except Exception:
+                pass
+            try:
+                await session.close()
+            except Exception:
+                pass
+            async with AsyncSessionLocal() as v_session:
+                v_row = (await v_session.execute(
+                    select(DocumentIndex.status, DocumentIndex.error_message).where(
+                        DocumentIndex.id == document_id,
+                        DocumentIndex.user_id == user_id,
+                    )
+                )).one_or_none()
+            if v_row is not None                     and v_row[0] == DocumentIndexStatus.INDEX_FAILED.value                     and (v_row[1] or "") == error_note:
+                logger.warning(
+                    f"【文档索引】恢复事务确认丢失但事实已提交: id={document_id}, "
+                    f"gen={generation}, err={commit_err_msg}"
+                )
+                return {"outcome": "needs_reupload" if not has_file else "recovered",
+                        "message": error_note}
+            logger.error(
+                f"【文档索引】恢复事务提交失败（未持久化）: id={document_id}, "
+                f"err={commit_err_msg}"
+            )
+            return {"outcome": "uncertain",
+                    "message": "恢复提交结果不明，请重试"}
         if result.rowcount == 0:
             return {"outcome": "conflict",
                     "message": "恢复条件未命中（并发删除/新代次/其它恢复者已推进）"}

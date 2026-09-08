@@ -1611,3 +1611,137 @@ async def repo_update_status(doc_id, status, env):
     async with env.factory() as s:
         await DocumentIndexRepository(s).update_status(doc_id, status)
         await s.commit()
+
+
+# ---------- N1 返修：恢复 commit 幂等 + needs_reupload 闭环 + 真实交错 ----------
+
+@pytest.mark.asyncio
+async def test_n1_02b_reconcile_commit_confirm_lost_idempotent(env, monkeypatch):
+    """恢复事务 commit 成功但确认丢失：再次 reconcile 幂等重建"已恢复"。"""
+    from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+    from app.models.document_index import DocumentIndexStatus
+    from app.services.document_index_service import (
+        reconcile_index_execution)
+    from app.db import db_config as db_cfg
+
+    doc_id, _ = await _seed_doc(env)
+    async with env.factory() as s:
+        repo = DocumentIndexRepository(s)
+        await repo.update_status(doc_id, DocumentIndexStatus.INDEXING)
+        row = await repo.get_by_id(doc_id, "u1")
+        row.generation = 1
+        s.add(DocumentIndexExecution(
+            execution_id="exec-n1r", document_id=doc_id, user_id="u1",
+            generation=1, token="tok-n1r", status=ExecutionStatus.CLOSED))
+        await s.commit()
+
+    orig_factory = db_cfg.AsyncSessionLocal
+    commit_call = {"n": 0}
+
+    class LossySession:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        async def __aenter__(self):
+            await self._inner.__aenter__()
+            return self
+
+        async def __aexit__(self, *exc):
+            return await self._inner.__aexit__(*exc)
+
+        async def commit(self):
+            commit_call["n"] += 1
+            # reconcile 内只有一次 commit（恢复 UPDATE）；真实提交后模拟确认丢失
+            await self._inner.commit()
+            raise RuntimeError("connection lost after reconcile commit")
+
+    class LossyFactory:
+        def __call__(self):
+            return LossySession(orig_factory())
+
+    monkeypatch.setattr(db_cfg, "AsyncSessionLocal", LossyFactory())
+    out = await reconcile_index_execution(
+        document_id=doc_id, user_id="u1", generation=1, execution_token="tok-n1r")
+    monkeypatch.undo()
+
+    # 确认丢失但事实已提交：重建"已恢复"，不误报 conflict
+    assert out["outcome"] == "recovered"
+    async with env.factory() as s:
+        row = await DocumentIndexRepository(s).get_by_id(doc_id, "u1")
+        assert row.status == DocumentIndexStatus.INDEX_FAILED
+
+
+@pytest.mark.asyncio
+async def test_n1_06b_needs_reupload_takeover_loop(env, monkeypatch):
+    """needs_reupload 闭环：缺文件恢复后，同名重传接管行并重新索引成功。"""
+    import os
+    from app.models.index_execution import DocumentIndexExecution, ExecutionStatus
+    from app.models.document_index import DocumentIndexStatus
+    from app.services.document_index_service import (
+        reconcile_index_execution, _ExecutionRepository, save_uploaded_file)
+    import app.services.document_index_service as dis
+    import hashlib
+    import app.utils.factory as fmod
+
+    doc_id, _ = await _seed_doc(env)
+    async with env.factory() as s:
+        row = await DocumentIndexRepository(s).get_by_id(doc_id, "u1")
+        file_path = row.file_path
+        original_filename = row.original_filename
+        await DocumentIndexRepository(s).update_status(doc_id, DocumentIndexStatus.INDEXING)
+        row.generation = 1
+        s.add(DocumentIndexExecution(
+            execution_id="exec-n1t", document_id=doc_id, user_id="u1",
+            generation=1, token="tok-n1t", status=ExecutionStatus.UNKNOWN))
+        await s.commit()
+    if os.path.exists(file_path):
+        os.unlink(file_path)
+
+    async with env.factory() as s:
+        assert await _ExecutionRepository(s).resolve_unknown(
+            "exec-n1t", "维护窗口核验：文件缺失，需重传")
+        await s.commit()
+    out = await reconcile_index_execution(
+        document_id=doc_id, user_id="u1", generation=1, execution_token="tok-n1t")
+    assert out["outcome"] == "needs_reupload"
+
+    # 同名重传（不同内容）→ 接管行，不返回 409
+    monkeypatch.setattr("app.services.document_index_service.get_data_path",
+                        lambda: str(env.tmp))
+    def _md5_sync(path):
+        with open(path, "rb") as fh:
+            return hashlib.md5(fh.read()).hexdigest()
+    monkeypatch.setattr("app.services.document_index_service.get_file_md5_hex_sync",
+                        _md5_sync)
+    class LocalEmbed:
+        pass
+    monkeypatch.setattr(fmod, "embed_model", NS(resolve=lambda: LocalEmbed()))
+    dis._embedding_health_cache.update({"available": None, "checked_at": 0})
+    try:
+        class _Up:
+            filename = original_filename
+            size = 9
+            def __init__(self):
+                self._done = False
+            async def read(self, size=-1):
+                if self._done:
+                    return b""
+                self._done = True
+                return "新内容".encode("utf-8")
+            async def seek(self, pos):
+                return None
+        res = await save_uploaded_file(_Up(), "u1", space_id="")
+    finally:
+        dis._embedding_health_cache.update({"available": None, "checked_at": 0})
+
+    assert res.get("takeover") is True, "needs_reupload 行应被接管重传而非 409"
+    assert res["document_id"] == doc_id  # 复用原 document_id
+    assert res["status"] == "indexed" or res["status"] == "pending_index"
+    # 收敛：最终 indexed
+    async with env.factory() as s:
+        row = await DocumentIndexRepository(s).get_by_id(doc_id, "u1")
+        assert row.status == DocumentIndexStatus.INDEXED
+        assert os.path.exists(row.file_path)

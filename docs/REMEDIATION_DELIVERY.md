@@ -550,3 +550,36 @@ coverage **86.61%**（门槛 85%），ruff `app tests` 通过；第二轮全量�
 P3 存量映射回填、P4 真实 MySQL + Chroma + Compose 与当前 SHA CI；领取阶段提交不确定、
 真实进程崩溃及数据库断连等场景未由本轮组件测试证明，不能据此宣称 P1 全风险结项。
 只读复审提示（非本轮复现实测）：提交结果未确认时文档可能保持 `indexing`，而现有重试重置入口仅接 `index_failed`；恢复流程需后续独立核查，本轮未扩修，也不据此声称已解决。
+
+---
+
+## N1 交付段（提交不确定恢复链，方案 REMEDIATION_NEXT_ROUND_PLAN.md §5，2026-09-08）
+
+基线 `b0c3ec6` + 上轮未提交工作区。红证据：发布提交未落库 → 文档停在 indexing →
+`reset_to_pending_if_failed` 只认 index_failed、批量补偿不扫 indexing、reindex 拒绝
+indexing、前端重试按钮仅 failed/pending → 死锁。
+
+### 实现
+
+| 项 | 内容 |
+|---|---|
+| 恢复编排 | `reconcile_index_execution`（§5.2 判定表）：执行未关闭→waiting；确认已发布→published 幂等；删除/新代次→conflict/gone 不覆盖；closed+未发布+仍本次 indexing→条件恢复 index_failed（owner/document/gen/源状态条件更新）；缺文件→needs_reupload |
+| 恢复 commit 幂等 | 恢复事务 commit 确认丢失时，用新会话读持久事实重建"已恢复"（不误报 conflict、不二次分配代次）；提交前失败→uncertain 可重试 |
+| 运维入口 | `POST /admin/runtime-config/reconcile-index-execution`：仅 RUNTIME_CONFIG_ADMIN 运维；非空 reason+evidence；默认 dry-run；apply 才写文档状态；每次写审计日志（operator/目标/dry-run/原因/证据/结果） |
+| needs_reupload 闭环 | 同名/MD5 重传时，index_failed 且原文件缺失（`_row_has_file`）的行被**接管**（更新文件身份→pending→统一执行器新代次仅领取一次并发布），复用原 document_id，不再 409 |
+| 测试 | N1-01 完整链路、N1-02b commit 确认丢失幂等、N1-03 删除/新代次交错不覆盖、N1-04 双恢复者单方推进、N1-06 needs_reupload、N1-06b 接管重传闭环 |
+
+### 评审口径登记
+
+- N1-04 为顺序条件更新验证（SQLite 单连接），真实 MySQL 双连接并发留待 N5；
+- N1-03 为调用前已变化场景，读取-更新窗口的交错用屏障注入留待 N5 双连接；
+- N1-02/05/07（真实 commit 后抛错走服务入口、确认查询失败保留依据、未完成写线程时
+  人工解决被流程阻挡 + 门栓释放后收敛）已由上轮 T17/T19b/T19c/T16/T20 覆盖或在本批
+  保留验证；其中 T19b 已是"提交异常→事务释放→另一连接交错→确认读取"真实窗口。
+- v1/SSE 的 commit 前/后连接丢失红证据（上轮 test_v1_publication_recovery.py 4 条）
+  已转绿并随上轮工作区提交。
+
+### 验证
+
+后端全量连续 2 次 **1094 passed / 9 skipped**（无 xfail）；覆盖率 86.66%（≥85）；
+functional 11 passed / 3 real_api deselected；mypy 0；ruff 通过。N2—N5 未实施。
