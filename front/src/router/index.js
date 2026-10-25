@@ -57,6 +57,45 @@ const routes = [
     }
   },
   {
+    path: '/notes/:id/insight',
+    name: 'NoteInsight',
+    component: () => import('../pages/knowledge/AnalysisWorkspacePage.vue'),
+    meta: {
+      title: '笔记分析',
+      keepAlive: false,
+      sourceType: 'note'
+    }
+  },
+  {
+    path: '/analysis',
+    name: 'AnalysisHome',
+    component: () => import('../pages/knowledge/AnalysisHomePage.vue'),
+    meta: {
+      title: '文档分析',
+      keepAlive: false
+    }
+  },
+  {
+    path: '/analysis/note/:id',
+    name: 'AnalysisNote',
+    component: () => import('../pages/knowledge/AnalysisWorkspacePage.vue'),
+    meta: {
+      title: '笔记分析',
+      keepAlive: false,
+      sourceType: 'note'
+    }
+  },
+  {
+    path: '/analysis/document/:id',
+    name: 'AnalysisDocument',
+    component: () => import('../pages/knowledge/AnalysisWorkspacePage.vue'),
+    meta: {
+      title: '文档分析',
+      keepAlive: false,
+      sourceType: 'document'
+    }
+  },
+  {
     path: '/chat',
     name: 'AIChat',
     component: () => import('../pages/chat/ChatWorkspacePage.vue'),
@@ -89,6 +128,43 @@ const routes = [
     component: () => import('../pages/knowledge/KnowledgeBasePage.vue'),
     meta: {
       title: '知识库管理',
+      keepAlive: false
+    }
+  },
+  {
+    path: '/knowledge/:id/insight',
+    name: 'DocumentInsight',
+    component: () => import('../pages/knowledge/AnalysisWorkspacePage.vue'),
+    meta: {
+      title: '文档分析',
+      keepAlive: false,
+      sourceType: 'document'
+    }
+  },
+  {
+    path: '/graph',
+    name: 'KnowledgeGraph',
+    component: () => import('../pages/knowledge/NoteGraphPage.vue'),
+    meta: {
+      title: '知识图谱',
+      keepAlive: false
+    }
+  },
+  {
+    path: '/graph/concepts',
+    name: 'ConceptGraph',
+    component: () => import('../pages/knowledge/ConceptGraphPage.vue'),
+    meta: {
+      title: 'AI 概念图（实验）',
+      keepAlive: false
+    }
+  },
+  {
+    path: '/more',
+    name: 'More',
+    component: () => import('../pages/knowledge/MorePage.vue'),
+    meta: {
+      title: '更多',
       keepAlive: false
     }
   },

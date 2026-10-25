@@ -204,44 +204,54 @@ async def test_executor_missing_file_terminal_and_status_contract(env):
 
 @pytest.mark.asyncio
 async def test_retrieval_filter_drops_deleted_and_stale_generation(env, monkeypatch):
-    """检索候选过滤：已删文档的切片与旧代次切片不进入上下文。"""
-    from app.rag.retrieval_service import RetrievalService
+    """可见性过滤：已删/旧代次/残留切片不进入（直接测 visibility service，与顺序解耦）。"""
+    from types import SimpleNamespace as NS
+    from app.services.document_visibility_service import (
+        DocumentVisibilityService, create_visibility_service)
 
-    async def _active(user_id, md5s):
-        # M-OK 已发布代次 2；M-DEL 已删除；M-OLD 已重建（可见代次 3）；
-        # M-LEGACY 纯存量（active=0）
-        return {"M-OK": 2, "M-OLD": 3, "M-LEGACY": 0}
+    async def _resolve(user_id, doc_ids):
+        return {"D-OK": 2, "D-OLD": 3, "D-LEGACY": 0}
 
-    monkeypatch.setattr(dis, "get_active_document_md5s", _active)
+    monkeypatch.setattr(DocumentVisibilityService,
+                        "resolve_visible_generations", _resolve)
 
-    svc = RetrievalService(user_id="u1")
+    vis = create_visibility_service("u1", source="test")
     docs = [
-        NS(page_content="ok", metadata={"md5": "M-OK", "generation": 2}),
-        NS(page_content="deleted", metadata={"md5": "M-DEL", "generation": 1}),
-        NS(page_content="stale", metadata={"md5": "M-OLD", "generation": 2}),
-        # gen-less 残留：文档已发布过代次 → 丢弃（评审 #6 规则收紧）
-        NS(page_content="legacy-residue", metadata={"md5": "M-OK"}),
-        # gen-less 且 active=0：纯存量文档 → 放行
-        NS(page_content="legacy-pure", metadata={"md5": "M-LEGACY"}),
-        NS(page_content="no-md5", metadata={}),               # 无标识：丢弃
+        NS(page_content="ok", metadata={"user_id": "u1", "document_id": "D-OK",
+                                        "generation": 2}),
+        NS(page_content="deleted", metadata={"user_id": "u1", "document_id": "D-DEL",
+                                             "generation": 1}),
+        NS(page_content="stale", metadata={"user_id": "u1", "document_id": "D-OLD",
+                                           "generation": 2}),
+        NS(page_content="legacy-residue", metadata={"user_id": "u1",
+                                                    "document_id": "D-OK"}),
+        NS(page_content="legacy-pure", metadata={"user_id": "u1",
+                                                 "document_id": "D-LEGACY"}),
+        NS(page_content="no-md5", metadata={}),
     ]
-    kept = await svc._filter_active_documents(docs)
+    kept = await vis.filter_by_identity(docs)
+    # ok 当前代次；legacy-pure 纯存量（active=0 无 generation）放行
     assert [d.page_content for d in kept] == ["ok", "legacy-pure"]
 
 
 @pytest.mark.asyncio
 async def test_retrieval_filter_fails_closed_on_db_error(env, monkeypatch):
-    """可见性查询失败：fail-closed 丢弃全部候选，不让未验证切片进上下文。"""
-    from app.rag.retrieval_service import RetrievalService
+    """依赖失败：visibility 层抛 VisibilityUnavailable（fail-closed 分类贯通）。"""
+    from types import SimpleNamespace as NS
+    from app.services.document_visibility_service import (
+        DocumentVisibilityService, create_visibility_service, VisibilityUnavailable)
 
-    async def _boom(user_id, md5s):
-        raise RuntimeError("db down")
+    async def _boom(user_id, doc_ids):
+        raise VisibilityUnavailable("db down")
 
-    monkeypatch.setattr(dis, "get_active_document_md5s", _boom)
+    monkeypatch.setattr(DocumentVisibilityService,
+                        "resolve_visible_generations", _boom)
 
-    svc = RetrievalService(user_id="u1")
-    docs = [NS(page_content="x", metadata={"md5": "M1", "generation": 1})]
-    assert await svc._filter_active_documents(docs) == []
+    vis = create_visibility_service("u1", source="test")
+    docs = [NS(page_content="x", metadata={"user_id": "u1",
+                                           "document_id": "D1", "generation": 1})]
+    with pytest.raises(VisibilityUnavailable):
+        await vis.filter_by_identity(docs)
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,11 @@ import app.models.space_document  # noqa: F401
 import app.models.audit_log  # noqa: F401
 import app.models.document_index  # noqa: F401
 import app.models.agent_run  # noqa: F401
+import app.models.cleanup_task  # noqa: F401
+import app.models.index_execution  # noqa: F401
+import app.models.legacy_mapping  # noqa: F401
+import app.models.knowledge_insight  # noqa: F401
+import app.models.note_graph  # noqa: F401
 
 config = context.config
 

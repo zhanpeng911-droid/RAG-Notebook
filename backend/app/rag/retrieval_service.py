@@ -132,9 +132,14 @@ class RetrievalService:
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # 合并结果
+        # 合并结果：依赖失败（VisibilityUnavailable）必须明确传播，不得静默
+        # continue 成空/部分结果——上层据此区分"数据库故障"与"确实无知识"；
+        # 普通检索异常仍按既有降级（记日志跳过该分支）。
+        from app.services.document_visibility_service import VisibilityUnavailable
         all_evidences: List[Evidence] = []
         for result in results:
+            if isinstance(result, VisibilityUnavailable):
+                raise result  # 依赖失败：不返回伪装成功的空/部分结果
             if isinstance(result, Exception):
                 logger.error(f"【统一检索】检索异常: {result}")
                 continue
@@ -274,9 +279,13 @@ class RetrievalService:
 
             return evidences
 
-        except Exception as e:
-            logger.error(f"【统一检索】知识库检索失败: {e}")
+        except Exception as _vuv:
+            from app.services.document_visibility_service import VisibilityUnavailable as _VU
+            if isinstance(_vuv, _VU):
+                raise  # 依赖失败：保持结构化，不降级关键词（关键词同样依赖 DB）
+            logger.error(f"【统一检索】知识库检索失败: {_vuv}")
             return await self._keyword_search_knowledge(query, top_k, space_id)
+
 
     async def _filter_active_documents(self, documents: List) -> List:
         """读取侧可见性过滤（R2D）。
@@ -289,38 +298,20 @@ class RetrievalService:
         if not documents:
             return documents
 
-        md5s = {d.metadata.get("md5", "") for d in documents if d.metadata.get("md5")}
-        if not md5s:
-            # 知识库切片都应携带 md5；缺失标识的候选无法验证归属，丢弃
-            logger.warning("【统一检索】存在缺失 md5 标识的知识库候选，已丢弃")
-            return []
-
+        # B：统一按 owner+document_id 批量可见性判定（MD5 不再作为身份）
+        from app.services.document_visibility_service import (
+            create_visibility_service, VisibilityUnavailable)
+        visibility = create_visibility_service(self.user_id)
         try:
-            from app.services.document_index_service import get_active_document_md5s
-            active = await get_active_document_md5s(self.user_id, md5s)
+            return await visibility.filter_by_identity(documents)
+        except VisibilityUnavailable as e:
+            # 依赖失败分类贯通：向上抛（区别于合法空结果），由检索外层转
+            # 结构化错误，不静默当"没有结果"
+            logger.error(f"【统一检索】可见性依赖失败: {e}")
+            raise
         except Exception as e:
-            # fail-closed：可见性不可验证时不让任何候选进入上下文
-            logger.warning(f"【统一检索】可见性过滤查询失败，丢弃全部候选: {e}")
-            return []
-
-        kept = []
-        for d in documents:
-            md5 = d.metadata.get("md5", "")
-            if not md5:
-                continue
-            active_generation = active.get(md5)
-            if active_generation is None:
-                continue  # 文档已删除/删除中/非 indexed：不可见
-            gen_meta = d.metadata.get("generation")
-            if gen_meta is not None:
-                if int(gen_meta) != int(active_generation):
-                    continue  # 旧代次切片：不可见
-            elif active_generation > 0:
-                # 文档已发布过代次但切片无代次元数据：代次化之前的残留，不可见
-                # （纯存量文档 active_generation == 0 时放行）
-                continue
-            kept.append(d)
-        return kept
+            logger.warning(f"【统一检索】可见性过滤异常: {e}")
+            raise
 
     async def _retrieve_notes(self, query: str, top_k: int) -> List[Evidence]:
         """从笔记库检索"""

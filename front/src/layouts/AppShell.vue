@@ -99,13 +99,13 @@ onUnmounted(() => {
 
 /* 移动端：隐藏 Sidebar，内容区无左边距 */
 @media (max-width: 767px) {
-  .app-main {
+  .app-main, .sidebar-collapsed .app-main {
     margin-left: 0;
     padding-bottom: var(--tabbar-height);
   }
 
   .app-content {
-    padding-top: var(--space-md);
+    padding-top: calc(var(--topbar-height) + var(--space-md));
   }
 }
 

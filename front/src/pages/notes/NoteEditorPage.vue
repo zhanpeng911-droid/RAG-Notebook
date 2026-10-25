@@ -15,6 +15,8 @@
         </div>
         <div class="toolbar-right">
           <span v-if="autoSaved" class="auto-saved">已自动保存</span>
+          <button v-if="!isNew" class="btn-insight" @click="handleInsight">分析笔记</button>
+          <button v-if="!isNew" class="btn-insight" @click="openLocalGraph">局部图谱</button>
           <button class="btn-save" :disabled="saving" @click="handleSave">
             {{ saving ? '保存中...' : '保存' }}
           </button>
@@ -70,6 +72,26 @@
           :position="cursorPosition"
           @accept="handleAccept"
         />
+        <div
+          v-if="linkSuggestVisible"
+          class="link-suggest"
+          :style="linkSuggestStyle"
+          @mousedown.prevent
+        >
+          <button
+            v-for="(candidate, index) in linkSuggestions"
+            :key="candidate.id"
+            class="link-suggest-item"
+            :class="{ active: index === linkSuggestIndex }"
+            @mousedown.prevent="selectLinkCandidate(candidate)"
+          >
+            <span class="ellipsis">{{ candidate.title }}</span>
+            <small>{{ candidate.duplicate_title ? '同名笔记' : (candidate.category || '笔记') }}</small>
+          </button>
+          <div v-if="linkSuggestions.length === 0" class="link-suggest-empty">
+            没有匹配的笔记，可先创建或继续输入
+          </div>
+        </div>
       </div>
     </div>
 
@@ -82,7 +104,7 @@
             <polyline points="15 18 9 12 15 6" />
           </svg>
         </div>
-        <div class="sidebar-toggle-hint">相关</div>
+        <div class="sidebar-toggle-hint">关系</div>
       </div>
 
       <!-- 展开态 -->
@@ -118,7 +140,10 @@
         <!-- 列表视图 -->
         <template v-else>
           <div class="related-header">
-            <span class="related-title">相关笔记</span>
+            <div class="sidebar-tabs">
+              <button :class="{ active: sidebarTab === 'links' }" @click="switchSidebarTab('links')">链接</button>
+              <button :class="{ active: sidebarTab === 'related' }" @click="switchSidebarTab('related')">相关</button>
+            </div>
             <button class="btn-sidebar-close" @click="toggleSidebar">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="9 18 15 12 9 6" />
@@ -126,32 +151,134 @@
             </button>
           </div>
 
-          <div v-if="loadingRelated" class="related-loading">
-            <div class="spinner-sm"></div>
-          </div>
-
-          <div v-else-if="relatedItems.length === 0" class="related-empty">
-            暂无相关笔记
-          </div>
-
-          <div v-else class="related-list">
-            <div
-              v-for="item in relatedItems"
-              :key="item.id"
-              class="related-card"
-              @click="expandRelatedNote(item)"
-            >
-              <div class="related-card-header">
-                <span class="related-source" :class="item.source === 'note' ? 'src-note' : 'src-kb'">
-                  {{ item.source === 'note' ? '笔记' : '知识库' }}
-                </span>
-                <span class="related-similarity">{{ (item.similarity * 100).toFixed(0) }}%</span>
-              </div>
-              <h4 class="related-card-title ellipsis">{{ item.title }}</h4>
-              <p class="related-card-preview">{{ item.content_preview }}</p>
+          <template v-if="sidebarTab === 'links'">
+            <div v-if="loadingLinks" class="related-loading">
+              <div class="spinner-sm"></div>
             </div>
-          </div>
+            <div v-else class="links-panel">
+              <div class="links-summary">
+                出链 {{ linkData?.counts?.outgoing_notes || 0 }} ·
+                入链 {{ linkData?.counts?.incoming_notes || 0 }} ·
+                手动 {{ linkData?.counts?.manual || 0 }}
+              </div>
+
+              <section class="link-block">
+                <h4>链接到</h4>
+                <button
+                  v-for="item in linkData?.outgoing || []"
+                  :key="'out-' + item.note.id"
+                  class="link-row"
+                  @click="openRelatedNote(item.note.id)"
+                >
+                  <span class="link-title">{{ item.note.title }}</span>
+                  <span class="link-count">×{{ item.count }}</span>
+                  <small>{{ occurrenceText(item.occurrences) }}</small>
+                </button>
+                <p v-if="!linkData?.outgoing?.length" class="link-empty">正文中没有出链</p>
+              </section>
+
+              <section class="link-block">
+                <h4>被链接</h4>
+                <button
+                  v-for="item in linkData?.incoming || []"
+                  :key="'in-' + item.note.id"
+                  class="link-row"
+                  @click="openRelatedNote(item.note.id)"
+                >
+                  <span class="link-title">{{ item.note.title }}</span>
+                  <span class="link-count">×{{ item.count }}</span>
+                  <small>{{ occurrenceText(item.occurrences) }}</small>
+                </button>
+                <p v-if="!linkData?.incoming?.length" class="link-empty">还没有反向链接</p>
+              </section>
+
+              <section class="link-block">
+                <div class="link-block-head">
+                  <h4>手动关联</h4>
+                  <button class="link-add" @click="openManualPicker">添加</button>
+                </div>
+                <div
+                  v-for="item in linkData?.manual || []"
+                  :key="item.relation_id"
+                  class="manual-row"
+                >
+                  <button class="link-open" @click="openRelatedNote(item.note.id)">
+                    {{ item.note.title }}
+                    <small>{{ item.direction === 'outgoing' ? '我关联到' : '关联到本篇' }}</small>
+                  </button>
+                  <button class="link-remove" @click="removeManualRelation(item.relation_id)">移除</button>
+                </div>
+                <p v-if="!linkData?.manual?.length" class="link-empty">还没有手动关联</p>
+              </section>
+
+              <section v-if="linkData?.unresolved?.length" class="link-block">
+                <h4>未解析链接</h4>
+                <div
+                  v-for="item in linkData.unresolved"
+                  :key="item.occurrence_id"
+                  class="unresolved-row"
+                >
+                  <code>{{ item.raw_token }}</code>
+                  <small>{{ item.status === 'ambiguous' ? '标题重名，请手动选择' : '目标不存在或已删除' }}</small>
+                </div>
+              </section>
+            </div>
+          </template>
+
+          <template v-else>
+            <div v-if="loadingRelated" class="related-loading">
+              <div class="spinner-sm"></div>
+            </div>
+
+            <div v-else-if="relatedItems.length === 0" class="related-empty">
+              暂无相关笔记
+            </div>
+
+            <div v-else class="related-list">
+              <div
+                v-for="item in relatedItems"
+                :key="item.id"
+                class="related-card"
+                @click="expandRelatedNote(item)"
+              >
+                <div class="related-card-header">
+                  <span class="related-source" :class="item.source === 'note' ? 'src-note' : 'src-kb'">
+                    {{ item.source === 'note' ? '笔记' : '知识库' }}
+                  </span>
+                  <span class="related-similarity">{{ (item.similarity * 100).toFixed(0) }}%</span>
+                </div>
+                <h4 class="related-card-title ellipsis">{{ item.title }}</h4>
+                <p class="related-card-preview">{{ item.content_preview }}</p>
+              </div>
+            </div>
+          </template>
         </template>
+      </div>
+    </div>
+
+    <div v-if="manualPickerVisible" class="manual-modal-overlay" @click="manualPickerVisible = false">
+      <div class="manual-modal" @click.stop>
+        <h3>添加手动关联</h3>
+        <input
+          v-model="manualQuery"
+          class="manual-search"
+          placeholder="搜索要关联的笔记标题…"
+          @input="searchManualCandidates"
+        />
+        <div class="manual-candidates">
+          <button
+            v-for="candidate in manualCandidates"
+            :key="candidate.id"
+            @click="addManualRelation(candidate.id)"
+          >
+            <span>{{ candidate.title }}</span>
+            <small>{{ candidate.duplicate_title ? '同名笔记' : (candidate.category || '笔记') }}</small>
+          </button>
+          <p v-if="manualCandidates.length === 0">没有匹配的笔记</p>
+        </div>
+        <div class="manual-actions">
+          <button @click="manualPickerVisible = false">取消</button>
+        </div>
       </div>
     </div>
   </div>
@@ -168,6 +295,7 @@ import { showToast, showConfirmDialog } from 'vant'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { noteApi } from '../../services/noteApi'
+import { noteGraphApi } from '../../services/noteGraphApi'
 import * as noteDraft from '../../services/noteDraft'
 import { useModelStore } from '../../store/model'
 import { useUserStore } from '../../store/user'
@@ -183,6 +311,110 @@ const userStore = useUserStore()
 // ===== Refs =====
 const markdownEditorRef = ref(null)
 const editorBodyRef = ref(null)
+
+// ===== 内部链接 [[ 候选 =====
+const linkSuggestVisible = ref(false)
+const linkSuggestions = ref([])
+const linkSuggestIndex = ref(0)
+const linkSuggestStyle = ref({})
+let linkCm = null
+let linkCleanup = null
+let linkDebounce = null
+let linkCursor = null
+let linkSetupAttempts = 0
+
+function hideLinkSuggest() {
+  linkSuggestVisible.value = false
+  linkSuggestions.value = []
+  linkSuggestIndex.value = 0
+}
+
+function positionLinkSuggest(cm, cursor) {
+  const coords = cm.cursorCoords(cursor, 'window')
+  const width = 300
+  linkSuggestStyle.value = {
+    left: `${Math.max(8, Math.min(coords.left, window.innerWidth - width - 12))}px`,
+    top: `${Math.max(8, Math.min(coords.bottom + 6, window.innerHeight - 260))}px`,
+    width: `${width}px`,
+  }
+}
+
+async function loadLinkCandidates(query) {
+  try {
+    const q = query.startsWith('note:') ? '' : query
+    const data = await noteGraphApi.candidates(q, noteId.value)
+    linkSuggestions.value = data.candidates || []
+    linkSuggestIndex.value = 0
+  } catch (_) {
+    linkSuggestions.value = []
+  }
+}
+
+function onEditorChange(cm) {
+  const cursor = cm.getCursor()
+  const lineBefore = cm.getLine(cursor.line).slice(0, cursor.ch)
+  const match = lineBefore.match(/\[\[([^[\]\n]*)$/)
+  if (!match) {
+    hideLinkSuggest()
+    return
+  }
+  const query = match[1]
+  linkCursor = { line: cursor.line, ch: cursor.ch - query.length - 2 }
+  linkSuggestVisible.value = true
+  positionLinkSuggest(cm, cursor)
+  if (linkDebounce) clearTimeout(linkDebounce)
+  linkDebounce = setTimeout(() => loadLinkCandidates(query), 180)
+}
+
+function selectLinkCandidate(candidate) {
+  if (!linkCm || !linkCursor) return
+  const display = String(candidate.title || '笔记').replace(/[|\]]/g, ' ').trim() || '笔记'
+  linkCm.replaceRange(
+    `[[note:${candidate.id}|${display}]]`,
+    linkCursor,
+    linkCm.getCursor(),
+  )
+  hideLinkSuggest()
+  linkCm.focus()
+}
+
+function onEditorKeydown(cm, event) {
+  if (!linkSuggestVisible.value) return
+  if (event.key === 'ArrowDown') {
+    event.preventDefault()
+    linkSuggestIndex.value = Math.min(
+      linkSuggestIndex.value + 1, Math.max(0, linkSuggestions.value.length - 1))
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault()
+    linkSuggestIndex.value = Math.max(0, linkSuggestIndex.value - 1)
+  } else if (event.key === 'Enter' || event.key === 'Tab') {
+    const candidate = linkSuggestions.value[linkSuggestIndex.value]
+    if (candidate) {
+      event.preventDefault()
+      selectLinkCandidate(candidate)
+    }
+  } else if (event.key === 'Escape') {
+    event.preventDefault()
+    hideLinkSuggest()
+  }
+}
+
+function setupLinkAutocomplete() {
+  const cm = markdownEditorRef.value?.getEditorCm?.()
+  if (!cm) {
+    if (linkSetupAttempts++ < 20) setTimeout(setupLinkAutocomplete, 400)
+    return
+  }
+  linkCm = cm
+  cm.on('change', onEditorChange)
+  cm.on('keydown', onEditorKeydown)
+  cm.on('scroll', hideLinkSuggest)
+  linkCleanup = () => {
+    cm.off('change', onEditorChange)
+    cm.off('keydown', onEditorKeydown)
+    cm.off('scroll', hideLinkSuggest)
+  }
+}
 
 // ===== Editor State =====
 const title = ref('')
@@ -207,6 +439,14 @@ const expandedNote = ref(null)
 const detailLoading = ref(false)
 const renderedExpandedContent = ref('')
 
+const sidebarTab = ref('links')
+const loadingLinks = ref(false)
+const linkData = ref(null)
+const manualPickerVisible = ref(false)
+const manualQuery = ref('')
+const manualCandidates = ref([])
+let manualTimer = null
+
 let autoSaveTimer = null
 let relatedRefreshTimer = null
 
@@ -230,8 +470,79 @@ function removeTag(index) {
 // ===== Sidebar =====
 function toggleSidebar() {
   sidebarVisible.value = !sidebarVisible.value
-  if (sidebarVisible.value && relatedItems.value.length === 0) {
+  if (sidebarVisible.value && sidebarTab.value === 'links') {
+    fetchLinks()
+  } else if (sidebarVisible.value && relatedItems.value.length === 0) {
     fetchRelated()
+  }
+}
+
+function switchSidebarTab(tab) {
+  sidebarTab.value = tab
+  if (tab === 'links') fetchLinks()
+  else if (relatedItems.value.length === 0) fetchRelated()
+}
+
+async function fetchLinks() {
+  if (!noteId.value || isNew.value) return
+  loadingLinks.value = true
+  try {
+    linkData.value = await noteGraphApi.links(noteId.value)
+  } catch (error) {
+    linkData.value = null
+    showToast(error.response?.data?.detail || '链接关系加载失败')
+  } finally {
+    loadingLinks.value = false
+  }
+}
+
+function occurrenceText(occurrences) {
+  const item = occurrences?.[0]
+  if (!item) return ''
+  return item.context_text || item.raw_token || ''
+}
+
+function openRelatedNote(id) {
+  if (id && id !== noteId.value) router.push(`/notes/${id}`)
+}
+
+function openManualPicker() {
+  manualPickerVisible.value = true
+  manualQuery.value = ''
+  manualCandidates.value = []
+  searchManualCandidates()
+}
+
+function searchManualCandidates() {
+  if (manualTimer) clearTimeout(manualTimer)
+  manualTimer = setTimeout(async () => {
+    try {
+      const data = await noteGraphApi.candidates(manualQuery.value.trim(), noteId.value)
+      manualCandidates.value = data.candidates || []
+    } catch (_) {
+      manualCandidates.value = []
+    }
+  }, 180)
+}
+
+async function addManualRelation(targetId) {
+  try {
+    await noteGraphApi.addManual(noteId.value, targetId)
+    manualPickerVisible.value = false
+    showToast('已添加手动关联')
+    await fetchLinks()
+  } catch (error) {
+    showToast(error.response?.data?.detail || '添加失败')
+  }
+}
+
+async function removeManualRelation(relationId) {
+  try {
+    await noteGraphApi.removeManual(noteId.value, relationId)
+    showToast('已移除手动关联')
+    await fetchLinks()
+  } catch (error) {
+    showToast(error.response?.data?.detail || '移除失败')
   }
 }
 
@@ -310,7 +621,7 @@ function scheduleRelatedRefresh() {
 async function handleSave() {
   if (!title.value.trim() && !content.value.trim()) {
     showToast('标题或内容不能为空')
-    return
+    return { ok: false, id: noteId.value }
   }
 
   saving.value = true
@@ -326,27 +637,52 @@ async function handleSave() {
         clearDraft()
         showToast('保存成功')
         const newId = result.data?.id
+        noteId.value = newId
         router.replace(`/notes/${newId}`)
-      } else {
-        showToast('保存失败')
+        return { ok: true, id: newId }
       }
-    } else {
-      const result = await noteApi.update(noteId.value, data)
-      if (result.code === 200) {
-        clearDraft()
-        autoSaved.value = true
-        setTimeout(() => { autoSaved.value = false }, 2000)
-        showToast('保存成功')
-      } else {
-        showToast('保存失败')
-      }
+      showToast('保存失败')
+      return { ok: false, id: '' }
     }
+
+    const result = await noteApi.update(noteId.value, data)
+    if (result.code === 200) {
+      clearDraft()
+      autoSaved.value = true
+      setTimeout(() => { autoSaved.value = false }, 2000)
+      showToast('保存成功')
+      if (sidebarVisible.value && sidebarTab.value === 'links') fetchLinks()
+      return { ok: true, id: noteId.value }
+    }
+    showToast('保存失败')
+    return { ok: false, id: noteId.value }
   } catch (error) {
     console.error('保存失败:', error)
-    showToast('网络错误')
+    showToast('网络错误，内容已保留在草稿中')
+    return { ok: false, id: noteId.value }
   } finally {
     saving.value = false
   }
+}
+
+async function handleInsight() {
+  if (isNew.value) {
+    showToast('请先保存笔记')
+    return
+  }
+  const saved = await handleSave()
+  if (!saved.ok || !saved.id) return
+  router.push(`/analysis/note/${saved.id}`)
+}
+
+async function openLocalGraph() {
+  if (isNew.value) {
+    showToast('请先保存笔记')
+    return
+  }
+  const saved = await handleSave()
+  if (!saved.ok || !saved.id) return
+  router.push(`/graph?focus=${saved.id}&depth=1`)
 }
 
 async function handleDelete() {
@@ -468,11 +804,15 @@ onMounted(() => {
     loadNote()
   }
   setupCursorTracking()
+  setTimeout(setupLinkAutocomplete, 500)
 })
 
 onUnmounted(() => {
   if (autoSaveTimer) clearTimeout(autoSaveTimer)
   if (relatedRefreshTimer) clearTimeout(relatedRefreshTimer)
+  if (manualTimer) clearTimeout(manualTimer)
+  if (linkDebounce) clearTimeout(linkDebounce)
+  if (linkCleanup) linkCleanup()
   if (cmCleanup) cmCleanup()
 })
 </script>
@@ -580,6 +920,22 @@ onUnmounted(() => {
   font-size: 14px;
   cursor: pointer;
   transition: all 0.15s ease;
+}
+
+.btn-insight {
+  padding: var(--space-xs) var(--space-md);
+  background: transparent;
+  color: var(--color-primary);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-insight:hover {
+  background: var(--color-primary);
+  color: white;
 }
 
 .btn-delete:hover {
@@ -985,6 +1341,99 @@ onUnmounted(() => {
 .detail-body :deep(img) {
   max-width: 100%;
 }
+
+/* ===== 内部链接候选 ===== */
+.link-suggest {
+  position: fixed;
+  z-index: 80;
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.18);
+  padding: 5px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.link-suggest-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  border-radius: 7px;
+  padding: 7px 9px;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+.link-suggest-item.active,
+.link-suggest-item:hover {
+  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+}
+.link-suggest-item small {
+  color: var(--color-text-light);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.link-suggest-empty {
+  padding: 10px;
+  color: var(--color-text-light);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* ===== 链接侧栏 ===== */
+.sidebar-tabs { display: flex; gap: 4px; }
+.sidebar-tabs button {
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-light);
+  border-radius: 6px;
+  padding: 3px 9px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.sidebar-tabs button.active {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
+}
+.links-panel { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 10px; }
+.links-summary { font-size: 11px; color: var(--color-text-light); margin-bottom: 6px; }
+.link-block { border-top: 1px solid var(--color-border-light); padding-top: 8px; margin-top: 8px; }
+.link-block h4 { font-size: 12px; margin: 0 0 6px; }
+.link-block-head { display: flex; align-items: center; justify-content: space-between; }
+.link-row {
+  display: flex; flex-direction: column; gap: 2px; width: 100%;
+  border: none; background: transparent; color: var(--color-text);
+  text-align: left; padding: 6px 7px; border-radius: 6px; cursor: pointer;
+}
+.link-row:hover { background: var(--color-surface); }
+.link-title { font-size: 13px; }
+.link-count { color: var(--color-primary); font-size: 11px; }
+.link-row small { color: var(--color-text-light); font-size: 11px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
+.link-empty { color: var(--color-text-light); font-size: 11px; margin: 4px 0; }
+.link-add { border: none; background: transparent; color: var(--color-primary); font-size: 12px; cursor: pointer; }
+.manual-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.link-open { display: flex; flex-direction: column; border: none; background: transparent; color: var(--color-text); text-align: left; padding: 5px 4px; cursor: pointer; font-size: 13px; }
+.link-open small { color: var(--color-text-light); font-size: 11px; }
+.link-remove { border: none; background: transparent; color: var(--color-error); font-size: 11px; cursor: pointer; }
+.unresolved-row { display: flex; flex-direction: column; gap: 2px; padding: 4px 0; font-size: 11px; }
+.unresolved-row code { background: var(--color-surface); border-radius: 4px; padding: 2px 5px; color: var(--color-text-light); }
+.unresolved-row small { color: var(--color-text-light); }
+.manual-modal-overlay { position: fixed; inset: 0; background: rgba(12,20,35,.45); display: flex; align-items: center; justify-content: center; z-index: 90; }
+.manual-modal { width: min(440px, 92vw); background: var(--color-card); border-radius: 12px; padding: 16px; }
+.manual-modal h3 { margin: 0 0 10px; font-size: 15px; }
+.manual-search { width: 100%; box-sizing: border-box; border: 1px solid var(--color-border); border-radius: 8px; padding: 8px 10px; background: var(--color-bg); color: var(--color-text); }
+.manual-candidates { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; max-height: 280px; overflow-y: auto; }
+.manual-candidates button { display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--color-border); border-radius: 7px; background: transparent; color: var(--color-text); padding: 8px 10px; cursor: pointer; font-size: 13px; text-align: left; }
+.manual-candidates button small { color: var(--color-text-light); font-size: 11px; }
+.manual-candidates p { color: var(--color-text-light); font-size: 12px; }
+.manual-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+.manual-actions button { border: 1px solid var(--color-border); background: transparent; color: var(--color-text); border-radius: 7px; padding: 6px 12px; cursor: pointer; font-size: 12px; }
 
 /* ===== Spinner ===== */
 .spinner-sm {

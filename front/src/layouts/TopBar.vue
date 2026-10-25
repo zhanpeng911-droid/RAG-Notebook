@@ -39,7 +39,7 @@
       </button>
 
       <!-- 用户菜单 -->
-      <div ref="userMenuRef" class="user-menu" @click="toggleUserMenu">
+      <div ref="userMenuRef" class="user-menu" role="button" tabindex="0" aria-label="用户菜单" :aria-expanded="showUserMenu" @click="toggleUserMenu" @keydown.enter.prevent="toggleUserMenu" @keydown.space.prevent="toggleUserMenu">
         <div class="user-avatar">
           <svg v-if="!userStore.getUserInfo?.avatar" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
@@ -204,6 +204,7 @@ onUnmounted(() => {
 /* 中间搜索框 */
 .topbar-center {
   flex: 1;
+  min-width: 0;
   display: flex;
   justify-content: center;
   padding: 0 var(--space-xl);
@@ -216,6 +217,7 @@ onUnmounted(() => {
   align-items: center;
   gap: var(--space-sm);
   width: 100%;
+  min-width: 0;
   max-width: 480px;
   height: 36px;
   padding: 0 var(--space-md);
@@ -238,6 +240,7 @@ onUnmounted(() => {
 
 .search-input {
   flex: 1;
+  min-width: 0;
   border: none;
   background: transparent;
   font-size: 13px;
@@ -398,7 +401,7 @@ onUnmounted(() => {
 
 /* 移动端适配 */
 @media (max-width: 767px) {
-  .topbar {
+  .topbar, .sidebar-collapsed .topbar {
     left: 0;
     padding: 0 var(--space-md);
   }

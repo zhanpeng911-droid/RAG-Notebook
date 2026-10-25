@@ -347,20 +347,23 @@ def embed_available(monkeypatch):
 async def test_knowledge_vector_path_scores_and_filters(fake_vector_class,
                                                         embed_available,
                                                         monkeypatch):
-    # 读取侧可见性过滤（R2D）：stub 掉 DB 查询，全部候选视为已发布代次
-    import app.services.document_index_service as dis
+    # 读取侧可见性过滤（B）：stub 掉 DB 查询，全部候选视为已发布代次
+    import app.services.document_visibility_service as vis
 
-    async def _active(user_id, md5s):
-        return {m: 1 for m in md5s}
+    async def _resolve(user_id, doc_ids):
+        return {d: 1 for d in doc_ids}
 
-    monkeypatch.setattr(dis, "get_active_document_md5s", _active)
+    monkeypatch.setattr(vis.DocumentVisibilityService,
+                        "resolve_visible_generations", _resolve)
 
     docs = [
-        _Doc("高分段落", {"md5": "M1", "original_filename": "r.pdf",
+        _Doc("高分段落", {"md5": "M1", "document_id": "D1",
+                          "original_filename": "r.pdf",
                           "user_id": "u1", "space_id": "s1", "score": 0.87,
                           "generation": 1}),
         _Doc("中分段落", {"original_filename": "r.pdf", "space_id": "s1",
-                          "md5": "M2", "generation": 1}),
+                          "user_id": "u1", "md5": "M2", "document_id": "D2",
+                          "generation": 1}),
         _Doc("其他空间文档", {"original_filename": "other.pdf",
                               "space_id": "s-else"}),
     ]
@@ -384,12 +387,13 @@ async def test_knowledge_vector_path_scores_and_filters(fake_vector_class,
 async def test_knowledge_hyde_unavailable_falls_back_to_original(fake_vector_class,
                                                                  embed_available,
                                                                  monkeypatch):
-    import app.services.document_index_service as dis
+    import app.services.document_visibility_service as vis
 
-    async def _active(user_id, md5s):
-        return {m: 1 for m in md5s}
+    async def _resolve(user_id, doc_ids):
+        return {d: 1 for d in doc_ids}
 
-    monkeypatch.setattr(dis, "get_active_document_md5s", _active)
+    monkeypatch.setattr(vis.DocumentVisibilityService,
+                        "resolve_visible_generations", _resolve)
 
     """单测环境下 LLM 链不可构建，HyDE 必须按设计降级为原始查询。
 
@@ -397,7 +401,8 @@ async def test_knowledge_hyde_unavailable_falls_back_to_original(fake_vector_cla
     失败兜底分支（443-445 行）与检索使用原始查询的行为。
     """
     r = _Retriever([_Doc("正文", {"original_filename": "f.pdf",
-                                  "space_id": "s1", "md5": "M9",
+                                  "space_id": "s1", "user_id": "u1",
+                                  "md5": "M9", "document_id": "D9",
                                   "generation": 1})])
     fake_vector_class["retriever"] = r
     out = await RetrievalService(user_id="u1")._retrieve_knowledge(
@@ -487,3 +492,108 @@ async def test_keyword_notes_returns_preview_and_rank_scores(fake_factory_db):
     assert len(out[0].content) == 203
     assert out[1].content == "短文"
     assert out[0].score > out[1].score >= 0
+
+
+# ---------- 复验：检索入口接线（可见性依赖失败分类贯通） ----------
+
+@pytest.mark.asyncio
+async def test_filter_active_documents_propagates_dependency_failure(monkeypatch):
+    """检索入口：可见性依赖失败必须抛 VisibilityUnavailable（结构化分类，
+    不静默当"没有结果"），且不降级关键词。"""
+    from app.rag.retrieval_service import RetrievalService
+    from app.services.document_visibility_service import (
+        DocumentVisibilityService, VisibilityUnavailable)
+
+    async def _boom(user_id, doc_ids):
+        raise VisibilityUnavailable("db down")
+
+    monkeypatch.setattr(DocumentVisibilityService,
+                        "resolve_visible_generations", _boom)
+
+    svc = RetrievalService(user_id="u1")
+    docs = [SimpleNamespace(page_content="x",
+               metadata={"user_id": "u1", "document_id": "D1", "generation": 1})]
+    with pytest.raises(VisibilityUnavailable):
+        await svc._filter_active_documents(docs)
+
+
+@pytest.mark.asyncio
+async def test_filter_active_documents_entry_returns_visible(monkeypatch):
+    """检索入口：正常候选（本人+当前代次）经可见性过滤返回。"""
+    from app.rag.retrieval_service import RetrievalService
+    from app.services.document_visibility_service import DocumentVisibilityService
+
+    async def _resolve(user_id, doc_ids):
+        return {"D1": 1}
+
+    monkeypatch.setattr(DocumentVisibilityService,
+                        "resolve_visible_generations", _resolve)
+
+    svc = RetrievalService(user_id="u1")
+    docs = [SimpleNamespace(page_content="ok",
+               metadata={"user_id": "u1", "document_id": "D1", "generation": 1}),
+            SimpleNamespace(page_content="other",
+               metadata={"user_id": "u1", "document_id": "D2", "generation": 1})]
+    kept = await svc._filter_active_documents(docs)
+    assert [d.page_content for d in kept] == ["ok"]
+
+
+# ---------- 复验：公开 retrieve() 依赖失败分类贯通 ----------
+
+@pytest.mark.asyncio
+async def test_retrieve_knowledge_dependency_failure_propagates(monkeypatch):
+    """knowledge 范围：可见性依赖失败必须从公开 retrieve() 传播，
+    不返回伪装成功的空结果。"""
+    from app.rag.retrieval_service import RetrievalService
+    from app.services.document_visibility_service import VisibilityUnavailable
+
+    async def _boom(self, *args, **kwargs):
+        raise VisibilityUnavailable("db down")
+
+    monkeypatch.setattr(RetrievalService, "_retrieve_knowledge", _boom)
+
+    svc = RetrievalService(user_id="u1")
+    with pytest.raises(VisibilityUnavailable):
+        await svc.retrieve("q", scope="knowledge", top_k=5,
+                           use_hyde=False, use_rerank=False)
+
+
+@pytest.mark.asyncio
+async def test_retrieve_all_knowledge_fail_notes_ok_propagates(monkeypatch):
+    """all 范围：知识依赖失败、笔记成功 → 明确失败（不静默当完整成功）。"""
+    from app.rag.retrieval_service import RetrievalService
+    from app.services.document_visibility_service import VisibilityUnavailable
+
+    async def _kb_boom(self, *args, **kwargs):
+        raise VisibilityUnavailable("db down")
+
+    async def _notes_ok(self, query, candidate_k):
+        return []
+
+    monkeypatch.setattr(RetrievalService, "_retrieve_knowledge", _kb_boom)
+    monkeypatch.setattr(RetrievalService, "_retrieve_notes", _notes_ok)
+
+    svc = RetrievalService(user_id="u1")
+    with pytest.raises(VisibilityUnavailable):
+        await svc.retrieve("q", scope="all", top_k=5,
+                           use_hyde=False, use_rerank=False)
+
+
+@pytest.mark.asyncio
+async def test_retrieve_legal_empty_returns_empty(monkeypatch):
+    """合法无结果：正常返回空列表（无异常）。"""
+    from app.rag.retrieval_service import RetrievalService
+
+    async def _kb_empty(self, query, candidate_k, space_id, use_hyde):
+        return []
+
+    async def _notes_empty(self, query, candidate_k):
+        return []
+
+    monkeypatch.setattr(RetrievalService, "_retrieve_knowledge", _kb_empty)
+    monkeypatch.setattr(RetrievalService, "_retrieve_notes", _notes_empty)
+
+    svc = RetrievalService(user_id="u1")
+    out = await svc.retrieve("q", scope="all", top_k=5,
+                             use_hyde=False, use_rerank=False)
+    assert out == []

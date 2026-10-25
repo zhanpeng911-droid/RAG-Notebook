@@ -216,12 +216,23 @@ async def save_uploaded_file(
             # needs_reupload 接管（N1 闭环）：index_failed 且原文件缺失/标记需重传
             # 的行允许原子接管（文件身份与状态同事务条件更新；deleting/新执行
             # 不命中即不接管不索引）
-            if existing_filename.status == DocumentIndexStatus.INDEX_FAILED \
-                    and not _row_has_file(existing_filename):
+            if existing_filename.status == DocumentIndexStatus.INDEX_FAILED                     and not _row_has_file(existing_filename):
+                # A-05：存在未关闭写入者（writing/unknown）时不得自动接管——
+                # 必须先经受控核验/恢复，不能凭缺文件推断远端停止
+                if await _ExecutionRepository(session).has_open_executions(
+                        existing_filename.id):
+                    await session.commit()
+                    if os.path.exists(file_path):
+                        os.unlink(file_path)
+                    raise HTTPException(
+                        status_code=409,
+                        detail="存在未核验的写入执行，请先经运维核验后再重传")
                 taken = await repo.takeover_upload_row(
                     doc_id=existing_filename.id, user_id=user_id,
                     filename=unique_filename, file_path=file_path, md5=md5_hex,
-                    file_size=file_size, file_type=file_type)
+                    file_size=file_size, file_type=file_type,
+                    expected_generation=existing_filename.generation or 0,
+                    expected_file_path=existing_filename.file_path)
                 await session.commit()
                 if not taken:
                     # 接管未命中：删除获胜或新执行已推进，不继续索引
@@ -264,12 +275,20 @@ async def save_uploaded_file(
         # 检查是否已存在（MD5 内容去重）——同 MD5 不同文件名同样支持 needs_reupload 接管
         existing = await repo.get_by_md5(md5_hex, user_id)
         if existing:
-            if existing.status == DocumentIndexStatus.INDEX_FAILED \
-                    and not _row_has_file(existing):
+            if existing.status == DocumentIndexStatus.INDEX_FAILED                     and not _row_has_file(existing):
+                if await _ExecutionRepository(session).has_open_executions(existing.id):
+                    await session.commit()
+                    if os.path.exists(file_path):
+                        os.unlink(file_path)
+                    raise HTTPException(
+                        status_code=409,
+                        detail="存在未核验的写入执行，请先经运维核验后再重传")
                 taken = await repo.takeover_upload_row(
                     doc_id=existing.id, user_id=user_id,
                     filename=unique_filename, file_path=file_path, md5=md5_hex,
-                    file_size=file_size, file_type=file_type)
+                    file_size=file_size, file_type=file_type,
+                    expected_generation=existing.generation or 0,
+                    expected_file_path=existing.file_path)
                 await session.commit()
                 if not taken:
                     if os.path.exists(file_path):
@@ -388,6 +407,16 @@ async def save_uploaded_file(
             "message": message,
             "duplicate": False,
         }
+
+
+def _default_source_name() -> str:
+    """legacy 数据源身份：统一读真实向量库配置 collection 名（与可见性服务同源）。
+
+    读取/撤销与查询必须使用同一数据源范围；配置缺失时明确抛错，
+    不静默回退 "default"（否则 revoke 会撤销错误范围的映射）。
+    """
+    from app.services.document_visibility_service import _default_collection_name
+    return _default_collection_name()
 
 
 def _row_has_file(row) -> bool:
@@ -583,6 +612,14 @@ class _ExecutionRepository:
         # P1：writer 持令牌可把 writing 和 unknown（协调标记的失联）收敛为
         # closed——协调的 unknown 只是失联观测，不否定 writer 的结果证明；
         # 但不得无条件覆盖已确认的 closed（无该状态条件）。
+        # closed_at 仅表示确定关闭：status==closed 才写；unknown（失联/结果
+        # 不确定）不设置关闭时间——避免把"何时观测失联"冒充"何时停止"。
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        values = {"status": status, "close_reason": reason, "lease_expires_at": None}
+        if status == "closed":
+            values["closed_at"] = now
+        else:
+            values["closed_at"] = None  # unknown 等非关闭态清空关闭时间
         result = await self.session.execute(
             update(DocumentIndexExecution)
             .where(DocumentIndexExecution.document_id == document_id)
@@ -590,8 +627,7 @@ class _ExecutionRepository:
             .where(DocumentIndexExecution.token == token)
             .where(DocumentIndexExecution.status.in_([
                 ExecutionStatus.WRITING, ExecutionStatus.UNKNOWN]))
-            .values(status=status, closed_at=datetime.now(timezone.utc).replace(tzinfo=None),
-                    close_reason=reason, lease_expires_at=None)
+            .values(**values)
         )
         await self.session.flush()
         return result.rowcount > 0
@@ -775,6 +811,29 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
             # 写入向量数据库（代次化稳定 ID，upsert 幂等）
             legacy_chunk_count = doc.chunk_count or 0
             chunk_ids = _stable_chunk_ids(user_id, document_id, split_docs, generation)
+
+            # N0：记录可核验原文锚点（与索引同代次；发布前保持 pending，
+            # 发布事务内激活）。锚点失败不阻断既有索引主链路，摘要生成时
+            # 会按需从原文件重建。
+            try:
+                from app.services.source_anchor_service import record_document_anchors
+                await record_document_anchors(
+                    session,
+                    owner_user_id=user_id,
+                    space_id=doc.space_id,
+                    document_id=document_id,
+                    generation=generation,
+                    content_hash=document_md5,
+                    source_documents=documents,
+                    split_documents=split_docs,
+                    chunk_ids=chunk_ids,
+                )
+            except Exception as anchor_err:
+                logger.warning(
+                    f"【文档索引】锚点记录失败（索引继续，洞察将按需重建）: "
+                    f"id={document_id}, error={str(anchor_err)[:200]}"
+                )
+
             await asyncio.to_thread(
                 store.vectors_store.add_documents, split_docs, ids=chunk_ids
             )
@@ -800,6 +859,17 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
             # P0/C4：发布指针与旧代次清理任务在同一事务提交——
             # 提交失败两者皆回滚（旧向量原样保留，文档保持旧代次可检索）；
             # 提交成功后清理任务进入持久队列，由公平领取的 worker 执行
+            # P0/C4：发布指针 + 撤销旧映射 + 旧代次清理任务同一事务提交——
+            # 提交失败三者皆回滚；提交成功后清理任务进入持久队列
+            try:
+                from app.repositories.legacy_mapping_repository import LegacyMappingRepository
+                await LegacyMappingRepository(session).revoke(
+                    _default_source_name(), user_id, document_id)
+            except Exception as _revoke_err:
+                logger.warning(
+                    f"【文档索引】发布撤销旧映射失败（读取端仍按代次校验兜底）: {_revoke_err}"
+                )
+
             from app.repositories.cleanup_task_repository import CleanupTaskRepository
             cleanup_repo = CleanupTaskRepository(session)
             async with session.begin_nested():
@@ -812,6 +882,11 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
                 await execution_repo.close_execution(
                     document_id=document_id, generation=generation,
                     token=execution_token, status="closed", reason="published")
+                # N0：同一事务激活本代次来源版本；旧版本/旧产物/旧证据失效
+                from app.services.source_anchor_service import activate_document_version
+                await activate_document_version(
+                    session, owner_user_id=user_id,
+                    document_id=document_id, generation=generation)
             try:
                 await session.commit()
             except Exception as commit_err:
@@ -990,19 +1065,23 @@ async def reconcile_index_execution(*, document_id: str, user_id: str,
             # 幂等重放：若已由本次恢复完成（index_failed + 本 recover 身份 + 代次匹配），
             # 重建 recovered 结果，不误报 conflict
             if doc_status == DocumentIndexStatus.INDEX_FAILED.value                     and int(doc_gen or 0) == int(generation):
-                from sqlalchemy import select as _sel
-                err = (await session.execute(
-                    _sel(DocumentIndex.error_message).where(
-                        DocumentIndex.id == document_id,
-                        DocumentIndex.user_id == user_id,
-                    )
-                )).scalar_one_or_none() or ""
-                if f"recover:{execution_token[:24]}:{int(generation)}" in err:
+                # 结构化恢复凭据：本次执行行已带恢复事实（recovered_at 非空）
+                rec = (await session.execute(
+                    select(DocumentIndexExecution.recovery_outcome,
+                           DocumentIndexExecution.recovered_at).where(and_(
+                        DocumentIndexExecution.document_id == document_id,
+                        DocumentIndexExecution.user_id == user_id,
+                        DocumentIndexExecution.generation == int(generation),
+                        DocumentIndexExecution.token == execution_token,
+                    ))
+                )).one_or_none()
+                if rec is not None and rec[1] is not None:
                     replay_has_file = bool(file_path) and _os.path.exists(file_path)
+                    outcome = rec[0] or ("recovered" if replay_has_file
+                                         else "needs_reupload")
                     await session.commit()
-                    return {"outcome": "needs_reupload" if not replay_has_file
-                            else "recovered",
-                            "message": "已由本次恢复完成（幂等）"}
+                    return {"outcome": outcome,
+                            "message": "已由本次恢复完成（幂等，结构化事实）"}
             await session.commit()
             return {"outcome": "conflict",
                     "message": f"文档状态/代次已变化（{doc_status}/gen={doc_gen}），不覆盖"}
@@ -1010,15 +1089,12 @@ async def reconcile_index_execution(*, document_id: str, user_id: str,
         # 4) 条件恢复 index_failed（带 owner/document/源状态/代次条件）；
         #    错误文案携带本次恢复身份（唯一令牌 + 代次），供确认与重放区分
         now = datetime.now(timezone.utc).replace(tzinfo=None)
-        # 恢复身份标记由调用方传入的 execution_token 派生（跨调用稳定，
-        # 重放/确认可匹配本次恢复；不随机生成导致无法识别）。
-        recover_marker = f"recover:{execution_token[:24]}:{int(generation)}"
+        # 结构化恢复事实写入执行行（同事务）；错误文案仅展示给人，不作业务凭据。
         has_file = bool(file_path) and _os.path.exists(file_path)
-        error_note = (f"publish commit unconfirmed, writer verified stopped; "
-                      f"{recover_marker}"
+        recovery_outcome = "recovered" if has_file else "needs_reupload"
+        error_note = ("publish commit unconfirmed, writer verified stopped"
                       if has_file else
-                      f"publish commit unconfirmed; 原文件缺失，需要重新上传; "
-                      f"{recover_marker}")
+                      "publish commit unconfirmed; 原文件缺失，需要重新上传")
         result = await session.execute(
             update(DocumentIndex)
             .where(and_(
@@ -1031,6 +1107,21 @@ async def reconcile_index_execution(*, document_id: str, user_id: str,
                 status=DocumentIndexStatus.INDEX_FAILED,
                 error_message=error_note,
                 updated_at=now,
+            )
+        )
+        # 结构化恢复凭据（重放/确认据此判定，不依赖文案子串）
+        await session.execute(
+            update(DocumentIndexExecution)
+            .where(and_(
+                DocumentIndexExecution.document_id == document_id,
+                DocumentIndexExecution.user_id == user_id,
+                DocumentIndexExecution.generation == int(generation),
+                DocumentIndexExecution.token == execution_token,
+                DocumentIndexExecution.status == ExecutionStatus.CLOSED.value,
+            ))
+            .values(
+                recovery_outcome=recovery_outcome,
+                recovered_at=now,
             )
         )
         try:
@@ -1056,9 +1147,18 @@ async def reconcile_index_execution(*, document_id: str, user_id: str,
                         DocumentIndex.user_id == user_id,
                     )
                 )).one_or_none()
-            # 确认必须绑定本次恢复身份：状态 index_failed + 代次匹配 +
-            # error 含本次 recover:<token>:<gen> 标记（其它代次/其它恢复不误认）
-            if v_row is not None                     and v_row[0] == DocumentIndexStatus.INDEX_FAILED.value                     and int(v_row[2] or 0) == int(generation)                     and (v_row[1] or "") == error_note:
+                v_rec = (await v_session.execute(
+                    select(DocumentIndexExecution.recovery_outcome,
+                           DocumentIndexExecution.recovered_at).where(and_(
+                        DocumentIndexExecution.document_id == document_id,
+                        DocumentIndexExecution.user_id == user_id,
+                        DocumentIndexExecution.generation == int(generation),
+                        DocumentIndexExecution.token == execution_token,
+                    ))
+                )).one_or_none()
+            # 确认绑定本次恢复身份：状态 index_failed + 代次匹配 +
+            # 结构化恢复事实存在（recovered_at 非空）——其它代次/其它恢复不误认
+            if v_row is not None                     and v_row[0] == DocumentIndexStatus.INDEX_FAILED.value                     and int(v_row[2] or 0) == int(generation)                     and v_rec is not None and v_rec[1] is not None:
                 logger.warning(
                     f"【文档索引】恢复事务确认丢失但事实已提交: id={document_id}, "
                     f"gen={generation}, err={commit_err_msg}"
@@ -1309,6 +1409,16 @@ async def _delete_single_record(doc_id: str, user_id: str, delete_file: bool, st
         # C4/评审 #1：删除记录与持久清理任务在同一事务提交——
         # 中途崩溃不会出现"删除成功但清理依据永久丢失"
         try:
+            # 复验修正：删除 → 撤销该文档旧映射（旧映射随资源删除失效）
+            try:
+                from app.repositories.legacy_mapping_repository import LegacyMappingRepository
+                legacy_repo = LegacyMappingRepository(session)
+                await legacy_repo.revoke(_default_source_name(), user_id, doc_id)
+            except Exception as _revoke_err:
+                logger.warning(
+                    f"【文档索引】删除撤销旧映射失败（读取端仍按代次校验兜底）: {_revoke_err}"
+                )
+
             from app.repositories.cleanup_task_repository import CleanupTaskRepository
             cleanup_repo = CleanupTaskRepository(session)
             async with session.begin_nested():
@@ -1318,6 +1428,10 @@ async def _delete_single_record(doc_id: str, user_id: str, delete_file: bool, st
                     reason="document_deleted",
                     legacy_chunk_count=int(doc.chunk_count or 0),
                 )
+            # N0：来源版本/产物/证据与删除同事务失效；锚点保留审计但不可读
+            from app.services.source_anchor_service import invalidate_document
+            await invalidate_document(
+                session, owner_user_id=user_id, document_id=doc_id, invalid=True)
             await repo.delete_by_id(doc_id, user_id)
             await session.commit()
         except Exception as e:

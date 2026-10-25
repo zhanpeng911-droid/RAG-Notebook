@@ -30,6 +30,8 @@ from app.router.space_router import space_router
 from app.router.audit_router import audit_router
 from app.router.agent_router import agent_router
 from app.router.runtime_config_router import runtime_config_router
+from app.router.insight_router import insight_router
+from app.router.note_graph_router import note_graph_router
 
 from app.services.database_session_manager import init_database_session_manager
 
@@ -126,6 +128,8 @@ app.include_router(space_router, prefix=API_V1_PREFIX)
 app.include_router(audit_router, prefix=API_V1_PREFIX)
 app.include_router(agent_router, prefix=API_V1_PREFIX)
 app.include_router(runtime_config_router, prefix=API_V1_PREFIX)
+app.include_router(insight_router, prefix=API_V1_PREFIX)
+app.include_router(note_graph_router, prefix=API_V1_PREFIX)
 
 app.add_middleware(
     CORSMiddleware,

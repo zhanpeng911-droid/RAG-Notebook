@@ -1,5 +1,6 @@
 import os
 import hashlib
+import re
 import aiofiles
 import asyncio
 import sys
@@ -184,27 +185,55 @@ async def txt_loader(file_path: str) -> list[Document]:
 
 
 def _load_docx(file_path: str) -> list[Document]:
-    """使用 python-docx 提取 DOCX 段落和表格文本。"""
+    """使用 python-docx 提取 DOCX 段落和表格文本。
+
+    同时记录真实标题样式（Heading N / 标题 N）的字符偏移，供 N0 锚点
+    生成章节路径；不猜测正文中看似标题的行。
+    """
     from docx import Document as DocxDocument
 
     docx = DocxDocument(file_path)
-    blocks: list[str] = []
+    parts: list[str] = []
+    headings: list[dict] = []
+    offset = 0
+
+    def append_block(text: str, heading: tuple[str, int] | None = None) -> None:
+        nonlocal offset
+        if parts:
+            offset += 2  # "\n\n" 分隔符
+        if heading is not None:
+            headings.append({
+                "title": heading[0],
+                "level": heading[1],
+                "char_start": offset,
+            })
+        parts.append(text)
+        offset += len(text)
 
     for paragraph in docx.paragraphs:
         text = paragraph.text.strip()
-        if text:
-            blocks.append(text)
+        if not text:
+            continue
+        heading = None
+        style_name = paragraph.style.name if paragraph.style is not None else ""
+        match = re.match(r"(?i)^(?:heading|标题)\s*(\d+)$", (style_name or "").strip())
+        if match:
+            heading = (text, int(match.group(1)))
+        append_block(text, heading)
 
     for table in docx.tables:
         for row in table.rows:
             cells = [cell.text.strip() for cell in row.cells]
             if any(cells):
-                blocks.append("\t".join(cells))
+                append_block("\t".join(cells))
 
-    content = "\n\n".join(blocks).strip()
+    content = "\n\n".join(parts).strip()
     if not content:
         return []
-    return [Document(page_content=content, metadata={"source": file_path})]
+    metadata: dict = {"source": file_path}
+    if headings:
+        metadata["headings"] = headings
+    return [Document(page_content=content, metadata=metadata)]
 
 
 async def word_loader(file_path: str) -> list[Document]:

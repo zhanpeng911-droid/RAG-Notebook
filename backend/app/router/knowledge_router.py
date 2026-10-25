@@ -328,6 +328,36 @@ async def get_document_detail(
     return success_response(data=document)
 
 
+@knowledge_router.get("/documents/{document_id}/file")
+async def get_document_file(
+        document_id: str,
+        user_id: str = Depends(get_current_user_id),
+        db: AsyncSession = Depends(get_db),
+):
+    """受保护的原文件读取：只允许 owner；URL 只暴露 document_id。"""
+    from app.models.document_index import DocumentIndex
+
+    document = await db.get(DocumentIndex, document_id)
+    if document is None or document.user_id != user_id:
+        raise HTTPException(status_code=404, detail="文档不存在")
+    if not document.file_path or not os.path.isfile(document.file_path):
+        raise HTTPException(status_code=404, detail="原文件不存在")
+    media_types = {
+        ".pdf": "application/pdf",
+        ".md": "text/markdown; charset=utf-8",
+        ".txt": "text/plain; charset=utf-8",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    }
+    ext = os.path.splitext(document.file_path)[1].lower()
+    return FileResponse(
+        document.file_path,
+        media_type=media_types.get(ext, "application/octet-stream"),
+        filename=document.original_filename,
+        content_disposition_type="inline",
+    )
+
+
 @knowledge_router.get("/chunks", response_model=DocumentChunksResponse)
 async def get_document_chunks(
         filename: str,

@@ -20,6 +20,7 @@
             @keydown.enter="handleSearch"
           />
         </div>
+        <button class="btn-graph" @click="router.push('/graph')">知识图谱</button>
         <button class="btn-view-toggle" :title="viewMode === 'card' ? '切换表格视图' : '切换卡片视图'" @click="viewMode = viewMode === 'card' ? 'table' : 'card'">
           <svg v-if="viewMode === 'card'" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <rect x="3" y="3" width="7" height="7" />
@@ -409,6 +410,18 @@ watch(() => route.query.q, (newQ) => {
 .search-input::placeholder {
   color: var(--color-text-lightest);
 }
+
+.btn-graph {
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg-strong);
+  color: var(--color-text);
+  border-radius: var(--radius-md);
+  padding: 0 12px;
+  height: 36px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.btn-graph:hover { border-color: var(--color-primary); color: var(--color-primary); }
 
 .btn-view-toggle {
   display: flex;

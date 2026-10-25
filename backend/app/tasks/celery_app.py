@@ -35,6 +35,7 @@ celery_app = Celery(
 celery_app.conf.include = [
     "app.tasks.index_task",
     "app.tasks.agent_maintenance_task",
+    "app.tasks.insight_task",
 ]
 
 # Celery 配置
@@ -69,6 +70,11 @@ celery_app.conf.beat_schedule = {
     "coordinate-index-executions-every-5-minutes": {
         "task": "app.tasks.agent_maintenance_task.coordinate_index_executions_task",
         "schedule": 300.0,  # 每 5 分钟执行一次（失联写执行判定）
+        "args": (50,),
+    },
+    "reclaim-stale-insight-jobs-every-10-minutes": {
+        "task": "app.tasks.insight_task.reclaim_stale_insight_jobs_task",
+        "schedule": 600.0,  # 每 10 分钟回收 worker 崩溃遗留的 running 任务
         "args": (50,),
     },
 }

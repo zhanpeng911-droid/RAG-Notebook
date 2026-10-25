@@ -333,9 +333,10 @@ class VectorStoreService:
             logger.error(f"【向量数据库】获取用户 {user_id} 的MD5记录时出错: {e}")
             return []
 
-    async def get_user_documents(self, user_id: str = None, space_id: str = None):
+    async def get_user_documents(self, user_id: str = None, space_id: str = None,
+                                 active_map: dict = None):
         """
-        获取用户的知识库文档列表 —— 按文件名聚合。
+        获取用户的知识库文档列表 —— 按文件名聚合（B 接线：active 代次过滤）。
 
         聚合逻辑：
         1. 从 ChromaDB 获取该用户的所有文档
@@ -370,6 +371,15 @@ class VectorStoreService:
                 # space_id 筛选：非空时过滤
                 if space_id and metadata.get('space_id', '') != space_id:
                     continue
+
+                # B：active 代次过滤——旧代次向量不聚合进列表（一文档一项，
+                # 不按代次重复）；无 document_id/generation 的存量交由 legacy 映射
+                if active_map is not None:
+                    did = metadata.get('document_id')
+                    gen = metadata.get('generation')
+                    if did is not None and did in active_map:
+                        if gen is None or int(gen) != int(active_map[did]):
+                            continue
 
                 # 优先使用 metadata 中保存的 original_filename（用户上传时的原始文件名）
                 # 因为 source 可能存的是临时文件的完整路径（如 C:\Users\...\tmp123.pdf），
@@ -412,7 +422,8 @@ class VectorStoreService:
             logger.error(f"【向量数据库】获取用户 {user_id} 的知识库文档时出错: {e}")
             raise
 
-    async def get_document_detail(self, user_id: str, filename: str):
+    async def get_document_detail(self, user_id: str, filename: str,
+                                   active_map: dict = None):
         """
         获取文档详情 —— 返回完整内容、图片列表、切片详情。
 
@@ -500,6 +511,41 @@ class VectorStoreService:
         except Exception as e:
             logger.error(f"【向量数据库】获取文档详情 {filename} 时出错: {e}")
             raise
+
+    async def get_document_chunks_by_identity(
+            self, user_id: str, document_id: str, active_generation: int,
+            filename: str):
+        """按资源身份取分块（B 接线）：仅返回 document_id 且 generation==active 的分块。
+
+        稳定排序（按 id）、不做旧代次回退。返回 {"filename", "total_chunks", "chunks"}。
+        """
+        result = await asyncio.to_thread(
+            self.vectors_store.get,
+            where={"$and": [
+                {"user_id": user_id},
+                {"document_id": document_id},
+                {"generation": active_generation},
+            ]},
+            include=['documents', 'metadatas'],
+        )
+        ids = result.get("ids", [])
+        metas = result.get("metadatas", [])
+        docs = result.get("documents", [])
+        # 稳定排序：按 id 字典序（确定性顺序，不做旧代次回退）
+        indexed = sorted(range(len(ids)), key=lambda i: ids[i])
+        chunks = []
+        for i in indexed:
+            meta = metas[i] if i < len(metas) else {}
+            chunks.append({
+                "chunk_id": ids[i],
+                "content": docs[i] if i < len(docs) else "",
+                "metadata": meta,
+            })
+        return {
+            "filename": filename or "",
+            "total_chunks": len(chunks),
+            "chunks": chunks,
+        }
 
     async def get_document_chunks(self, user_id: str, filename: str):
         """
@@ -625,9 +671,9 @@ class VectorStoreService:
             space_id: str = "",
             generation: int = None,
             document_id: str = None,
-    ):
-        """处理文档 —— 加载、分割、向量化、存储"""
-        await self.document_processor.get_document(
+    ) -> list[dict]:
+        """处理文档 —— 加载、分割、向量化、存储；返回本次真实处理结果。"""
+        return await self.document_processor.get_document(
             files,
             user_id,
             progress_callback,

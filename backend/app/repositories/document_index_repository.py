@@ -228,6 +228,24 @@ class DocumentIndexRepository:
         await self.session.flush()
         return result.rowcount > 0
 
+    async def get_indexed_document_generations(
+            self, user_id: str, document_ids: List[str]) -> dict:
+        """B：按 document_id 批量查询 indexed 文档的 active_generation。
+
+        资源身份 = owner + document_id（MD5 只是指纹，不是身份）。
+        返回 {document_id: active_generation}；无 document_id 标识的存量不在此接口。
+        """
+        if not document_ids:
+            return {}
+        result = await self.session.execute(
+            select(DocumentIndex.id, DocumentIndex.active_generation).where(
+                DocumentIndex.user_id == user_id,
+                DocumentIndex.id.in_(document_ids),
+                DocumentIndex.status == DocumentIndexStatus.INDEXED,
+            )
+        )
+        return {doc_id: (gen or 0) for doc_id, gen in result.all()}
+
     async def get_indexed_md5s(self, user_id: str, md5s: List[str]) -> dict:
         """查询仍处于 indexed 状态的 md5 → active_generation 映射（R2D 读取侧过滤）。"""
         if not md5s:
@@ -281,19 +299,28 @@ class DocumentIndexRepository:
 
     async def takeover_upload_row(self, *, doc_id: str, user_id: str,
                                     filename: str, file_path: str, md5: str,
-                                    file_size: int, file_type: str) -> bool:
-        """N1 原子接管重传：仅 index_failed 且属于该用户的行可接管。
+                                    file_size: int, file_type: str,
+                                    expected_generation: int = None,
+                                    expected_file_path: str = None) -> bool:
+        """N1 原子接管重传（A2 ABA 防护）：仅 index_failed 且属于该用户、
+        且（若提供）预期代次/旧文件身份匹配的行可接管。
 
         文件身份与状态在同一条件更新内提交；deleting/新执行（状态已非
-        index_failed）不命中，返回 False——调用方不得继续索引。
-        恢复资格由调用方先经 _row_has_file 判定（缺文件才接管）。
+        index_failed）或预期代次/文件身份不匹配（failed→pending→indexing→failed
+        的 ABA）不命中，返回 False——调用方不得继续索引。
         """
-        result = await self.session.execute(
+        stmt = (
             update(DocumentIndex)
             .where(DocumentIndex.id == doc_id)
             .where(DocumentIndex.user_id == user_id)
             .where(DocumentIndex.status == DocumentIndexStatus.INDEX_FAILED)
-            .values(
+        )
+        if expected_generation is not None:
+            stmt = stmt.where(DocumentIndex.generation == int(expected_generation))
+        if expected_file_path is not None:
+            stmt = stmt.where(DocumentIndex.file_path == expected_file_path)
+        result = await self.session.execute(
+            stmt.values(
                 status=DocumentIndexStatus.PENDING_INDEX,
                 filename=filename,
                 file_path=file_path,

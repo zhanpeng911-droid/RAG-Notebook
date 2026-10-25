@@ -114,6 +114,29 @@ Notebook 已从传统的"检索后直接回答"升级为**受控 Agentic RAG**�
 - 支持按 `document_id` 删除、按旧文件名兼容删除、重新索引；
 - Celery Beat 会定时扫描 pending 文档，补偿未完成索引。
 
+### 知识洞察与可验证知识图谱
+
+- **原文锚点**：索引时为每个切片记录真实页码、章节路径、字符偏移与引文 SHA256；没有页码的格式明确降级，不伪造位置；
+- **结构化摘要**：生成全文概览、关键结论、章节摘要、关键概念、待确认问题；每条事实性结论必须引用锚点；
+- **证据核验**：模型给出的锚点 ID 与引文逐条复核，未通过校验的结论不会进入对外产物；无有效证据时明确返回“证据不足”；
+- **思维导图**：由已核验摘要确定性生成，限制节点数和深度，节点保留证据入口；
+- **跨文档知识图谱**：概念/关系按 owner + space 归一，关系证据可追溯到原文；来源文档删除或换代后，无有效证据的边自动隐藏；
+- **失效联动**：文档重索引、删除，笔记修改、删除都会使旧摘要/导图/图谱证据失效；
+- 前端入口：知识库文档行“AI 洞察”、笔记编辑页“AI 洞察”、知识库“知识图谱”。
+
+实现与验收细节见 [知识工作台迭代交付](docs/ITERATION_KNOWLEDGE_WORKBENCH.md) 和 [验收矩阵](docs/ITERATION_ACCEPTANCE_MATRIX.md)。
+
+### 文档分析与笔记知识图谱（V2）
+
+- **文档分析工作台**：桌面原文/结果分屏，点击结论定位原文片段并高亮；PDF 可加载受保护原文件并跳转真实页码；刷新后从服务端恢复任务；
+- **长文分层分析**：按章节/页码分块分析再聚合，结果标注覆盖块数、缺失块和“部分内容已分析”；
+- **可操作思维导图**：平移、缩放、折叠、搜索、编辑标题、同级排序、全屏、SVG/PNG/Markdown 导出；用户修订独立持久化，重新生成不覆盖；
+- **笔记知识图谱**：一个笔记一个节点，正文 `[[...]]` 自动建立显式链接，反向链接与手动关联分开建模；全局/局部 1–2 跳、筛选、拖动固定、详情面板；
+- **不依赖 AI**：基础笔记图谱只需 MySQL，不需要 embedding、摘要或模型调用；
+- 主导航：笔记 / 文档分析 / 知识图谱 / 知识库 / AI 对话 / 每日回顾；移动端“更多”保留旧功能。
+
+V2 交付与逐项验收见 [V2 交付记录](docs/ITERATION_V2_DELIVERY.md) 和 [V2 验收矩阵](docs/V2_ACCEPTANCE_MATRIX.md)。
+
 ### Agentic RAG 对话
 
 - Adaptive-RAG 查询路由：6 类分类，简单查询走轻量路径；
@@ -258,6 +281,7 @@ uv run alembic upgrade head
 ```
 
 > 表结构变更应新增 Alembic revision；不要依赖应用启动时自动建表。
+> 知识洞察/图谱需要迁移 `016_knowledge_insights`（`alembic upgrade head`）；升级后重启 Celery worker/beat 以加载新增任务。
 
 ### 5. 启动基础设施和可选模型服务
 
@@ -300,7 +324,7 @@ uv run celery -A app.tasks.celery_app:celery_app worker --loglevel=info
 # Windows 本地开发需加 --pool=solo（prefork 在 Windows 不可用）：
 uv run celery -A app.tasks.celery_app:celery_app worker --loglevel=info --pool=solo
 
-# 终端 4：Celery Beat（pending_index 补偿扫描 + 过期 Agent 运行回收，每 5 分钟）
+# 终端 4：Celery Beat（pending_index 补偿、清理队列、过期运行/洞察任务回收）
 cd backend
 uv run celery -A app.tasks.celery_app:celery_app beat --loglevel=info
 
@@ -437,6 +461,40 @@ SSE 事件包括：`started`、`planning`、`retrieving`（含检索计划）、
 | `GET` | `/api/v1/knowledge/index-status` | 查询文档索引状态、切片数与失败信息 |
 | `POST` | `/api/v1/knowledge/{document_id}/reindex` | 重新提交索引 |
 | `DELETE` | `/api/v1/knowledge/documents/{document_id}` | 删除 v2 文档、索引元数据和向量数据 |
+
+### 知识洞察与图谱
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/api/v1/insights/documents/{document_id}/generate` | 提交文档摘要任务（`force` 重新生成） |
+| `POST` | `/api/v1/insights/notes/{note_id}/generate` | 提交笔记摘要任务 |
+| `GET` | `/api/v1/insights/jobs/{job_id}` | 任务状态、错误与尝试次数 |
+| `GET` | `/api/v1/insights/documents/{document_id}` | 当前有效摘要 + 分组原文证据 |
+| `GET` | `/api/v1/insights/documents/{document_id}/mindmap` | 当前有效思维导图 |
+| `GET` | `/api/v1/insights/notes/{note_id}` | 笔记摘要 |
+| `GET` | `/api/v1/insights/anchors/{anchor_id}` | 读取/复核原文锚点（可选 `quote` 参数） |
+| `GET` | `/api/v1/insights/graph` | 概念/关系子图（可按 `space_id`、`q` 筛选） |
+| `GET` | `/api/v1/insights/graph/nodes/{concept_id}` | 概念详情与证据 |
+| `GET` | `/api/v1/insights/graph/relations/{relation_id}` | 关系详情与多来源证据 |
+| `PATCH` | `/api/v1/insights/graph/nodes/{concept_id}` | 确认/拒绝概念 |
+| `PATCH` | `/api/v1/insights/graph/relations/{relation_id}` | 确认/拒绝关系 |
+
+### 文档分析与笔记图谱（V2）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/api/v1/insights/sources` | 分析来源搜索（笔记/知识库文档） |
+| `GET` | `/api/v1/insights/sources/{type}/{id}/state` | 当前任务/结果/过期状态恢复 |
+| `GET` | `/api/v1/insights/sources/{type}/{id}/text` | 原文片段与锚点定位 |
+| `PATCH` | `/api/v1/insights/sources/{type}/{id}/mindmap` | 导图标题/顺序修订（乐观并发） |
+| `GET` | `/api/v1/notes/graph` | 笔记全局图（链接 + 手动关联） |
+| `GET` | `/api/v1/notes/{id}/local-graph` | 笔记局部 1/2 跳 |
+| `GET` | `/api/v1/notes/{id}/links` | 出链、反链、手动关联、未解析链接 |
+| `GET` | `/api/v1/notes/link-candidates` | `[[` 内部链接候选 |
+| `POST/DELETE` | `/api/v1/notes/{id}/manual-relations` | 手动关联增删 |
+| `GET` | `/api/v1/knowledge/documents/{id}/file` | 受保护原文件读取 |
+
+> 笔记图谱需要迁移 `017_note_graph`；升级后重启后端与 Celery。
 
 ### 运行时配置
 

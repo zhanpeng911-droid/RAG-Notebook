@@ -56,7 +56,8 @@ for mod_name in [
 
 # Mock app.utils.config 中的配置
 _mock_config = MagicMock()
-_mock_config.chroma_config = {"persist_directory": "/tmp/test_chroma"}
+_mock_config.chroma_config = {"persist_directory": "/tmp/test_chroma",
+                             "collection_name": "test_collection"}
 sys.modules.setdefault("app.utils.config", _mock_config)
 
 # Mock app.utils.path_tool

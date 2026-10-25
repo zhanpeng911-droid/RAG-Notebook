@@ -117,7 +117,34 @@ class NoteService:
         db.add(review)
         await db.commit()
         await db.refresh(note)
+        await self._sync_note_anchors(db, note, user_id)
+        await self._sync_note_links(db, note)
         return self._doc_to_response(note)
+
+    @staticmethod
+    async def _sync_note_anchors(db: AsyncSession, note: Note, user_id: str) -> None:
+        """笔记保存后同步来源版本；失败只降级洞察，不影响笔记保存。"""
+        try:
+            from app.services.source_anchor_service import record_note_anchors
+            await record_note_anchors(
+                db, note_id=note.id, owner_user_id=user_id,
+                note_text=note.content or "")
+            await db.commit()
+        except Exception as exc:
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            logger.warning("【笔记】来源锚点同步失败（笔记已保存）: %s", str(exc)[:200])
+
+    @staticmethod
+    async def _sync_note_links(db: AsyncSession, note: Note) -> None:
+        """保存后重建正文链接；失败只降级图谱，不影响笔记保存。"""
+        try:
+            from app.services.note_link_service import sync_note_links_safe
+            await sync_note_links_safe(db, note)
+        except Exception as exc:
+            logger.warning("【笔记】正文链接同步失败（笔记已保存）: %s", str(exc)[:200])
 
     async def update_note(self, db: AsyncSession, note_id: str, user_id: str, payload: NoteUpdate) -> Optional[NoteResponse]:
         """Update MySQL only; vector synchronization runs asynchronously."""
@@ -136,6 +163,8 @@ class NoteService:
 
         await db.commit()
         await db.refresh(note)
+        await self._sync_note_anchors(db, note, user_id)
+        await self._sync_note_links(db, note)
         return self._doc_to_response(note)
 
     async def delete_note(self, db: AsyncSession, note_id: str, user_id: str) -> bool:
@@ -144,6 +173,26 @@ class NoteService:
         if not deleted:
             return False
         await db.commit()
+        try:
+            from app.services.source_anchor_service import invalidate_note
+            await invalidate_note(db, owner_user_id=user_id, note_id=note_id)
+            await db.commit()
+        except Exception as exc:
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            logger.warning("【笔记】来源版本失效标记失败: %s", str(exc)[:200])
+        try:
+            from app.services.note_link_service import remove_note_links
+            await remove_note_links(db, note_id, user_id)
+            await db.commit()
+        except Exception as exc:
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            logger.warning("【笔记】链接关系清理失败: %s", str(exc)[:200])
         return True
 
     async def get_note(self, db: AsyncSession, note_id: str, user_id: str) -> Optional[NoteResponse]:

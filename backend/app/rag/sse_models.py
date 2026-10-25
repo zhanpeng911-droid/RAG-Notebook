@@ -78,13 +78,15 @@ class SliceResult:
         self.file_index: int = 0
         self.filename: str = ""
         self.documents: list = []
+        self.source_documents: list = []
         self.md5: str = ""
         self.success: bool = False
         self.error: Optional[str] = None
         self.chunk_count: int = 0
 
     @classmethod
-    def success_result(cls, file_index: int, filename: str, documents: list, md5: str) -> 'SliceResult':
+    def success_result(cls, file_index: int, filename: str, documents: list, md5: str,
+                       source_documents: list = None) -> 'SliceResult':
         """工厂方法：创建切片成功的结果实例。
 
         :param file_index: 文件在上传列表中的索引。
@@ -97,6 +99,7 @@ class SliceResult:
         result.file_index = file_index
         result.filename = filename
         result.documents = documents
+        result.source_documents = source_documents or []
         result.md5 = md5
         result.success = True
         result.chunk_count = len(documents)
@@ -127,6 +130,7 @@ class SliceResult:
             'file_index': self.file_index,
             'filename': self.filename,
             'documents': self.documents,
+            'source_documents': self.source_documents,
             'md5': self.md5,
             'success': self.success,
             'error': self.error,

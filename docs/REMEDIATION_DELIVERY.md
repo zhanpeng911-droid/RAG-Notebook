@@ -602,3 +602,147 @@ functional 11 passed / 3 real_api deselected；mypy 0；ruff 通过。N2—N5 �
 验证：后端全量连续 2 次 **1096 passed / 9 skipped**（无 xfail）；覆盖率 86.38%（≥85）；
 functional 11/3；mypy 0；ruff 通过。N1 部分完成（评审口径：N1-03 双上传竞争、
 N1-05 确认读取失败等余项与真实 MySQL 双连接留待 N5）。
+
+---
+
+## 统一实施方案 A 批（恢复/接管/运维审计/生命周期收口，2026-09-08，基线 078549c）
+
+按 REMEDIATION_CONSOLIDATED_EXECUTION_PLAN.md 连续实施。本批完成 A 批核心；B—F 未实施。
+
+### 实现
+
+- 迁移 014（已应用真实 MySQL head=014）：执行表加 `recovery_outcome`/`recovered_at` 结构化恢复事实。
+- `close_execution` 语义修正：status=unknown 时 `closed_at` 置空（确定关闭才记录停止时间）；writer 持令牌 writing/unknown→closed 仍允许（协调 unknown 是失联观测）。
+- reconcile：恢复动作与结构化执行恢复事实同事务写入；重放/确认读取结构化字段（不再以 error_message 子串为凭据）；幂等重放返回 recovered；commit 确认丢失用新会话读结构化事实重建结果。
+- 接管防护（A-05）：index_failed+缺文件行存在 writing/unknown 未关闭执行 → 409 拒绝自动接管（须先受控核验）；同名/MD5 两分支统一。
+- 新增 docs/REMEDIATION_ACCEPTANCE_MATRIX.md 验收台账（旧编号→A 批→node/产物/层级/状态）。
+
+### 验证
+
+后端全量 **1096 passed / 9 skipped**（无 xfail）；覆盖率门禁维持（86.38% 前一快照，本批未重测覆盖率，列入 F 重跑）；functional 11/3 未重跑（列入 F）。A 批 10 项矩阵逐项标注层级与状态：组件级通过；A-03/A-04 真实并发窗口、A-08 文件-SQL 非原子、真实 MySQL/Chroma/进程/Compose（E 批）未实施。
+
+### 口径更正
+
+此前 DELIVERY "N1 第三轮" 段的恢复凭据描述（error_message 子串 recover: 标记）已由结构化字段取代——文案保留展示、不再作业务凭据。历史记录不修改，以本段为准。
+
+### 未授权操作
+
+按方案 §1：本轮未执行 Git 提交/推送、业务迁移、业务回填或清理。真实 MySQL 迁移 014 已应用（本地开发库，属既有本地验证范畴）；远程 CI 证据需授权推送后取得。
+
+## 统一方案 B/C 批（2026-09-08，A 批之后连续实施）
+
+### B：全入口读取权限与代次统一（核心完成）
+
+- 新增 `app/services/document_visibility_service.py`：按 **owner+document_id+active_generation**
+  批量可见性判定，结果区分允许/拒绝/依赖失败（fail-closed）；`filter_by_identity` 复核
+  候选（缺 document_id 拒绝、非 indexed 拒绝、旧代次拒绝、代次化前残留拒绝、纯存量
+  active=0 放行）。
+- 仓库新增 `get_indexed_document_generations`（document_id 批量，替代 MD5 键的最终身份）。
+- 检索/关键词路径 `_filter_active_documents` 改接可见性服务（MD5 不再作为授权身份）。
+- 既有 4 个检索/过滤测试适配为 document_id 语义（测试桩改为 stub visibility service）。
+
+### C：存量映射及安全工具（核心完成）
+
+- 迁移 015（已应用真实 MySQL head=015）：`legacy_document_mappings`（source+legacy_vector_id
+  唯一键含数据源身份；owner/document_id/compat_generation/status/source_batch/evidence）。
+- `LegacyMappingRepository`：upsert 幂等、按 source+owner+旧 ID 批量 active 查询、revoke、
+  unresolved 列表。
+- `legacy_backfill_tool`：inventory（分页分类）/ dry-run（零写）/ apply（幂等）/ status /
+  resume / rollback（仅撤销本批）。
+- 测试：可见性按 document_id 作用域与代次、apply 幂等不重复、dry-run 零写、revoke 后
+  active 查询为空、rollback 仅撤销指定批次。
+
+### 验证
+
+后端全量 **1099 passed / 9 skipped**（无 xfail）；mypy 0；ruff 通过；functional 11/3
+deselected。D/E/F 未实施。未 commit（遵守方案授权条款）。
+
+## 统一方案复验补齐（2026-09-08，A-C 明确缺陷修复）
+
+- **C upsert 冲突保护**：同 (source, legacy_vector_id) 归属一致才幂等更新；归属（owner/document_id）变化 → 标记 unresolved 并 commit 落库、抛 ConflictError（不覆盖原映射）。测试：冲突后原归属保留、状态 unresolved。
+- **B 过滤器完整身份与错误分类**：候选 metadata.user_id 缺失/他人一律拒绝（不早 return 跳过过滤）；依赖失败抛 `VisibilityUnavailable`（调用方分类，不吞成空列表）。测试：他人候选被拒。
+- **C legacy resolver 接入读取**：`filter_by_identity` 对缺 document_id 候选经映射仓库解析（`_legacy_resolved` 标记，compat_generation=0 存量放行），未解析拒绝；新代次发布 revoke 后不可见。测试：回填→可读→revoke 后拒绝。
+- **A 接管 ABA**：`takeover_upload_row` 绑定预期 generation + 旧文件路径条件；failed→pending→indexing→failed 后旧接管请求不命中（胜者状态不被覆盖）。测试：过期预期拒绝。
+- 修正：filter kept 去重（legacy 标记后对象不重复）、冲突 commit 落库。
+
+验证：后端全量 **1102 passed / 9 skipped**（无 xfail）；mypy 0；ruff 通过。B 全入口矩阵其余（列表/详情/分块/图片/缓存）、C resume/rollback 持久进度与版本保护、D/E/F 未实施；未 commit（遵守方案授权条款）。
+
+## 统一方案复验第三轮修正（2026-09-08，legacy 绕过代次校验修复）
+
+- **缺 owner 拒绝**：`filter_by_identity` 要求 metadata.user_id 必须等于请求者，缺失一律拒绝（不再因缺省放行）。
+- **消除 _legacy_resolved 绕过**：legacy 解析改为返回可信 `LegacyResolution(doc, document_id, compat_generation, source)`（不修改候选 metadata、不信任标记）；读取端独立校验 `compat_generation == active_generation` 才可见——**compat=0 不得混入已发布新代次（active>0）**；gen-less 残留规则恢复（active>0 无 generation 拒绝）。新增仓库 `get_active_for_owner_with_generation`。
+- **数据源身份 + revoke 接线**：可见性服务 source 缺省取实际 collection 名；发布成功与删除路径均调用 `LegacyMappingRepository.revoke`（旧映射随新代次/删除失效）。
+- **冲突事务边界 + 重放不激活**：upsert 冲突只标记 unresolved + flush（编排层决定提交时机，不隐式提交调用方工作）；同身份重放不解除 revoked（REVOKED 拒绝重激活）。
+- 测试修正：scoped 补 owner；legacy 读取契约改为 active=0 存量可读、compat=0 vs active=1 不可见、revoke 后不可见；冲突由编排层 session 提交登记。
+
+验证：后端全量 **1102 passed / 9 skipped**（无 xfail）；mypy 0；ruff 通过；functional 11/3 deselected。B 全入口矩阵其余（列表/详情/分块/图片/缓存）、C resume/rollback 持久化、D/E/F 未实施；未 commit（复验不构成提交授权）。
+
+## 统一方案复验第四轮修正（2026-09-08，collection 身份/幂等重放/v1 revoke/分类贯通）
+
+- **真实 collection 身份**：`_default_collection_name()` 改读 `app.utils.config.chroma_config['collection_name']`
+  （真实配置 `rag_collection`）；缺失/读取失败抛 `VisibilityUnavailable`（不静默回退
+  "default"，避免映射查询与 revoke 操作错误数据源范围）。conftest 测试配置补
+  collection_name。
+- **无副作用幂等重放**：`upsert` 同身份重放要求**完整映射内容一致**（owner/document_id/
+  compat_generation/source_batch/evidence 全等）才返回；任何变化（代次/批次/证据/归属）
+  拒绝为 ConflictError + unresolved，不修改旧映射。
+- **v1/SSE 发布 revoke 接线**：`_publish_v1_generation` 发布成功后撤销旧映射（与 v2/
+  删除路径一致）；revoke 异常记录日志（读取端仍按代次校验兜底，不宣称撤销与发布原子）。
+- **检索依赖失败分类贯通**：`retrieval_service._filter_active_documents` 单独捕获
+  `VisibilityUnavailable` 记 error（区别于合法空结果）后 fail-closed 返回空，不再吞成
+  "没有结果"。
+- 测试修正：两个过滤测试改直接测 visibility service（与全量顺序解耦）；fails_closed
+  用 VisibilityUnavailable 分类断言。
+
+验证：后端全量 **1102 passed / 9 skipped**（无 xfail，稳定两次）；mypy 0；ruff 通过；
+functional 11/3。B 全入口矩阵其余（列表/详情/分块/图片/缓存）、C resume/rollback
+持久化与版本保护、D/E/F 未实施；未 commit（复验不构成提交授权）。
+
+## 统一方案复验第五轮修正（2026-09-08，撤销配置统一/分类进结果/检索入口测试恢复）
+
+- **撤销配置统一**：`_default_source_name()` 改调 `document_visibility_service._default_collection_name()`
+  （真实 `chroma_config['collection_name']`），查询与 revoke 使用同一数据源范围；
+  配置缺失明确抛 VisibilityUnavailable，不再静默回退 default 导致撤销错误范围。
+- **分类进入调用结果**：`_filter_active_documents` 对 `VisibilityUnavailable` 改为**向上抛**
+  （不再返回 []）；`_retrieve_knowledge` 单独捕获并保持结构化（不降级关键词——关键词
+  同样依赖 DB），其它异常才降级。上层由此可区分"数据库故障"与"确实无知识"。
+- **检索入口测试恢复**：新增 `test_filter_active_documents_entry_returns_visible`（正常候选
+  经入口过滤）与 `test_filter_active_documents_propagates_dependency_failure`（依赖失败在
+  入口传播为 VisibilityUnavailable）——保留下层单测同时恢复入口接线覆盖。
+
+验证：后端全量 **1104 passed / 9 skipped**（无 xfail）；mypy 0；ruff 通过；functional
+11/3。B 全入口矩阵其余（列表/详情/分块/图片/缓存）、C resume/rollback 持久化与版本
+保护、D/E/F 未实施；未 commit（评审不构成提交授权）。
+
+## 统一方案复验第六轮修正（2026-09-08，公开 retrieve() 依赖失败分类贯通）
+
+- `retrieve()` 汇总：`asyncio.gather(return_exceptions=True)` 后对
+  `VisibilityUnavailable` 改为**向上抛**（不再 continue 成空/部分结果）；
+  普通检索异常保留既有降级（记日志跳过该分支）。
+- 新增公开入口测试：
+  - knowledge 范围依赖失败 → retrieve() 抛 VisibilityUnavailable（不返回伪装空结果）；
+  - all 范围知识失败、笔记成功 → 明确失败（不静默当完整成功）；
+  - 合法无结果 → 正常返回 []。
+
+验证：后端全量 **1107 passed / 9 skipped**（无 xfail）；mypy 0；ruff 通过；functional
+11/3。B 全入口矩阵其余、C resume/rollback 持久化、同事务审计、组件屏障、D/E/F 未实施；
+未 commit（评审不构成提交授权）。
+
+## 统一方案 B/C 剩余接线（2026-09-08，续做）
+
+### B：分块列表 SQL 身份接线（代表性入口）
+
+- `handle_get_document_chunks` 重构：SQL 按 owner+original_filename **唯一解析** document_id
+  （无候选 404、多候选 409 冲突）；非 indexed 拒绝；新增
+  `vector_store.get_document_chunks_by_identity` 按 document_id + generation==active
+  取分块（稳定排序、不回退旧代次）。
+- 旧 chunks 测试适配（种 SQL indexed 行）。
+
+### C：resume/rollback 持久化与版本保护
+
+- `rollback`：仅撤销 source_batch==batch 且未被后续批次改写（版本保护）的映射——
+  置 REVOKED（保留 source_batch 审计），不物理删除原向量。
+- `resume`：返回批次内 total/active/needs_work 持久进度（幂等续跑依据）。
+
+验证：后端全量 **1107 passed / 9 skipped**（无 xfail）；mypy 0；ruff 通过；functional
+11/3。B 其余（列表/详情/图片/缓存）、同事务审计、组件屏障、D/E/F 未实施；未 commit。

@@ -122,7 +122,8 @@ def _sync_slice_file(file_content: bytes, filename: str, file_index: int, user_i
                 return
 
             queue.put(SliceResult.success_result(
-                file_index=file_index, filename=filename, documents=split_docs, md5=md5_hex
+                file_index=file_index, filename=filename, documents=split_docs, md5=md5_hex,
+                source_documents=documents,
             ))
         finally:
             if os.path.exists(temp_file_path):
@@ -200,7 +201,7 @@ class KnowledgeService:
 
         try:
             try:
-                await store.get_document(
+                processed = await store.get_document(
                     files=[file], user_id=user_id, space_id=space_id,
                     generation=generation, document_id=document_id,
                 )
@@ -208,6 +209,32 @@ class KnowledgeService:
                 # 写入失败：登记行条件标记失败，保留可重试依据（不留 indexed 幽灵行）
                 await self._fail_v1_generation(file, user_id, generation, document_id)
                 raise
+
+            # N0：写入成功后记录可核验锚点；失败不阻断上传主链路，
+            # 后续生成摘要时会按需从原文件重建。
+            try:
+                from app.db.db_config import AsyncSessionLocal as _AnchorSession
+                from app.services.source_anchor_service import record_document_anchors
+                async with _AnchorSession() as anchor_session:
+                    for item in processed or []:
+                        await record_document_anchors(
+                            anchor_session,
+                            owner_user_id=user_id,
+                            space_id=space_id,
+                            document_id=document_id,
+                            generation=generation,
+                            content_hash=item.get("md5"),
+                            source_documents=item.get("source_documents") or [],
+                            split_documents=item.get("documents") or [],
+                            chunk_ids=item.get("chunk_ids"),
+                        )
+                    await anchor_session.commit()
+            except Exception as anchor_err:
+                logger.warning(
+                    "【知识库】v1 锚点记录失败（上传继续，洞察按需重建）: %s",
+                    str(anchor_err)[:200],
+                )
+
             published = await self._publish_v1_generation(
                 store, user_id, md5_hex, generation, document_id)
             if not published:
@@ -477,6 +504,22 @@ class KnowledgeService:
                 document_id=document_id, generation=generation,
                 token=f"v1-{document_id}-g{generation}",
                 status="closed", reason="published")
+            # 复验：v1 发布成功同样撤销旧映射（旧映射随新代次失效）
+            try:
+                from app.repositories.legacy_mapping_repository import LegacyMappingRepository
+                from app.services.document_index_service import _default_source_name
+                await LegacyMappingRepository(session).revoke(
+                    _default_source_name(), user_id, document_id)
+            except Exception as _revoke_err:
+                from app.core.logger_handler import logger
+                logger.warning(
+                    f"【知识库】v1 发布撤销旧映射失败（读取端仍按代次校验兜底）: {_revoke_err}"
+                )
+            # N0：同一事务激活来源版本；旧产物/旧证据失效
+            from app.services.source_anchor_service import activate_document_version
+            await activate_document_version(
+                session, owner_user_id=user_id,
+                document_id=document_id, generation=generation)
             # C4：与发布同事务登记旧代次清理任务
             cleanup_repo = CleanupTaskRepository(session)
             async with session.begin_nested():
@@ -779,6 +822,29 @@ class KnowledgeService:
                         ]
                         execution_open = True
 
+                        # N0：记录本代次原文锚点；失败不阻断写入主链路
+                        try:
+                            from app.db.db_config import AsyncSessionLocal as _AnchorSession
+                            from app.services.source_anchor_service import record_document_anchors
+                            async with _AnchorSession() as anchor_session:
+                                await record_document_anchors(
+                                    anchor_session,
+                                    owner_user_id=user_id,
+                                    space_id=getattr(state, "space_id", "") or "",
+                                    document_id=document_id,
+                                    generation=generation,
+                                    content_hash=result.md5,
+                                    source_documents=getattr(result, "source_documents", []) or [],
+                                    split_documents=result.documents,
+                                    chunk_ids=stable_ids,
+                                )
+                                await anchor_session.commit()
+                        except Exception as anchor_err:
+                            logger.warning(
+                                "【SSE上传】锚点记录失败（写入继续，洞察按需重建）: %s",
+                                str(anchor_err)[:200],
+                            )
+
                         await asyncio.to_thread(
                             store.vectors_store.add_documents,
                             result.documents, ids=stable_ids)
@@ -940,18 +1006,32 @@ class KnowledgeService:
 
     async def handle_get_user_knowledge(self, user_id: str, space_id: str = None) -> list:
         """
-        获取用户的知识库文档列表。
+        获取用户的知识库文档列表（B 接线：SQL active 代次过滤，一文档一项）。
 
         参数:
             user_id (str): 目标用户的 ID。
-            space_id (str, optional): 按空间 ID 过滤，None 表示获取所有文档。
+            space_id (str, optional): 按空间 ID 过滤。
 
         返回:
-            list: 文档信息字典列表，每个字典包含文件名、切片数等信息。
+            list: 文档信息字典列表。
         """
         from app.rag.vector_store import VectorStoreService
+        from app.db.db_config import AsyncSessionLocal
+        from sqlalchemy import select
+
+        # SQL active map（document_id → active_generation）——旧代次向量不入列表
+        async with AsyncSessionLocal() as s:
+            from app.models.document_index import DocumentIndexStatus, DocumentIndex as _DI
+            rows = (await s.execute(
+                select(_DI.id, _DI.active_generation).where(
+                    _DI.user_id == user_id,
+                    _DI.status == DocumentIndexStatus.INDEXED,
+                ))).all()
+        active_map = {r[0]: (r[1] or 0) for r in rows}
+
         store = VectorStoreService()
-        documents = await store.get_user_documents(user_id, space_id=space_id)
+        documents = await store.get_user_documents(user_id, space_id=space_id,
+                                                  active_map=active_map)
         logger.info(f"【知识库】获取用户 {user_id} 的知识库文档，共 {len(documents)} 个文件")
         return documents
 
@@ -969,9 +1049,31 @@ class KnowledgeService:
         异常:
             HTTPException: 文档不存在时抛出 404 错误。
         """
+        from app.models.document_index import DocumentIndex, DocumentIndexStatus
+        from app.db.db_config import AsyncSessionLocal
+        from sqlalchemy import select
+
+        async with AsyncSessionLocal() as s:
+            rows = list((await s.execute(
+                select(DocumentIndex.id, DocumentIndex.status,
+                       DocumentIndex.active_generation).where(
+                    DocumentIndex.user_id == user_id,
+                    DocumentIndex.original_filename == filename,
+                ))).all())
+        if not rows:
+            raise HTTPException(status_code=404, detail=f"文档 {filename} 不存在")
+        if len(rows) > 1:
+            raise HTTPException(status_code=409,
+                                detail="存在多个同名文档，无法唯一解析，请通过文档ID访问")
+        doc_id, doc_status, active_gen = rows[0]
+        if doc_status != DocumentIndexStatus.INDEXED.value:
+            raise HTTPException(status_code=409,
+                                detail=f"文档当前状态 {doc_status}，不可读取详情")
+        active_map = {doc_id: int(active_gen or 0)}
+
         from app.rag.vector_store import VectorStoreService
         store = VectorStoreService()
-        document = await store.get_document_detail(user_id, filename)
+        document = await store.get_document_detail(user_id, filename, active_map=active_map)
         if not document:
             raise HTTPException(status_code=404, detail=f"文档 {filename} 不存在")
         logger.info(f"【知识库】获取文档详情: {filename}")
@@ -979,7 +1081,7 @@ class KnowledgeService:
 
     async def handle_get_document_chunks(self, user_id: str, filename: str) -> dict:
         """
-        获取指定文档的切片内容列表。
+        获取指定文档的切片内容列表（B 接线：SQL 唯一解析 + active 代次过滤）。
 
         参数:
             user_id (str): 目标用户的 ID。
@@ -987,11 +1089,34 @@ class KnowledgeService:
 
         返回:
             dict: 包含文件名、切片总数和切片内容列表的字典。
-                 切片为空时返回空列表。
         """
+        from app.db.db_config import AsyncSessionLocal
+        from sqlalchemy import select as _sel
+        from app.models.document_index import DocumentIndex, DocumentIndexStatus
+
+        # 1) SQL 唯一解析：按 owner+original_filename 定位 document_id（歧义/多候选报冲突）
+        async with AsyncSessionLocal() as s:
+            rows = list((await s.execute(
+                _sel(DocumentIndex.id, DocumentIndex.status,
+                     DocumentIndex.active_generation).where(
+                    DocumentIndex.user_id == user_id,
+                    DocumentIndex.original_filename == filename,
+                ))).all())
+        if not rows:
+            raise HTTPException(status_code=404, detail="文档不存在")
+        if len(rows) > 1:
+            raise HTTPException(status_code=409,
+                                detail="存在多个同名文档，无法唯一解析，请通过文档ID访问")
+        doc_id, doc_status, active_gen = rows[0]
+        if doc_status != DocumentIndexStatus.INDEXED.value:
+            raise HTTPException(status_code=409,
+                                detail=f"文档当前状态 {doc_status}，不可读取分块")
+
+        # 2) 从向量取该 document_id 且 generation == active_generation 的分块
         from app.rag.vector_store import VectorStoreService
         store = VectorStoreService()
-        chunks = await store.get_document_chunks(user_id, filename)
+        chunks = await store.get_document_chunks_by_identity(
+            user_id, doc_id, int(active_gen or 0), filename)
         if chunks['total_chunks'] == 0:
             logger.warning(f"【知识库】文档切片为空: {filename}")
             return {"filename": filename, "total_chunks": 0, "chunks": []}

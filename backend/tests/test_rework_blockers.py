@@ -580,18 +580,20 @@ async def test_v1_upload_failure_marks_failed(env, monkeypatch):
 async def test_retrieval_filter_genless_rule(env, monkeypatch):
     """gen-less 切片：纯存量文档（active=0）放行；已发布代次文档的残留丢弃。"""
     from app.rag.retrieval_service import RetrievalService
-    import app.services.document_index_service as dis
+    import app.services.document_visibility_service as vis
 
-    async def _active(user_id, md5s):
-        return {"M-GEN": 2, "M-LEGACY": 0}
+    async def _resolve(user_id, doc_ids):
+        return {"D-GEN": 2, "D-LEGACY": 0}
 
-    monkeypatch.setattr(dis, "get_active_document_md5s", _active)
+    monkeypatch.setattr(vis.DocumentVisibilityService,
+                        "resolve_visible_generations", _resolve)
 
     svc = RetrievalService(user_id="u1")
     docs = [
-        NS(page_content="当前代次", metadata={"md5": "M-GEN", "generation": 2}),
-        NS(page_content="残留", metadata={"md5": "M-GEN"}),          # active>0 无代次 → 丢弃
-        NS(page_content="纯存量", metadata={"md5": "M-LEGACY"}),      # active=0 无代次 → 放行
+        NS(page_content="当前代次", metadata={"user_id": "u1", "document_id": "D-GEN",
+                                            "generation": 2}),
+        NS(page_content="残留", metadata={"user_id": "u1", "document_id": "D-GEN"}),
+        NS(page_content="纯存量", metadata={"user_id": "u1", "document_id": "D-LEGACY"}),
     ]
     kept = await svc._filter_active_documents(docs)
     assert [d.page_content for d in kept] == ["当前代次", "纯存量"]

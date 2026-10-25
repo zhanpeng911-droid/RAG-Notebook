@@ -8,35 +8,47 @@
           <polyline points="14 2 14 8 20 8" />
           <line x1="16" y1="13" x2="8" y2="13" />
           <line x1="16" y1="17" x2="8" y2="17" />
-          <polyline points="10 9 9 9 8 9" />
         </svg>
       </template>
     </van-tabbar-item>
-    <van-tabbar-item to="/chat">
-      <span>AI助手</span>
+    <van-tabbar-item to="/analysis">
+      <span>分析</span>
       <template #icon>
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-          <line x1="9" y1="10" x2="15" y2="10" />
-          <line x1="12" y1="7" x2="12" y2="13" />
+          <path d="M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8z" />
+          <path d="M18 15l.9 2.1L21 18l-2.1.9L18 21l-.9-2.1L15 18l2.1-.9z" />
         </svg>
       </template>
     </van-tabbar-item>
-    <van-tabbar-item to="/review">
-      <span>回顾</span>
+    <van-tabbar-item to="/graph">
+      <span>图谱</span>
       <template #icon>
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
-          <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+          <circle cx="6" cy="6" r="3" />
+          <circle cx="18" cy="8" r="3" />
+          <circle cx="12" cy="18" r="3" />
+          <line x1="8.5" y1="7.5" x2="15.5" y2="7.2" />
+          <line x1="7.5" y1="8.7" x2="10.5" y2="15.2" />
+          <line x1="16.4" y1="10.7" x2="13.2" y2="15.5" />
         </svg>
       </template>
     </van-tabbar-item>
-    <van-tabbar-item to="/my">
-      <span>我的</span>
+    <van-tabbar-item to="/knowledge">
+      <span>知识库</span>
       <template #icon>
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-          <circle cx="12" cy="7" r="4" />
+          <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+          <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+        </svg>
+      </template>
+    </van-tabbar-item>
+    <van-tabbar-item to="/more">
+      <span>更多</span>
+      <template #icon>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="5" cy="12" r="1.5" />
+          <circle cx="12" cy="12" r="1.5" />
+          <circle cx="19" cy="12" r="1.5" />
         </svg>
       </template>
     </van-tabbar-item>
@@ -45,8 +57,8 @@
 
 <script setup>
 /**
- * TabBar 底部导航栏 —— 4 个 Tab：笔记、AI助手、回顾、我的。
- * 配合 Vue Router 的 route 属性实现页面切换。
+ * TabBar 底部导航栏 —— 笔记 / 分析 / 图谱 / 知识库 / 更多。
+ * 旧功能（AI 对话、回顾、个人、设置）收进“更多”页面，不从产品中移除。
  */
 import { ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
@@ -56,27 +68,24 @@ const active = ref(0)
 
 function setActiveTab() {
   const path = route.path
-  if (path.includes('/notes')) {
-    active.value = 0
-  } else if (path.includes('/chat') || path.includes('/aichat')) {
+  if (path.startsWith('/analysis') || path.endsWith('/insight')) {
     active.value = 1
-  } else if (path.includes('/review')) {
+  } else if (path.startsWith('/graph')) {
     active.value = 2
-  } else if (path.includes('/my')) {
+  } else if (path.startsWith('/knowledge') && !path.endsWith('/insight')) {
     active.value = 3
+  } else if (path === '/notes' || (path.startsWith('/notes/') && !path.endsWith('/insight'))) {
+    active.value = 0
+  } else {
+    active.value = 4
   }
 }
 
 setActiveTab()
-
-watch(() => route.path, () => {
-  setActiveTab()
-})
+watch(() => route.path, setActiveTab)
 </script>
 
 <style scoped>
-/* 移动端底部导航：玻璃拟态（透出蓝图网格背景）
-   双类选择器提升优先级，覆盖 Vant 默认实心背景 */
 .glass-tabbar.van-tabbar {
   background: var(--glass-bg);
   -webkit-backdrop-filter: blur(var(--glass-blur));

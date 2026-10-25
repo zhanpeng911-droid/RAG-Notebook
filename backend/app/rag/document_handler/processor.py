@@ -126,6 +126,7 @@ class DocumentProcessor:
         """
         file_paths = []
         file_names = {}
+        processed_results: list[dict] = []
 
         if files:
             for file in files:
@@ -196,6 +197,8 @@ class DocumentProcessor:
                             pass
                     continue
 
+                source_documents = list(document)
+
                 if progress_callback:
                     await progress_callback({
                         'step': 'splitting',
@@ -258,6 +261,16 @@ class DocumentProcessor:
 
                 original_filename = file_names.get(file_path, filename) if files else filename
                 await self.md5_store.save_md5_hex(md5_hex, filename, original_filename, user_id)
+                processed_results.append({
+                    'filename': filename,
+                    'md5': md5_hex,
+                    'generation': generation,
+                    'document_id': document_id,
+                    'space_id': space_id,
+                    'source_documents': source_documents,
+                    'documents': document,
+                    'chunk_ids': (stable_ids if generation is not None else None),
+                })
 
                 if progress_callback:
                     await progress_callback({
@@ -288,3 +301,5 @@ class DocumentProcessor:
                     except Exception:
                         pass
                 continue
+
+        return processed_results

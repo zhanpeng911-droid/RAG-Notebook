@@ -38,7 +38,11 @@ class DocumentIndexExecution(Base):
     status = Column(String(20), nullable=False, default=ExecutionStatus.WRITING,
                     comment="writing / closed / unknown")
     started_at = Column(DateTime(timezone=True), server_default=func.now())
-    closed_at = Column(DateTime(timezone=True), nullable=True, comment="关闭时间")
+    closed_at = Column(DateTime(timezone=True), nullable=True, comment="确定关闭时间（unknown 不填）")
     lease_expires_at = Column(DateTime(timezone=True), nullable=True,
                               comment="执行租约到期（失联判定依据；不证明远端停止）")
+    recovery_outcome = Column(String(30), nullable=True,
+                              comment="结构化恢复结果：recovered / needs_reupload")
+    recovered_at = Column(DateTime(timezone=True), nullable=True,
+                          comment="实际恢复时间（重放不更新）")
     close_reason = Column(String(200), nullable=True, comment="关闭依据/错误码")

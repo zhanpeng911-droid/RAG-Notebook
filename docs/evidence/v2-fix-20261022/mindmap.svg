@@ -1,0 +1,9 @@
+<svg data-v-5a8ef132="" width="900" height="560" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 560"><style>
+    .mm-node { fill: #ffffff; stroke: #dbe4f0; }
+    .mm-node.selected { stroke: #1e40af; stroke-width: 2.4; }
+    .mm-label { fill: #0f1e3d; font: 12px sans-serif; }
+    .mm-edge { fill: none; stroke: #dbe4f0; stroke-width: 1.4; }
+    .mm-toggle circle { fill: #ffffff; stroke: #dbe4f0; }
+    .mm-toggle text { fill: #0f1e3d; font: 11px sans-serif; }
+    .mm-edited { fill: #1e40af; }
+  </style><g data-v-5a8ef132="" transform="translate(40,40)"><path data-v-5a8ef132="" d="M 490 23 C 515 23, 515 23, 540 23" class="mm-edge"/><path data-v-5a8ef132="" d="M 220 23 C 245 23, 245 23, 270 23" class="mm-edge"/><g data-v-5a8ef132="" transform="translate(540,0)" class="mm-node-group"><rect data-v-5a8ef132="" width="220" height="46" rx="10" class="mm-node"/><text data-v-5a8ef132="" class="mm-label" x="12" y="18"><tspan data-v-5a8ef132="" x="12" dy="0">章节结论</tspan></text><!----><!----></g><g data-v-5a8ef132="" transform="translate(270,0)" class="mm-node-group"><rect data-v-5a8ef132="" width="220" height="46" rx="10" class="mm-node"/><text data-v-5a8ef132="" class="mm-label" x="12" y="18"><tspan data-v-5a8ef132="" x="12" dy="0">我的细节批注</tspan></text><circle data-v-5a8ef132="" class="mm-edited" cx="210" cy="10" r="4"/><g data-v-5a8ef132="" class="mm-toggle" transform="translate(220,23)"><circle data-v-5a8ef132="" r="9"/><text data-v-5a8ef132="" text-anchor="middle" dy="4">−</text></g></g><g data-v-5a8ef132="" transform="translate(0,0)" class="mm-node-group"><rect data-v-5a8ef132="" width="220" height="46" rx="10" class="mm-node"/><text data-v-5a8ef132="" class="mm-label" x="12" y="18"><tspan data-v-5a8ef132="" x="12" dy="0">示例文档.txt</tspan></text><!----><g data-v-5a8ef132="" class="mm-toggle" transform="translate(220,23)"><circle data-v-5a8ef132="" r="9"/><text data-v-5a8ef132="" text-anchor="middle" dy="4">−</text></g></g></g></svg>

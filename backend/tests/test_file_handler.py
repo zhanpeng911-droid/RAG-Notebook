@@ -238,6 +238,25 @@ async def test_word_loader_extracts_paragraphs_and_tables(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_word_loader_records_real_heading_offsets(tmp_path):
+    from docx import Document as DocxDoc
+    d = DocxDoc()
+    d.add_heading("第一章", level=1)
+    d.add_paragraph("正文内容")
+    d.add_heading("1.1 小节", level=2)
+    d.add_paragraph("小节内容")
+    fp = tmp_path / "headings.docx"
+    d.save(str(fp))
+
+    out = await fh.word_loader(str(fp))
+    headings = out[0].metadata.get("headings") or []
+    assert [h["title"] for h in headings] == ["第一章", "1.1 小节"]
+    assert [h["level"] for h in headings] == [1, 2]
+    for heading in headings:
+        assert out[0].page_content[heading["char_start"]:].startswith(heading["title"])
+
+
+@pytest.mark.asyncio
 async def test_word_loader_blank_document_returns_empty(tmp_path):
     from docx import Document as DocxDoc
     d = DocxDoc()

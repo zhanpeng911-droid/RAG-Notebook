@@ -163,17 +163,27 @@ const mainNavItems = [
   {
     path: '/notes',
     label: '笔记',
-    icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>'
+    icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>'
   },
   {
-    path: '/chat',
-    label: 'AI 对话',
-    icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>'
+    path: '/analysis',
+    label: '文档分析',
+    icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8z"/><path d="M18 15l.9 2.1L21 18l-2.1.9L18 21l-.9-2.1L15 18l2.1-.9z"/></svg>'
+  },
+  {
+    path: '/graph',
+    label: '知识图谱',
+    icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="8" r="3"/><circle cx="12" cy="18" r="3"/><line x1="8.5" y1="7.5" x2="15.5" y2="7.2"/><line x1="7.5" y1="8.7" x2="10.5" y2="15.2"/><line x1="16.4" y1="10.7" x2="13.2" y2="15.5"/></svg>'
   },
   {
     path: '/knowledge',
     label: '知识库',
     icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>'
+  },
+  {
+    path: '/chat',
+    label: 'AI 对话',
+    icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>'
   },
   {
     path: '/review',
@@ -199,13 +209,20 @@ const secondaryNavItems = [
 // 判断导航项是否激活
 function isActive(path) {
   if (path === '/notes') {
-    return route.path.startsWith('/notes')
+    return route.path === '/notes' || route.path === '/notes/new'
+      || (route.path.startsWith('/notes/') && !route.path.endsWith('/insight'))
+  }
+  if (path === '/analysis') {
+    return route.path.startsWith('/analysis') || route.path.endsWith('/insight')
+  }
+  if (path === '/graph') {
+    return route.path.startsWith('/graph')
   }
   if (path === '/chat') {
     return route.path.startsWith('/chat') || route.path.startsWith('/aichat')
   }
   if (path === '/knowledge') {
-    return route.path.startsWith('/knowledge') || route.path.startsWith('/knowledgebase')
+    return route.path === '/knowledge' || route.path.startsWith('/knowledgebase')
   }
   if (path === '/profile') {
     return route.path === '/profile' || route.path === '/my'

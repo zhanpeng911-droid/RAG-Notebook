@@ -427,14 +427,37 @@ async def test_md5_delegation():
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
 async def test_handle_get_user_knowledge(monkeypatch):
     from app.router.knowledge_service import KnowledgeService
-    svc = KnowledgeService()
-    fake_store = NS(get_user_documents=async_fake([{"filename": "x.txt"}]))
-    monkeypatch.setattr(_vs_module(), "VectorStoreService",
-                        lambda: fake_store)
-    out = await svc.handle_get_user_knowledge(USER_A)
-    assert out[0]["filename"] == "x.txt"
+    # 显式隔离 DB（与全量顺序解耦）：内存库种 indexed 行 → active_map 可控
+    from sqlalchemy.ext.asyncio import (AsyncSession, async_sessionmaker,
+                                        create_async_engine)
+    from app.models.chat_history import Base as _B
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(_B.metadata.create_all)
+    fac = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    import app.db.db_config as _dbc
+    saved = _dbc.AsyncSessionLocal
+    _dbc.AsyncSessionLocal = fac
+    try:
+        from app.models.document_index import DocumentIndex, DocumentIndexStatus
+        async with fac() as s:
+            s.add(DocumentIndex(id="list-doc", user_id=USER_A, filename="x.txt",
+                                original_filename="x.txt", file_path="/tmp/x",
+                                md5="m1", status=DocumentIndexStatus.INDEXED,
+                                active_generation=1))
+            await s.commit()
+        svc = KnowledgeService()
+        fake_store = NS(get_user_documents=async_fake([{"filename": "x.txt"}]))
+        monkeypatch.setattr(_vs_module(), "VectorStoreService",
+                            lambda: fake_store)
+        out = await svc.handle_get_user_knowledge(USER_A)
+        assert out[0]["filename"] == "x.txt"
+    finally:
+        _dbc.AsyncSessionLocal = saved
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -450,10 +473,26 @@ async def test_handle_get_document_detail_missing(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def _seed_indexed_row(user_id, filename="x.txt"):
+    """种 SQL indexed 行（B 接线后分块入口依赖 SQL 唯一解析 + active 代次）。"""
+    import app.db.db_config as _dbc
+    from app.models.document_index import DocumentIndex, DocumentIndexStatus
+    async with _dbc.AsyncSessionLocal() as s:
+        s.add(DocumentIndex(id="chunk-doc", user_id=user_id, filename="chunk-doc",
+                            original_filename=filename, file_path="/tmp/x.txt",
+                            md5="m1", status=DocumentIndexStatus.INDEXED,
+                            active_generation=1, generation=1))
+        await s.commit()
+    return "chunk-doc"
+
+
+@pytest.mark.asyncio
 async def test_handle_document_chunks_empty(monkeypatch):
     from app.router.knowledge_service import KnowledgeService
     svc = KnowledgeService()
-    fake_store = NS(get_document_chunks=async_fake({"total_chunks": 0, "chunks": []}))
+    await _seed_indexed_row(USER_A)
+    fake_store = NS(get_document_chunks_by_identity=async_fake(
+        {"total_chunks": 0, "chunks": []}))
     monkeypatch.setattr(_vs_module(), "VectorStoreService",
                         lambda: fake_store)
     out = await svc.handle_get_document_chunks(USER_A, "x.txt")
@@ -464,7 +503,8 @@ async def test_handle_document_chunks_empty(monkeypatch):
 async def test_handle_document_chunks_nonempty(monkeypatch):
     from app.router.knowledge_service import KnowledgeService
     svc = KnowledgeService()
-    fake_store = NS(get_document_chunks=async_fake(
+    await _seed_indexed_row(USER_A)
+    fake_store = NS(get_document_chunks_by_identity=async_fake(
         {"total_chunks": 2, "chunks": [{"content": "a"}, {"content": "b"}]}))
     monkeypatch.setattr(_vs_module(), "VectorStoreService",
                         lambda: fake_store)

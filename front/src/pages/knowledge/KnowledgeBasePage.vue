@@ -7,6 +7,12 @@
         <span class="kb-doc-count">{{ documents.length }} 个文档</span>
       </div>
       <div class="kb-toolbar-right">
+        <button class="btn-secondary" @click="openGraph">
+          知识图谱
+        </button>
+        <button class="btn-secondary" @click="router.push('/graph/concepts')">
+          AI 概念图
+        </button>
         <button
           v-if="documents.length > 0"
           class="btn-danger-plain"
@@ -204,6 +210,14 @@
             <span v-if="doc.index_error" class="index-error-hint" :title="doc.index_error">⚠</span>
           </span>
           <span class="col-actions">
+            <button
+              v-if="doc.id && (!doc.index_status || doc.index_status === 'indexed')"
+              class="btn-analysis"
+              title="分析这篇文档"
+              @click.stop="openInsight(doc)"
+            >
+              分析
+            </button>
             <button
               v-if="doc.index_status === 'indexed'"
               class="btn-icon-sm btn-ask-ai"
@@ -885,6 +899,20 @@ function askAIAboutDoc(doc) {
   router.push({ path: '/chat', query: { doc: filename } })
 }
 
+/** 打开文档洞察（摘要 / 思维导图 / 原文证据） */
+function openInsight(doc) {
+  if (!doc.id) {
+    showToast('该文档缺少资源 ID，请重新索引后再试')
+    return
+  }
+  router.push(`/knowledge/${doc.id}/insight`)
+}
+
+/** 打开跨文档知识图谱 */
+function openGraph() {
+  router.push('/graph')
+}
+
 async function handleReindex(doc) {
   if (!userStore.token || !doc.id) return
   try {
@@ -1168,6 +1196,29 @@ onMounted(() => {
 .btn-icon-sm:hover {
   background: var(--color-surface);
   color: var(--color-text);
+}
+
+.btn-icon-sm.btn-insight {
+  color: var(--color-primary);
+}
+
+.btn-analysis {
+  border: 1px solid color-mix(in srgb, var(--color-primary) 45%, transparent);
+  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
+  color: var(--color-primary);
+  border-radius: 6px;
+  padding: 3px 9px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn-analysis:hover {
+  background: color-mix(in srgb, var(--color-primary) 16%, transparent);
+}
+
+.btn-icon-sm.btn-insight:hover {
+  background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+  color: var(--color-primary-hover);
 }
 
 .btn-icon-sm.btn-danger:hover {
