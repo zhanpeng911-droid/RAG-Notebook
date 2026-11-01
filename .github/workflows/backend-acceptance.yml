@@ -1,0 +1,49 @@
+name: backend-acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Isolated acceptance suite"
+        required: true
+        default: storage
+        type: choice
+        options:
+          - storage
+          - recovery
+          - large-documents
+          - load
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      NB_RUN_ID: nb-it-ci-${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Preflight isolated environment
+        run: python backend/tools/backend_acceptance/runner.py preflight --run-id "$NB_RUN_ID"
+      - name: Run selected suite
+        run: |
+          python backend/tools/backend_acceptance/runner.py run \
+            --run-id "$NB_RUN_ID" --suite "${{ inputs.suite }}"
+      - name: Generate report
+        if: always()
+        run: python backend/tools/backend_acceptance/runner.py report --run-id "$NB_RUN_ID"
+      - name: Cleanup owned resources
+        if: always()
+        run: python backend/tools/backend_acceptance/runner.py cleanup --run-id "$NB_RUN_ID"
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-acceptance-${{ github.run_number }}
+          path: docs/evidence/backend-tests/${{ env.NB_RUN_ID }}
+          if-no-files-found: warn

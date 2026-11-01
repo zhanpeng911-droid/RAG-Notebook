@@ -19,4 +19,10 @@ describe('可追溯分析导出', () => {
     expect(text).not.toContain('[^source-')
     expect(text).not.toContain('?anchor=bad')
   })
+  it('保留只核对锚点的定位，并说明不能证明语义', () => {
+    const text = buildAnalysisMarkdown({ title: '笔记', sourceType: 'note', sourceId: 'n1', artifact: { key_points: [{ id: 'p', text: '结论' }] }, evidence: { p: [{ anchor_id: 'a', verification_status: 'anchor_verified', quote: '原文' }] } })
+    expect(text).toContain('/analysis/note/n1?anchor=a')
+    expect(text).toContain('仅核对锚点位置')
+    expect(text).toContain('不代表已验证结论的语义正确性')
+  })
 })

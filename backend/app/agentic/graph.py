@@ -231,12 +231,28 @@ class AgentGraph:
             )
 
             answer_generator = create_answer_generator(llm_config=self.llm_config)
-            result = await answer_generator.generate(
-                # 使用清洗后的原始查询生成答案（检索用改写词，答案生成防注入）
-                query=state.original_query,
-                evidences=state.evidences,
-                deadline=self.guardrails.deadline,
-            )
+            import inspect
+            stream_generate = getattr(answer_generator, "generate_stream", None)
+            if inspect.isasyncgenfunction(stream_generate):
+                result = {}
+                async for part in stream_generate(
+                    query=state.original_query,
+                    evidences=state.evidences,
+                    deadline=self.guardrails.deadline,
+                ):
+                    delta = part.get("delta")
+                    if delta:
+                        state.answer = (state.answer or "") + delta
+                        yield self._create_event(AgentPhase.ANSWER_TOKEN, delta=delta)
+                    else:
+                        result = part
+            else:
+                result = await answer_generator.generate(
+                    # 使用清洗后的原始查询生成答案（检索用改写词，答案生成防注入）
+                    query=state.original_query,
+                    evidences=state.evidences,
+                    deadline=self.guardrails.deadline,
+                )
 
             if result.get("timed_out"):
                 # 生成阶段超时：结构化失败（timeout），不计为 completed

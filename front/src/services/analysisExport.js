@@ -1,4 +1,4 @@
-// Export the same verified evidence the workspace displays, not just plain claims.
+// Export source locations with their verification limits.
 export function buildAnalysisMarkdown({ title, sourceType, sourceId, artifact = {}, evidence = {} }) {
   const path = `/analysis/${encodeURIComponent(sourceType)}/${encodeURIComponent(sourceId)}`
   const footnotes = new Map()
@@ -6,8 +6,9 @@ export function buildAnalysisMarkdown({ title, sourceType, sourceId, artifact = 
   function refs(target) {
     const ids = []
     for (const item of evidence[target] || []) {
-      if (!item.anchor_id || (item.verification_status && item.verification_status !== 'verified')) continue
+      if (!item.anchor_id || (item.verification_status && !['verified', 'anchor_verified'].includes(item.verification_status))) continue
       if (!footnotes.has(item.anchor_id)) footnotes.set(item.anchor_id, { ...item, number: footnotes.size + 1 })
+      if (item.verification_status === 'anchor_verified') footnotes.get(item.anchor_id).anchorOnly = true
       const id = footnotes.get(item.anchor_id).number
       if (!ids.includes(id)) ids.push(id)
     }
@@ -39,11 +40,12 @@ export function buildAnalysisMarkdown({ title, sourceType, sourceId, artifact = 
     lines.push('')
   }
   if (footnotes.size) {
-    lines.push('## 原文依据', '')
+    lines.push('## 原文依据', '', '> 引文匹配或锚点定位不代表已验证结论的语义正确性。', '')
     for (const [anchor, item] of footnotes) {
       const location = [item.page_no ? `第 ${item.page_no} 页` : '', item.heading_path,
         item.char_start != null ? `字符 ${item.char_start}–${item.char_end ?? '?'}` : ''].filter(Boolean).join(' · ') || '原文片段'
-      lines.push(`[^source-${item.number}]: [${escape(location)}](${path}?anchor=${encodeURIComponent(anchor)}) — ${escape(item.supporting_quote || item.quote || item.quote_text).replace(/\r?\n/g, ' ')}`)
+      const note = item.anchorOnly ? '（仅核对锚点位置）' : ''
+      lines.push(`[^source-${item.number}]: [${escape(location)}](${path}?anchor=${encodeURIComponent(anchor)})${note} — ${escape(item.supporting_quote || item.quote || item.quote_text).replace(/\r?\n/g, ' ')}`)
     }
   }
   return lines.join('\n')

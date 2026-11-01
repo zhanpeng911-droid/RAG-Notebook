@@ -7,18 +7,38 @@ from app.schemas.models import NoteCreate, NoteUpdate
 from app.services.note_service import NoteService
 
 
+class _Nested:
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, *args):
+        return False
+
+
 class FakeSession:
     def __init__(self):
         self.added = []
         self.commit = AsyncMock()
         self.refresh = AsyncMock()
+        self.flush = AsyncMock()
 
     def add(self, item):
         self.added.append(item)
 
+    def begin_nested(self):
+        return _Nested()
+
+
+def _detached_service():
+    service = NoteService()
+    service._enqueue_vector_task = AsyncMock()
+    service._sync_note_anchors = AsyncMock()
+    service._sync_note_links = AsyncMock()
+    return service
+
 
 def test_create_note_uses_one_transaction_without_inline_vector_indexing():
-    service = NoteService()
+    service = _detached_service()
     service.note_repo = SimpleNamespace(add=AsyncMock())
     service.note_index = Mock()
     db = FakeSession()
@@ -33,7 +53,7 @@ def test_create_note_uses_one_transaction_without_inline_vector_indexing():
 
 
 def test_update_note_uses_one_transaction_without_inline_vector_indexing():
-    service = NoteService()
+    service = _detached_service()
     note = Note(id="note-1", user_id="user-1", title="old", content="old body")
     service.note_repo = SimpleNamespace(get_by_id=AsyncMock(return_value=note))
     service.note_index = Mock()
@@ -47,8 +67,12 @@ def test_update_note_uses_one_transaction_without_inline_vector_indexing():
     service.note_index.update_note.assert_not_called()
 
 
-def test_delete_note_uses_one_transaction_without_inline_vector_cleanup():
-    service = NoteService()
+def test_delete_note_uses_one_transaction_without_inline_vector_cleanup(monkeypatch):
+    import app.services.source_anchor_service as anchor_module
+    import app.services.note_link_service as link_module
+    monkeypatch.setattr(anchor_module, "invalidate_note", AsyncMock())
+    monkeypatch.setattr(link_module, "remove_note_links", AsyncMock())
+    service = _detached_service()
     service.note_repo = SimpleNamespace(delete_by_id=AsyncMock(return_value=True))
     service.note_index = Mock()
     db = FakeSession()

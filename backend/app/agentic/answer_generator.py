@@ -144,6 +144,128 @@ class AnswerGenerator:
                 "error": "generation_failed",
             }
 
+    async def generate_stream(
+        self,
+        query: str,
+        evidences: List[Evidence],
+        include_citations: bool = True,
+        deadline: Optional[float] = None,
+    ):
+        """Stream answer deltas, then one final result dict.
+
+        The final dict has the same shape as generate() so callers can persist
+        citations/quality scores exactly once after the tokens finish.
+        """
+        if not evidences:
+            yield {
+                "answer": "抱歉，我没有找到足够的证据来回答您的问题。",
+                "citations": [],
+                "quality_scores": None,
+                "timed_out": False,
+            }
+            return
+
+        gen_timeout = self._remaining_timeout(deadline, default=30.0)
+        if gen_timeout <= 0:
+            yield {
+                "answer": None,
+                "citations": [],
+                "quality_scores": None,
+                "timed_out": True,
+                "error": "generation_timeout",
+            }
+            return
+
+        citations = citation_manager.create_citations(evidences)
+        citations_text = citation_manager.format_citations_for_prompt(citations)
+        context = self._build_context(evidences)
+        prompt = self._build_prompt(query, context, citations_text, include_citations)
+        answer = ""
+
+        try:
+            chat_model = self._get_chat_model()
+            from langchain_core.messages import HumanMessage
+
+            if hasattr(chat_model, "astream"):
+                async with asyncio.timeout(gen_timeout):
+                    async for chunk in chat_model.astream([HumanMessage(content=prompt)]):
+                        delta = self._chunk_text(chunk)
+                        if delta:
+                            answer += delta
+                            yield {"delta": delta}
+            else:
+                response = await asyncio.wait_for(
+                    chat_model.ainvoke([HumanMessage(content=prompt)]),
+                    timeout=gen_timeout,
+                )
+                delta = self._chunk_text(response)
+                if delta:
+                    answer = delta
+                    yield {"delta": delta}
+        except TimeoutError:
+            logger.error("【答案生成】流式超时")
+            yield {
+                "answer": None,
+                "citations": [],
+                "quality_scores": None,
+                "timed_out": True,
+                "error": "generation_timeout",
+            }
+            return
+        except Exception as e:
+            import traceback
+            logger.error(f"【答案生成】流式失败: {e}\n{traceback.format_exc()}")
+            yield {
+                "answer": None,
+                "citations": [],
+                "quality_scores": None,
+                "timed_out": False,
+                "error": "generation_failed",
+            }
+            return
+
+        quality_scores = None
+        judge_budget = self._remaining_timeout(deadline, default=15.0)
+        if not answer:
+            logger.warning("【答案生成】流式响应为空")
+            yield {
+                "answer": None,
+                "citations": [],
+                "quality_scores": None,
+                "timed_out": False,
+                "error": "generation_failed",
+            }
+            return
+        if judge_budget >= 3.0:
+            quality_scores = await self._judge_answer(
+                query, context, answer, timeout=min(judge_budget, 15.0)
+            )
+
+        yield {
+            "answer": answer,
+            "citations": citation_manager.format_citations_for_display(citations),
+            "quality_scores": quality_scores,
+            "timed_out": False,
+        }
+
+    @staticmethod
+    def _chunk_text(chunk) -> str:
+        """Normalize string / content-block chat chunks to text."""
+        content = getattr(chunk, "content", chunk)
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, dict):
+                    text = item.get("text")
+                    if text:
+                        parts.append(str(text))
+                elif isinstance(item, str):
+                    parts.append(item)
+            return "".join(parts)
+        return "" if content is None else str(content)
+
     def _remaining_timeout(self, deadline: Optional[float], default: float) -> float:
         """单调 deadline 的剩余预算；无 deadline 时返回默认单次超时。"""
         if deadline is None:

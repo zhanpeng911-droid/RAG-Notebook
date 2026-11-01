@@ -15,6 +15,20 @@ import pytest
 from fastapi import HTTPException
 
 
+@pytest.fixture(autouse=True)
+def _clear_blacklist_cache():
+    from app.utils import auth_utils
+    auth_utils._blacklist_cache.clear()
+    auth_utils._blacklist_cache_url = None
+    auth_utils._blacklist_client = None
+    auth_utils._blacklist_client_url = None
+    yield
+    auth_utils._blacklist_cache.clear()
+    auth_utils._blacklist_cache_url = None
+    auth_utils._blacklist_client = None
+    auth_utils._blacklist_client_url = None
+
+
 # ==================== Guardrails 并发竞态 ====================
 
 

@@ -25,13 +25,15 @@ class NoteLinkOccurrence(Base):
 
     __tablename__ = "note_link_occurrences"
     __table_args__ = (
+        # The composite owner+source/target indexes already cover owner-first
+        # reads. Keeping a standalone owner index and an unused revision index
+        # made a 100-link save pay five index writes per occurrence.
         Index("ix_note_occ_owner_source", "owner_user_id", "source_note_id"),
         Index("ix_note_occ_owner_target", "owner_user_id", "target_note_id"),
-        Index("ix_note_occ_source_revision", "source_note_id", "source_revision"),
     )
 
     id = Column(String(36), primary_key=True)
-    owner_user_id = Column(String(36), nullable=False, index=True)
+    owner_user_id = Column(String(36), nullable=False)
     source_note_id = Column(String(36), nullable=False)
     source_revision = Column(String(64), nullable=False, comment="正文内容 SHA256")
     target_note_id = Column(String(36), nullable=True, comment="解析成功的目标笔记ID")

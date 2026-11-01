@@ -7,7 +7,7 @@
 基于 `Vue 3 + FastAPI + LangChain + Django + MySQL + Redis + ChromaDB` 构建
 支持 `Ollama`、`DashScope` 与 `OpenAI 兼容接口`
 
-[快速开始](#快速开始) · [系统架构](#系统架构) · [评测体系](#ir-指标评测recallatk--mrr--四阶段归因) · [API 文档](docs/API.md)
+[快速开始](#快速开始) · [系统架构](#系统架构) · [评测体系](#ir-指标评测recallatk--mrr--四阶段归因) · [API 文档](docs/API.md) · [文档索引](docs/README.md)
 
 </div>
 
@@ -16,6 +16,7 @@
 ## 目录
 
 - [项目定位](#项目定位)
+- [文档导航](#文档导航)
 - [界面预览](#界面预览)
 - [相比传统 RAG 的提升](#相比传统-rag-的提升)
 - [核心能力](#核心能力)
@@ -47,6 +48,20 @@ Notebook 不是一个只把文档塞进向量库、再直接调用 LLM 的 RAG D
 用户认证与 AI/RAG 业务分离，前后端和服务边界更清晰，也便于分别部署与扩展。
 
 核心理念：**LLM 负责生成，检索链路负责证据，评估体系负责归因。** 把"感觉效果还行"这种主观判断，转化为能定位到具体环节的量化指标。
+
+## 文档导航
+
+仓库根目录只保留本 README；公开文档集中在 [`docs/`](docs/README.md)。内部任务书、整改计划、验收方案与性能证据不随公开仓库发布。
+
+| 文档 | 内容 |
+|---|---|
+| [`docs/API.md`](docs/API.md) | 后端 API 路由与鉴权说明 |
+| [`docs/JWT_CONTRACT.md`](docs/JWT_CONTRACT.md) | DjangoUserService ↔ FastAPI 的 JWT 契约 |
+| [`docs/adr/`](docs/adr/) | 架构决策记录 |
+| [`docs/screenshots/`](docs/screenshots/) | README 界面截图 |
+| [`backend/tools/backend_acceptance/README.md`](backend/tools/backend_acceptance/README.md) | 后端验收工具使用说明（隔离环境） |
+
+完整索引见 [`docs/README.md`](docs/README.md)。
 
 ## 界面预览
 
@@ -124,7 +139,7 @@ Notebook 已从传统的"检索后直接回答"升级为**受控 Agentic RAG**�
 - **失效联动**：文档重索引、删除，笔记修改、删除都会使旧摘要/导图/图谱证据失效；
 - 前端入口：知识库文档行“AI 洞察”、笔记编辑页“AI 洞察”、知识库“知识图谱”。
 
-实现与验收细节见 [知识工作台迭代交付](docs/ITERATION_KNOWLEDGE_WORKBENCH.md) 和 [验收矩阵](docs/ITERATION_ACCEPTANCE_MATRIX.md)。
+实现与验收细节保留在内部交付文档中，不随公开仓库发布。
 
 ### 文档分析与笔记知识图谱（V2）
 
@@ -135,7 +150,7 @@ Notebook 已从传统的"检索后直接回答"升级为**受控 Agentic RAG**�
 - **不依赖 AI**：基础笔记图谱只需 MySQL，不需要 embedding、摘要或模型调用；
 - 主导航：笔记 / 文档分析 / 知识图谱 / 知识库 / AI 对话 / 每日回顾；移动端“更多”保留旧功能。
 
-V2 交付与逐项验收见 [V2 交付记录](docs/ITERATION_V2_DELIVERY.md) 和 [V2 验收矩阵](docs/V2_ACCEPTANCE_MATRIX.md)。
+V2 交付与逐项验收记录保留在内部文档中，不随公开仓库发布。
 
 ### Agentic RAG 对话
 
@@ -317,12 +332,27 @@ uv run python manage.py runserver 8001
 cd backend
 uv run uvicorn main:app --reload --port 8002 --host 127.0.0.1
 
-# 终端 3：Celery worker（文档索引等异步任务）
+# 并发/验收环境必须确认多 worker 真正拉起（不是只有一个子进程存活）：
+# uv run uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
+# Windows 上 uvicorn 需 >= 0.37；旧版 0.21 的多 worker 会在 sock.listen
+# 抛 WinError 10022，最终只剩一个 worker，容量会被误判为约 50 QPS。
+# 多进程部署/验收：Chroma 必须用 HTTP server（单进程持有 HNSW），不要让
+# 多个 API/worker 进程直接共享持久目录：
+# uv run chroma run --path D:/data/chromadb --host 127.0.0.1 --port 8001
+# 然后设置 CHROMA_SERVER_URL=http://127.0.0.1:8001。
+# 嵌入式持久目录仅用于单进程本地开发；写入按 Chroma batch 上限分批。
+# Ollama embedding 请求默认：连接/连接池等待 5s，读取/写入无进展 60s。
+# 可通过 EMBEDDING_CONNECT_TIMEOUT_SECONDS / EMBEDDING_READ_TIMEOUT_SECONDS 配置。
+# 这不是整次索引的总期限，也不改变 Chroma server 的原生 HTTP 请求期限。
+
+# 终端 3：Celery worker（生产/验收拆成两个队列，避免大文档索引饿死笔记向量）
 cd backend
-uv run celery -A app.tasks.celery_app:celery_app worker --loglevel=info
+uv run celery -A app.tasks.celery_app:celery_app worker --loglevel=info -Q notebook-notes
+uv run celery -A app.tasks.celery_app:celery_app worker --loglevel=info -Q notebook-heavy
 
 # Windows 本地开发需加 --pool=solo（prefork 在 Windows 不可用）：
-uv run celery -A app.tasks.celery_app:celery_app worker --loglevel=info --pool=solo
+# uv run celery ... worker --loglevel=info --pool=solo -Q notebook-notes
+# uv run celery ... worker --loglevel=info --pool=solo -Q notebook-heavy
 
 # 终端 4：Celery Beat（pending_index 补偿、清理队列、过期运行/洞察任务回收）
 cd backend
@@ -513,7 +543,20 @@ cd backend
 uv run pytest tests
 ```
 
-覆盖：Agentic RAG 回归、检索权限隔离、评测 grader、IR 指标纯函数、评测集标注质量守护（108 条）、BM25 中文分词守护、运行时配置校验与读取点、SSE 事件字段、限流、JWT 契约等（287+ 用例）。
+覆盖：Agentic RAG 回归、检索权限隔离、评测 grader、IR 指标纯函数、评测集标注质量守护（108 条）、BM25 中文分词守护、运行时配置校验与读取点、SSE 事件字段、限流、JWT 契约、笔记向量 outbox、文档索引恢复等（当前全量 **1287 passed / 9 skipped**，行覆盖率 **85.46%**，2026-10-31 验收运行）。
+
+### 性能与容量验收
+
+18 个开环场景覆盖读、写、图谱、长链路、SSE 与 1 小时长稳。关键结果：
+
+| 指标 | 基线/历史 | 当前 |
+|---|---|---|
+| 100 QPS 场景 | 54.5 QPS，18,946 丢发，P95 21.1s | **100.0 QPS，0 丢发，P95 188ms** |
+| L04 大文档 M 档 | 10/30 成功，P95 110.9s | **30/30，P95 10.1s** |
+| L08 首 token | 无真实 token 事件 | **200/200 终态，P95 594–710ms** |
+| L06 一小时长稳 | 历史运行负载通过，资源未收敛 | 最新 D：50 QPS、99.999%、0 丢发、队列排空；Chroma/MySQL/Redis RSS 增长仍待解决 |
+
+完整数据、口径与未通过边界保留在内部验收记录中，不随公开仓库发布。
 
 ### Agentic RAG 定向回归测试
 
@@ -584,7 +627,7 @@ uv run pre-commit install
 
 1. **修 bug 必附回归测试**：每个 bug 修复的 PR 必须包含一个能复现该 bug 的失败用例及其修复后通过的断言，防止问题回归。
 2. **`skip` 必须注明原因**：任何 `pytest.skip` / `test.skip` 都要写明跳过原因（缺依赖/环境限制/已知问题跟踪号），无理由的 skip 会在 review 中被拒绝。
-3. **覆盖率只升不降**：后端当前行覆盖基线 **88%**（R3 实测，CI `--cov-fail-under=85`，详见 `QUALITY_ASSURANCE_PLAN_R3.md`）。不设硬性百分比门禁，但新功能必须带测试，review 时不得让覆盖率显著回退。
+3. **覆盖率只升不降**：后端当前验收运行行覆盖率 **85.46%**（1287 passed / 9 skipped，2026-10-31；新增验收/outbox 代码后按当前全量统计；CI `--cov-fail-under=85`）。历史 R3 基线为 88%。不设硬性百分比门禁，但新功能必须带测试，review 时不得让覆盖率显著回退。
 4. **advisory job 的收紧路径**：mypy 与 security 审计目前不阻塞合并，作为基线暴露问题；存量类型错误与漏洞告警消化完毕后，应移除 `continue-on-error` 升级为门禁。
 5. **分支保护建议**：仓库开启 branch protection，要求 `backend`、`django`、`frontend`、`frontend-e2e` 四个门禁 job 通过后方可合并 main。
 6. **覆盖率底线递推规则**：每轮质量保障结束实测一次总覆盖率，新底线 = 实测值 − 3，只升不降，同步更新 CI `--cov-fail-under` 与方案附录。
@@ -624,9 +667,11 @@ Notebook/
 │   ├── apps/                  # 用户、文件与工具模块
 │   └── DjangoUserService/     # Django 配置
 ├── docs/
+│   ├── README.md              # 公开文档索引
 │   ├── API.md                 # 后端 API 文档
 │   ├── JWT_CONTRACT.md        # JWT 跨服务契约
-│   └── screenshots/           # 界面截图
+│   ├── adr/                   # 架构决策记录
+│   └── screenshots/           # README 界面截图
 ├── docker-compose.yml
 └── README.md
 ```

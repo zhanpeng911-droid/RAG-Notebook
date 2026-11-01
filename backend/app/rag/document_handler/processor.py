@@ -23,6 +23,7 @@ from langchain_chroma import Chroma
 from langchain_core.documents import Document
 
 from app.rag.text_spliter import AsyncTextSplitter
+from app.rag.chroma_lock import add_documents_batched
 from app.utils.config import chroma_config
 from app.utils.factory import embed_model
 from app.utils.file_handler import pdf_loader, txt_loader, listdir_allowed_type, get_file_md5_hex, markdown_loader, \
@@ -254,10 +255,12 @@ class DocumentProcessor:
                         for i in range(len(document))
                     ]
                     await asyncio.to_thread(
-                        self.vectors_store.add_documents, document, ids=stable_ids
+                        add_documents_batched, self.vectors_store,
+                        document, ids=stable_ids,
                     )
                 else:
-                    await asyncio.to_thread(self.vectors_store.add_documents, document)
+                    await asyncio.to_thread(
+                        add_documents_batched, self.vectors_store, document)
 
                 original_filename = file_names.get(file_path, filename) if files else filename
                 await self.md5_store.save_md5_hex(md5_hex, filename, original_filename, user_id)

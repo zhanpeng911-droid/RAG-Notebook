@@ -14,9 +14,8 @@ from typing import List, Tuple
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 
+from app.rag.chroma_client import build_chroma
 from app.utils.factory import embed_model
-from app.utils.config import chroma_config
-from app.utils.path_tool import get_abstract_path
 from app.core.logger_handler import logger
 
 NOTES_COLLECTION_NAME = "notes_collection"
@@ -34,8 +33,16 @@ def _user_note_filter(user_id: str) -> dict:
 
 def _looks_like_stale_client_error(exc: Exception) -> bool:
     """判断异常是否为客户端索引缓存过期（可重建恢复）的特征"""
-    message = str(exc).lower()
-    return any(marker in message for marker in _STALE_CLIENT_MARKERS)
+    # The transport wrapper keeps its public error text payload-free. Inspect
+    # the cause for classification only, without copying it into logs/results.
+    seen = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if any(marker in str(current).lower() for marker in _STALE_CLIENT_MARKERS):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 class NoteVectorIndex:
@@ -52,12 +59,9 @@ class NoteVectorIndex:
 
     def _ensure_store(self) -> Chroma:
         if self._store is None:
-            persist_dir = get_abstract_path(chroma_config['persist_directory'])
-            self._store = Chroma(
-                collection_name=NOTES_COLLECTION_NAME,
-                embedding_function=embed_model,
-                persist_directory=persist_dir,
-            )
+            from app.rag.chroma_lock import lock_collection_access
+            self._store = build_chroma(NOTES_COLLECTION_NAME, embed_model)
+            lock_collection_access(self._store)
         return self._store
 
     def _reset_store(self) -> None:
@@ -105,21 +109,34 @@ class NoteVectorIndex:
 
     def add_note(self, note_id: str, user_id: str, title: str, content: str) -> None:
         """Add one note to Chroma."""
-        self._ensure_store().add_documents(
+        from app.rag.chroma_lock import add_documents_batched
+        add_documents_batched(
+            self._ensure_store(),
             [self._note_document(note_id, user_id, title, content)], ids=[note_id]
         )
 
     def upsert_note(self, note_id: str, user_id: str, title: str, content: str) -> None:
-        """Idempotently synchronize one note; safe for repeated queue tasks."""
-        store = self._ensure_store()
-        store.delete(where={"$and": [
-            {"note_id": note_id},
-            {"user_id": user_id},
-            {"doc_type": "note"},
-        ]})
-        store.add_documents(
+        """Idempotently synchronize one note; safe for repeated queue tasks.
+
+        ``langchain_chroma`` add_documents uses Chroma upsert for a stable ID.
+        The previous delete+add did two HNSW/index mutations per save; on a
+        10 saves/s profile that write amplification starved foreground saves.
+        """
+        from app.rag.chroma_lock import add_documents_batched
+        add_documents_batched(
+            self._ensure_store(),
             [self._note_document(note_id, user_id, title, content)], ids=[note_id]
         )
+
+    def upsert_notes(self, items: list[tuple[str, str, str, str]]) -> None:
+        """Upsert several notes with one native Chroma write."""
+        if not items:
+            return
+        from app.rag.chroma_lock import add_documents_batched
+        documents = [self._note_document(note_id, user_id, title, content)
+                     for note_id, user_id, title, content in items]
+        add_documents_batched(
+            self._ensure_store(), documents, ids=[item[0] for item in items])
 
     def update_note(self, note_id: str, user_id: str, title: str, content: str) -> None:
         """Compatibility wrapper for existing callers."""
@@ -130,6 +147,15 @@ class NoteVectorIndex:
         self._ensure_store().delete(where={"$and": [
             {"note_id": note_id},
             {"user_id": user_id},
+            {"doc_type": "note"},
+        ]})
+
+    def delete_notes(self, note_ids: list[str]) -> None:
+        """Delete several note vectors with one native Chroma write."""
+        if not note_ids:
+            return
+        self._ensure_store().delete(where={"$and": [
+            {"note_id": {"$in": list(note_ids)}},
             {"doc_type": "note"},
         ]})
 

@@ -17,7 +17,7 @@ import re
 from datetime import datetime, timezone
 from typing import Optional, Sequence
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from app.core.logger_handler import logger
 from app.db import db_config as _db_config
@@ -45,6 +45,11 @@ MAX_MINDMAP_NODES = 100
 MAX_MINDMAP_DEPTH = 3
 MAX_LAYERED_BLOCKS = 8
 MAX_BLOCK_CHARS = 12000
+# A hard execution budget, not a heartbeat. The reclaimer uses the same limit
+# plus a grace, because the timeout starts after the claim commit and source
+# preparation is part of the same budget.
+INSIGHT_EXECUTION_BUDGET_SECONDS = 30 * 60
+INSIGHT_RECLAIM_GRACE_SECONDS = 60
 
 _ALLOWED_RELATIONS = {
     "is_a", "part_of", "depends_on", "related_to", "contrasts_with",
@@ -226,7 +231,13 @@ async def queue_summary_generation(
         owner_user_id=owner_user_id, source_type=source_type,
         source_id=source_id, artifact_type=ArtifactType.SUMMARY,
         active_only=True)
-    job = await repo.get_job_for_version(version.id, ArtifactType.SUMMARY)
+    job = (await session.execute(select(KnowledgeGenerationJob).where(
+        KnowledgeGenerationJob.source_version_id == version.id,
+        KnowledgeGenerationJob.artifact_type == ArtifactType.SUMMARY,
+    ).with_for_update())).scalar_one_or_none()
+
+    if force and job is not None and job.status == JobStatus.RUNNING:
+        raise SourceUnavailable("generation_running")
 
     if artifact is not None and not force and job is not None \
             and job.status == JobStatus.SUCCEEDED:
@@ -448,11 +459,6 @@ def _verify_anchor_ids(reference_ids: Sequence[str], quote: Optional[str],
             anchor_id for anchor_id in ids
             if normalized in normalize_quote(anchors_by_id[anchor_id].quote_text)
         ]
-        if not matched:
-            matched = [
-                anchor.id for anchor in all_anchors
-                if normalized in normalize_quote(anchor.quote_text)
-            ]
         ids = matched
     # 去重并限制单条结论的证据数量，避免异常模型输出放大写入
     return list(dict.fromkeys(ids))[:3]
@@ -474,7 +480,13 @@ def _build_verified_payload(payload: SummaryPayload, anchors: Sequence
     """返回 (对外 payload, 证据行, 统计)。未通过核验的结论被剔除。"""
     anchors_by_id = {anchor.id: anchor for anchor in anchors}
     evidence_rows: list[dict] = []
-    stats = {"dropped": 0, "verified_targets": 0, "insufficient": False}
+    stats = {
+        "dropped": 0,
+        "verified_targets": 0,
+        "anchor_only_targets": 0,
+        "located_targets": 0,
+        "insufficient": False,
+    }
 
     def verify(reference_ids, quote):
         return _verify_anchor_ids(reference_ids, quote, anchors_by_id, anchors)
@@ -487,13 +499,20 @@ def _build_verified_payload(payload: SummaryPayload, anchors: Sequence
                 "target_kind": target_kind,
                 "target_id": target_id,
                 "anchor_id": anchor_id,
-                "supporting_quote": (quote or anchor.quote_text or "")[:1000],
+                "supporting_quote": quote[:1000] if quote else None,
                 "quote_hash": anchor.quote_hash,
-                "verification_status": EvidenceStatus.VERIFIED,
+                "verification_status": (EvidenceStatus.VERIFIED if quote
+                                        else EvidenceStatus.ANCHOR_VERIFIED),
                 "confidence": 0.9 if quote else 0.8,
             })
         if ids:
-            stats["verified_targets"] += 1
+            stats["located_targets"] += 1
+            # A valid anchor ID only proves the location exists. "verified"
+            # means the model supplied a quote that actually matched it.
+            if quote:
+                stats["verified_targets"] += 1
+            else:
+                stats["anchor_only_targets"] += 1
 
     overview_ids = verify(payload.overview.anchor_ids, payload.overview.quote)
     if not overview_ids:
@@ -601,7 +620,8 @@ def _build_verified_payload(payload: SummaryPayload, anchors: Sequence
     result_payload = {
         "schema_version": SCHEMA_VERSION,
         "trust_status": ("insufficient_evidence" if stats["insufficient"]
-                         else "verified"),
+                         else ("anchor_verified" if stats["anchor_only_targets"]
+                               else "verified")),
         "overview": overview,
         "key_points": key_points,
         "sections": sections,
@@ -611,7 +631,9 @@ def _build_verified_payload(payload: SummaryPayload, anchors: Sequence
         "meta": {
             "prompt_version": PROMPT_VERSION,
             "anchor_count": len(anchors),
+            "located_targets": stats["located_targets"],
             "verified_targets": stats["verified_targets"],
+            "anchor_only_targets": stats["anchor_only_targets"],
             "dropped_unverified": stats["dropped"],
         },
     }
@@ -735,59 +757,82 @@ async def _run_layered_analysis(*, title: str, anchors: Sequence,
         "total_blocks": len(blocks),
         "analyzed_blocks": analyzed,
         "partial": bool(missing or len(blocks) > analyzed),
+        "missing_count": len(missing),
         "missing_blocks": missing[:30],
     }
     return parsed, coverage
 
 
-async def run_summary_job(job_id: str, chat_model=None) -> None:
+async def run_summary_job(job_id: str, chat_model=None, *, attempt: Optional[int] = None) -> None:
     """执行任务。状态已由队列入口原子领取为 running。"""
-    async with _db_config.AsyncSessionLocal() as session:
-        repo = KnowledgeInsightRepository(session)
-        job = await repo.get_job(job_id)
-        if job is None:
-            return
-        version = await repo.get_version_by_id(job.source_version_id)
-        if version is None or version.status != SourceVersionStatus.ACTIVE:
-            job.status = JobStatus.STALE
-            job.error = "source_version_stale"
-            job.finished_at = _now()
-            await session.commit()
-            return
-
-        anchors = await repo.list_anchors(version.id)
-        if not anchors:
-            job.status = JobStatus.FAILED
-            job.error = "no_source_anchors"
-            job.finished_at = _now()
-            await session.commit()
-            return
-        title = await _load_source_title(
-            session, owner_user_id=job.owner_user_id,
-            source_type=job.source_type, source_id=job.source_id, version=version)
-        model_id = job.model_id
-
-    selected = _select_anchors(anchors)
-    blocks = _build_analysis_blocks(anchors)
     coverage = None
-
     try:
-        if len(blocks) <= 1:
-            prompt = build_prompt(title=title, anchors=selected)
-            raw = await _invoke_llm(prompt, model_id, chat_model=chat_model)
-            parsed = parse_llm_payload(raw)
-        else:
-            parsed, coverage = await _run_layered_analysis(
-                title=title, anchors=anchors, blocks=blocks,
-                model_id=model_id, chat_model=chat_model)
+        # Source preparation, title lookup and every model call share one hard
+        # budget. Starting the timer only at the model call let a stuck parser
+        # outlive the reclaim cutoff and be marked failed by another process.
+        async with asyncio.timeout(INSIGHT_EXECUTION_BUDGET_SECONDS):
+            async with _db_config.AsyncSessionLocal() as session:
+                repo = KnowledgeInsightRepository(session)
+                job = await repo.get_job(job_id)
+                if job is None or (attempt is not None and (
+                    job.status != JobStatus.RUNNING or job.attempts != attempt
+                )):
+                    return
+                version = await repo.get_version_by_id(job.source_version_id)
+                if version is None or version.status != SourceVersionStatus.ACTIVE:
+                    job.status = JobStatus.STALE
+                    job.error = "source_version_stale"
+                    job.finished_at = _now()
+                    await session.commit()
+                    return
+
+                anchors = await repo.list_anchors(version.id)
+                if not anchors:
+                    job.status = JobStatus.FAILED
+                    job.error = "no_source_anchors"
+                    job.finished_at = _now()
+                    await session.commit()
+                    return
+                title = await _load_source_title(
+                    session, owner_user_id=job.owner_user_id,
+                    source_type=job.source_type, source_id=job.source_id, version=version)
+                model_id = job.model_id
+
+            selected = _select_anchors(anchors)
+            blocks = _build_analysis_blocks(anchors)
+            if len(blocks) <= 1:
+                prompt = build_prompt(title=title, anchors=selected)
+                raw = await _invoke_llm(prompt, model_id, chat_model=chat_model)
+                parsed = parse_llm_payload(raw)
+            else:
+                parsed, coverage = await _run_layered_analysis(
+                    title=title, anchors=anchors, blocks=blocks,
+                    model_id=model_id, chat_model=chat_model)
+    except TimeoutError:
+        await _mark_job_failed(job_id, "execution_timeout", attempt=attempt)
+        return
     except Exception as exc:
-        await _mark_job_failed(job_id, _sanitize_error(str(exc)))
+        await _mark_job_failed(job_id, _sanitize_error(str(exc)), attempt=attempt)
         raise
 
     async with _db_config.AsyncSessionLocal() as session:
         repo = KnowledgeInsightRepository(session)
-        job = await repo.get_job(job_id)
-        version = await repo.get_version_by_id(job.source_version_id) if job else None
+        preview = await repo.get_job(job_id)
+        if preview is None:
+            return
+        # Lock order is source version -> job, matching invalidate_source
+        # (version rows first, jobs last). The lock closes the window where a
+        # concurrent generation switch could pass the ACTIVE check and then
+        # let this attempt publish old-version artifacts after the switch.
+        version = await repo.get_version_by_id(preview.source_version_id, for_update=True)
+        job = (await session.execute(select(KnowledgeGenerationJob).where(
+            KnowledgeGenerationJob.id == job_id
+        ).with_for_update())).scalar_one_or_none()
+        # Holding both locks through artifact and evidence commit serializes
+        # publication with reclaim and force requests for this same attempt.
+        if attempt is not None and (job is None or job.status != JobStatus.RUNNING
+                                    or job.attempts != attempt):
+            return
         if job is None or version is None or version.status != SourceVersionStatus.ACTIVE:
             if job is not None:
                 job.status = JobStatus.STALE
@@ -848,15 +893,19 @@ async def run_summary_job(job_id: str, chat_model=None) -> None:
                 job_id, version.source_type, version.source_id, len(anchors))
         except Exception as exc:
             await session.rollback()
-            await _mark_job_failed(job_id, _sanitize_error(str(exc)))
+            await _mark_job_failed(job_id, _sanitize_error(str(exc)), attempt=attempt)
             raise
 
 
-async def _mark_job_failed(job_id: str, error: str) -> None:
+async def _mark_job_failed(job_id: str, error: str, *, attempt: Optional[int] = None) -> None:
     try:
         async with _db_config.AsyncSessionLocal() as session:
-            job = await session.get(KnowledgeGenerationJob, job_id)
-            if job is None:
+            job = (await session.execute(select(KnowledgeGenerationJob).where(
+                KnowledgeGenerationJob.id == job_id
+            ).with_for_update())).scalar_one_or_none()
+            if job is None or (attempt is not None and (
+                job.status != JobStatus.RUNNING or job.attempts != attempt
+            )):
                 return
             job.status = JobStatus.FAILED
             job.error = error
@@ -899,7 +948,7 @@ async def _persist_graph(session, repo: KnowledgeInsightRepository, *,
                 anchor_id=anchor_id,
                 supporting_quote=None,
                 quote_hash=None,
-                verification_status=EvidenceStatus.VERIFIED,
+                verification_status=EvidenceStatus.ANCHOR_VERIFIED,
                 confidence=0.9,
             )
 
@@ -931,7 +980,7 @@ async def _persist_graph(session, repo: KnowledgeInsightRepository, *,
                 anchor_id=anchor_id,
                 supporting_quote=None,
                 quote_hash=None,
-                verification_status=EvidenceStatus.VERIFIED,
+                verification_status=EvidenceStatus.ANCHOR_VERIFIED,
                 confidence=0.8,
             )
 
@@ -950,10 +999,12 @@ async def claim_and_run_job(job_id: str, chat_model=None) -> bool:
                 error=None,
             )
         )
-        await session.commit()
         if result.rowcount == 0:
+            await session.commit()
             return False
-    await run_summary_job(job_id, chat_model=chat_model)
+        attempt = (await session.get(KnowledgeGenerationJob, job_id)).attempts
+        await session.commit()
+    await run_summary_job(job_id, chat_model=chat_model, attempt=attempt)
     return True
 
 

@@ -95,7 +95,10 @@ def _build_document(
     return Document(
         page_content=content,
         metadata={
+            # Multimodal loader already produces 1-based page numbers. Keep
+            # the explicit key so page_from_metadata does not add another 1.
             "page": page_num,
+            "page_number": page_num,
             "md5": md5,
             "source": source,
             "image_paths": image_paths if image_paths else None,

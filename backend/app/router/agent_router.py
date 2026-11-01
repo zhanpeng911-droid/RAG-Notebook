@@ -82,6 +82,7 @@ async def agent_query_stream(
     - grading_evidence: 正在评估证据
     - rewriting_query: 正在改写查询
     - generating_answer: 正在生成答案
+    - answer_token: 流式答案增量（delta 为文本片段）
     - citation: 引用信息
     - completed: 执行完成
     - error: 执行出错

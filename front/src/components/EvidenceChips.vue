@@ -5,10 +5,10 @@
       :key="item.anchor_id"
       type="button"
       class="evidence-chip"
-      :title="item.quote || '查看原文证据'"
+      :title="item.verification_status === 'anchor_verified' ? '仅核对锚点位置，未核验结论语义' : '引文匹配不代表结论语义已验证'"
       @click.stop="$emit('open', item.anchor_id)"
     >
-      {{ label(item) }}
+      {{ label(item) }}{{ item.verification_status === 'anchor_verified' ? '（仅定位）' : '' }}
     </button>
   </span>
 </template>

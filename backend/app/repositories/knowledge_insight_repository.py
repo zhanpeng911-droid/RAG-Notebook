@@ -33,8 +33,16 @@ class KnowledgeInsightRepository:
         )
         return result.scalar_one_or_none()
 
-    async def get_version_by_id(self, version_id: str) -> Optional[KnowledgeSourceVersion]:
-        return await self.session.get(KnowledgeSourceVersion, version_id)
+    async def get_version_by_id(self, version_id: str,
+                                for_update: bool = False) -> Optional[KnowledgeSourceVersion]:
+        if not for_update:
+            return await self.session.get(KnowledgeSourceVersion, version_id)
+        result = await self.session.execute(
+            select(KnowledgeSourceVersion).where(
+                KnowledgeSourceVersion.id == version_id,
+            ).with_for_update().execution_options(populate_existing=True)
+        )
+        return result.scalar_one_or_none()
 
     async def get_active_version(self, *, owner_user_id: str, source_type: str,
                                  source_id: str) -> Optional[KnowledgeSourceVersion]:
@@ -166,7 +174,8 @@ class KnowledgeInsightRepository:
                 KnowledgeEvidence.source_type == version.source_type,
                 KnowledgeEvidence.source_id == version.source_id,
                 KnowledgeEvidence.source_version_id != version.id,
-                KnowledgeEvidence.verification_status == EvidenceStatus.VERIFIED,
+                KnowledgeEvidence.verification_status.in_(
+                    (EvidenceStatus.VERIFIED, EvidenceStatus.ANCHOR_VERIFIED)),
             ).values(verification_status=EvidenceStatus.STALE)
         )
         await self.session.flush()
@@ -484,7 +493,8 @@ class KnowledgeInsightRepository:
             select(KnowledgeEvidence).where(
                 KnowledgeEvidence.target_kind == "relation",
                 KnowledgeEvidence.target_id.in_(list(relation_ids)),
-                KnowledgeEvidence.verification_status == EvidenceStatus.VERIFIED,
+                KnowledgeEvidence.verification_status.in_(
+                    (EvidenceStatus.VERIFIED, EvidenceStatus.ANCHOR_VERIFIED)),
             )
         )
         return list(result.scalars().all())
@@ -497,7 +507,8 @@ class KnowledgeInsightRepository:
             select(KnowledgeEvidence).where(
                 KnowledgeEvidence.target_kind == "concept",
                 KnowledgeEvidence.target_id.in_(list(concept_ids)),
-                KnowledgeEvidence.verification_status == EvidenceStatus.VERIFIED,
+                KnowledgeEvidence.verification_status.in_(
+                    (EvidenceStatus.VERIFIED, EvidenceStatus.ANCHOR_VERIFIED)),
             )
         )
         return list(result.scalars().all())

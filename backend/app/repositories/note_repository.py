@@ -18,7 +18,7 @@ LIKE 搜索使用 ilike() 参数化，不拼接用户输入。
 """
 from typing import List, Optional, Tuple
 
-from sqlalchemy import select, delete, func, update
+from sqlalchemy import select, delete, func, update, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.note import Note
@@ -32,6 +32,15 @@ class NoteRepository:
         stmt = select(Note).where(Note.id == note_id, Note.user_id == user_id)
         result = await db.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def get_by_identities(self, db: AsyncSession,
+                                identities: List[Tuple[str, str]]) -> List[Note]:
+        """Batch outbox lookup; owner and note id must match as a pair."""
+        if not identities:
+            return []
+        result = await db.execute(select(Note).where(
+            tuple_(Note.user_id, Note.id).in_(list(set(identities)))))
+        return list(result.scalars().all())
 
     async def add(self, db: AsyncSession, note: Note) -> None:
         """添加笔记（不 commit，由调用方控制事务）"""
@@ -101,26 +110,29 @@ class NoteRepository:
         tag: Optional[str] = None,
     ) -> Tuple[List[Note], int]:
         """分页查询用户笔记列表"""
-        notes, total = await self.list_by_user(db, user_id, category, tag)
-
         if tag:
+            notes, total = await self.list_by_user(db, user_id, category, tag)
             # tag 过滤已在 list_by_user 内存完成，这里做分页切片
             start = (page - 1) * page_size
             return notes[start:start + page_size], total
-        else:
-            # 无 tag 时 SQL 层分页
-            conditions = [Note.user_id == user_id]
-            if category:
-                conditions.append(Note.category == category)
-            stmt = (
-                select(Note)
-                .where(*conditions)
-                .order_by(Note.updated_at.desc())
-                .offset((page - 1) * page_size)
-                .limit(page_size)
-            )
-            result = await db.execute(stmt)
-            return list(result.scalars().all()), total
+
+        # 无 tag 时直接 COUNT + 分页：旧实现先读取该用户全部笔记（含正文）
+        # 再执行一次分页查询，列表页因此按全量正文付出 CPU/网络成本。
+        conditions = [Note.user_id == user_id]
+        if category:
+            conditions.append(Note.category == category)
+        total = (await db.execute(
+            select(func.count(Note.id)).where(*conditions)
+        )).scalar() or 0
+        stmt = (
+            select(Note)
+            .where(*conditions)
+            .order_by(Note.updated_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        result = await db.execute(stmt)
+        return list(result.scalars().all()), total
 
     async def get_by_ids(self, db: AsyncSession, note_ids: List[str], user_id: str) -> List[Note]:
         """根据 note_ids 列表回填笔记，带 user_id 过滤"""

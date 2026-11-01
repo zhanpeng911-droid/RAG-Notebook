@@ -1,0 +1,118 @@
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: nbtest-root-only
+      MYSQL_DATABASE: ${NB_DATABASE:?required}
+      MYSQL_USER: nbtest
+      MYSQL_PASSWORD: nbtest-only
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-unbtest", "-pnbtest-only"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - mysql_data:/var/lib/mysql
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--requirepass", "nbtest-only"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "nbtest-only", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - redis_data:/data
+  provider:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.backend-acceptance
+    command: ["python", "tools/backend_acceptance/deterministic_provider.py"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:11434/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.backend-acceptance
+    environment: &app_env
+      NB_ACCEPTANCE_RUN_ID: ${NB_ACCEPTANCE_RUN_ID:?required}
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: nbtest
+      MYSQL_PASSWORD: nbtest-only
+      MYSQL_DATABASE: ${NB_DATABASE:?required}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 3
+      REDIS_PASSWORD: nbtest-only
+      SECRET_KEY: nb-acceptance-only-secret-never-for-production
+      # enterprise-v1 capacity profile: 100 accounts x 20% saves at 100 QPS
+      # needs ~12 creates/min/account; default product limit remains 10.
+      NOTE_CREATE_RATE_LIMIT: 60
+      LLM_TYPE: OLLAMA
+      EMBED_MODEL_TYPE: OLLAMA
+      OLLAMA_BASE_URL: http://provider:11434
+      OLLAMA_MODEL_NAME: deterministic-test
+      TEXT_EMBEDDING_MODEL_NAME: deterministic-test
+    volumes: &app_volumes
+      - backend_data:/app/data
+    depends_on: &app_depends
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      provider:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/v1/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 90s
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.backend-acceptance
+    environment: *app_env
+    volumes: *app_volumes
+    depends_on: *app_depends
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.tasks.celery_app:celery_app inspect ping --timeout 3 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 8s
+      retries: 30
+      start_period: 60s
+    command: ["celery", "-A", "app.tasks.celery_app:celery_app", "worker", "--loglevel=info", "--pool=prefork", "--concurrency=2"]
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.backend-acceptance
+    environment: *app_env
+    volumes: *app_volumes
+    depends_on: *app_depends
+    command: ["celery", "-A", "app.tasks.celery_app:celery_app", "beat", "--loglevel=info", "--schedule=/tmp/celerybeat-schedule"]
+  controller:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.backend-acceptance
+    environment: *app_env
+    volumes: *app_volumes
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      provider:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+      worker:
+        condition: service_healthy
+    command: ["sleep", "infinity"]
+volumes:
+  mysql_data:
+  redis_data:
+  backend_data:

@@ -36,6 +36,7 @@ celery_app.conf.include = [
     "app.tasks.index_task",
     "app.tasks.agent_maintenance_task",
     "app.tasks.insight_task",
+    "app.tasks.note_vector_task",
 ]
 
 # Celery 配置
@@ -48,6 +49,16 @@ celery_app.conf.update(
     task_track_started=True,         # 追踪任务开始状态
     task_acks_late=True,             # 任务完成后才确认（防止 worker 崩溃丢失任务）
     worker_prefetch_multiplier=1,    # 每次只预取 1 个任务（避免长任务饿死）
+    # Note-vector maintenance must not queue behind a multi-second document
+    # index/insight job in the same solo worker: at the 100 QPS profile that
+    # starved the outbox and inflated pending_queue growth. Heavy work stays
+    # on the default queue; note upserts/deletes get their own worker.
+    task_default_queue="notebook-heavy",
+    task_routes={
+        "app.tasks.note_vector_task.apply_note_vector_task": {"queue": "notebook-notes"},
+        "app.tasks.note_vector_task.dispatch_note_vector_tasks_task": {"queue": "notebook-notes"},
+        "app.tasks.celery_app.sync_note_vector_task": {"queue": "notebook-notes"},
+    },
 )
 
 # Celery Beat 定时任务调度 —— 定期扫描 pending_index 文档进行补偿（R3），
@@ -76,6 +87,19 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.insight_task.reclaim_stale_insight_jobs_task",
         "schedule": 600.0,  # 每 10 分钟回收 worker 崩溃遗留的 running 任务
         "args": (50,),
+    },
+    "dispatch-queued-insight-jobs-every-5-minutes": {
+        "task": "app.tasks.insight_task.dispatch_queued_insight_jobs_task",
+        "schedule": 300.0,
+        "args": (50,),
+    },
+    # Chroma server RSS grows with the number of native upsert calls. Drain
+    # the durable outbox every 30s with a larger claim, cutting native writes
+    # ~6x while still finishing a 36k-note backlog inside the 900s drain budget.
+    "dispatch-note-vector-tasks-every-30-seconds": {
+        "task": "app.tasks.note_vector_task.dispatch_note_vector_tasks_task",
+        "schedule": 30.0,
+        "args": (2000,),
     },
 }
 

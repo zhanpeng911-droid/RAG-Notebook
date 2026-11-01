@@ -8,24 +8,39 @@
 4. 更新索引状态为 indexed 或 index_failed
 """
 import asyncio
+import os
+from concurrent.futures import ThreadPoolExecutor
 
 from app.tasks.celery_app import celery_app
 from app.core.logger_handler import logger
 
+_task_loop: asyncio.AbstractEventLoop | None = None
+_task_loop_pid: int | None = None
+
 
 def _run_async(coro):
-    """在同步 Celery worker 中运行异步代码。
+    """Run async work on one persistent worker loop.
 
-    每个任务新建事件循环；执行前先丢弃池中属于旧循环的连接，
-    避免跨循环复用导致 'NoneType' object has no attribute 'send'。
+    Creating a new event loop (and disposing the SQLAlchemy engine twice) for
+    every one-row note outbox task capped the solo worker near 9 tasks/s,
+    while the 100 QPS mixed profile produces 20 saves/s. One loop per worker
+    process keeps the DB pool valid across sequential tasks and avoids the
+    per-task connection teardown that also produced 'Event loop is closed'
+    noise. A PID check prevents a forked child from reusing a parent loop.
     """
-    loop = asyncio.new_event_loop()
-    try:
+    global _task_loop, _task_loop_pid
+    pid = os.getpid()
+    if _task_loop is None or _task_loop.is_closed() or _task_loop_pid != pid:
+        _task_loop = asyncio.new_event_loop()
+        _task_loop_pid = pid
+        asyncio.set_event_loop(_task_loop)
+        # Bound asyncio.to_thread; an unbounded default executor contributed
+        # to the note worker thread growth observed in the one-hour run.
+        _task_loop.set_default_executor(
+            ThreadPoolExecutor(max_workers=4, thread_name_prefix="task-io"))
         from app.db.db_config import dispose_stale_connections
-        loop.run_until_complete(dispose_stale_connections())
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+        _task_loop.run_until_complete(dispose_stale_connections())
+    return _task_loop.run_until_complete(coro)
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60, ignore_result=True)

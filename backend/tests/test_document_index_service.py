@@ -390,6 +390,123 @@ async def test_upload_writes_stable_chunk_ids(env):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("operation,uncertain,expected_execution", [
+    ("embedding.documents", False, "closed"),
+    ("chroma.upsert", False, "closed"),
+    ("chroma.upsert", True, "unknown"),
+])
+async def test_dependency_failure_keeps_only_uncertain_writer_open(
+        env, operation, uncertain, expected_execution):
+    import httpx
+    from sqlalchemy import select
+    import app.db.db_config as db_cfg
+    from app.models.document_index import DocumentIndex
+    from app.models.index_execution import DocumentIndexExecution
+    from app.rag.vector_io import VectorDependencyError
+    from app.repositories.document_index_repository import DocumentIndexRepository
+
+    owner = "u-dependency-failure"
+    made = await dis.save_uploaded_file(_upload("failure.txt"), owner, process_async=True)
+    document_id = made["document_id"]
+    original_add = env.store.vectors_store.add_documents
+
+    def fail(*args, **kwargs):
+        cause = (httpx.ConnectTimeout("could not connect")
+                 if operation == "chroma.upsert" and not uncertain
+                 else httpx.ReadTimeout("private source text"))
+        raise VectorDependencyError(
+            operation, "localhost:11434", cause,
+            write_uncertain=uncertain, elapsed_s=1.0)
+
+    env.store.vectors_store.add_documents = fail
+    result = await dis.execute_index_document(document_id, owner)
+    assert result["status"] == DocumentIndexStatus.INDEX_FAILED
+    assert result["retryable"] is True
+    assert env.add_docs == []
+    async with db_cfg.AsyncSessionLocal() as db:
+        execution = (await db.execute(select(DocumentIndexExecution).where(
+            DocumentIndexExecution.document_id == document_id,
+            DocumentIndexExecution.generation == 1))).scalar_one()
+        assert execution.status == expected_execution
+        assert (execution.closed_at is not None) == (expected_execution == "closed")
+        doc = await db.get(DocumentIndex, document_id)
+        assert doc.active_generation == 0  # Failure must never publish partial vectors.
+        assert await DocumentIndexRepository(db).reset_to_pending_if_failed(document_id)
+        await db.commit()
+
+    env.store.vectors_store.add_documents = original_add
+    retried = await dis.execute_index_document(document_id, owner)
+    assert retried["status"] == DocumentIndexStatus.INDEXED
+    async with db_cfg.AsyncSessionLocal() as db:
+        doc = await db.get(DocumentIndex, document_id)
+        assert doc.active_generation == 2
+        old = (await db.execute(select(DocumentIndexExecution).where(
+            DocumentIndexExecution.document_id == document_id,
+            DocumentIndexExecution.generation == 1))).scalar_one()
+        # Retrying never fabricates proof that the earlier remote mutation stopped.
+        assert old.status == expected_execution
+
+
+@pytest.mark.asyncio
+async def test_failure_recovery_commit_error_does_not_persist_half_a_transition(env, monkeypatch):
+    from sqlalchemy import select
+    import app.db.db_config as db_cfg
+    from app.models.document_index import DocumentIndex
+    from app.models.index_execution import DocumentIndexExecution
+    from app.rag.vector_io import VectorDependencyError
+
+    owner = "u-failure-recovery"
+    made = await dis.save_uploaded_file(_upload("recovery.txt"), owner, process_async=True)
+    original_factory = db_cfg.AsyncSessionLocal
+    stage = {"recovery_commit_failed": False}
+
+    class Session:
+        def __init__(self):
+            self.inner = original_factory()
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+        async def __aenter__(self):
+            await self.inner.__aenter__()
+            return self
+
+        async def __aexit__(self, *args):
+            return await self.inner.__aexit__(*args)
+
+        async def commit(self):
+            doc_status = await self.inner.scalar(select(DocumentIndex.status).where(
+                DocumentIndex.id == made["document_id"]))
+            execution_status = await self.inner.scalar(select(DocumentIndexExecution.status).where(
+                DocumentIndexExecution.document_id == made["document_id"]))
+            # Intercept the actual recovery transition, independent of session
+            # construction order or additional reads elsewhere in the service.
+            if doc_status == DocumentIndexStatus.INDEX_FAILED and execution_status == "closed":
+                stage["recovery_commit_failed"] = True
+                raise OSError("commit did not persist")
+            await self.inner.commit()
+
+    def fail_embedding(*args, **kwargs):
+        raise VectorDependencyError(
+            "embedding.documents", "localhost:11434", RuntimeError("failed embedding"),
+            write_uncertain=False, elapsed_s=1.0)
+
+    monkeypatch.setattr(db_cfg, "AsyncSessionLocal", Session)
+    env.store.vectors_store.add_documents = fail_embedding
+    await dis.execute_index_document(made["document_id"], owner)
+    assert stage["recovery_commit_failed"] is True
+    async with original_factory() as db:
+        doc = await db.get(DocumentIndex, made["document_id"])
+        execution = (await db.execute(select(DocumentIndexExecution).where(
+            DocumentIndexExecution.document_id == doc.id))).scalar_one()
+        # Both changes rolled back. The existing lease/reconciliation protocol
+        # owns recovery; a failed commit cannot fabricate a stopped writer.
+        assert doc.status == DocumentIndexStatus.INDEXING
+        assert execution.status == "writing"
+        assert execution.closed_at is None
+
+
+@pytest.mark.asyncio
 async def test_claim_for_indexing_only_first_wins(env):
     made = await dis.save_uploaded_file(_upload("claim.txt"), "u-claim")
     doc_id = made["document_id"]

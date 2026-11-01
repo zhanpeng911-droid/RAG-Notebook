@@ -46,6 +46,7 @@ class JobStatus:
 
 class EvidenceStatus:
     VERIFIED = "verified"
+    ANCHOR_VERIFIED = "anchor_verified"
     UNVERIFIED = "unverified"
     REJECTED = "rejected"
     STALE = "stale"
@@ -136,6 +137,9 @@ class KnowledgeGenerationJob(Base):
     model_id = Column(String(120), nullable=True)
     error = Column(Text, nullable=True)
     started_at = Column(DateTime(timezone=True), nullable=True)
+    # Compensation dispatch advances this cursor even though the job stays
+    # queued, so Beat rotates the oldest batch instead of re-sending it.
+    last_dispatch_at = Column(DateTime(timezone=True), nullable=True, index=True)
     finished_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -192,7 +196,7 @@ class KnowledgeEvidence(Base):
     quote_hash = Column(String(64), nullable=True)
     verification_status = Column(String(20), nullable=False,
                                  default=EvidenceStatus.VERIFIED,
-                                 comment="verified/unverified/rejected/stale")
+                                 comment="verified/anchor_verified/unverified/rejected/stale")
     confidence = Column(Float, nullable=False, default=1.0, server_default="1.0")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

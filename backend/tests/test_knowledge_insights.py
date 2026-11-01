@@ -330,7 +330,9 @@ async def test_generation_filters_unverified_and_builds_mindmap_and_graph(factor
             artifact_type="summary")
         assert artifact is not None
         payload = artifact.payload_json
-        assert payload["trust_status"] == "verified"
+        # This fixture omits quotes for most claims; IDs alone only locate
+        # evidence, so the aggregate must not claim semantic verification.
+        assert payload["trust_status"] == "anchor_verified"
         assert payload["overview"]["text"] == "这是全文概览。"
         assert [kp["text"] for kp in payload["key_points"]] == ["可信结论"]
         assert payload["sections"][0]["claims"][0]["anchor_ids"] == [anchor_ids[1]]
@@ -341,7 +343,8 @@ async def test_generation_filters_unverified_and_builds_mindmap_and_graph(factor
 
         evidence = await repo.list_evidence(artifact.id)
         assert evidence
-        assert all(row.verification_status == EvidenceStatus.VERIFIED for row in evidence)
+        assert all(row.verification_status in (EvidenceStatus.VERIFIED,
+                   EvidenceStatus.ANCHOR_VERIFIED) for row in evidence)
         kinds = {row.target_kind for row in evidence}
         assert {"summary", "key_point", "section", "term", "open_question"} <= kinds
 
@@ -819,7 +822,7 @@ def test_generation_helper_branches():
 
     anchor = SimpleNamespace(id="a0", quote_text="这是原文证据")
     assert _verify_anchor_ids(["a0"], "原文证据", {"a0": anchor}, [anchor]) == ["a0"]
-    assert _verify_anchor_ids(["bad"], "原文证据", {"a0": anchor}, [anchor]) == ["a0"]
+    assert _verify_anchor_ids(["bad"], "原文证据", {"a0": anchor}, [anchor]) == []
     assert _verify_anchor_ids(["a0"], "不匹配", {"a0": anchor}, [anchor]) == []
 
     payload = {

@@ -5,6 +5,8 @@
 - app/config/chroma.yaml: 向量数据库配置（集合名称、切片大小、分隔符等）
 - app/config/prompt.yaml: 提示词模板路径配置
 """
+import os
+
 import yaml
 from app.utils.path_tool import get_abstract_path
 
@@ -19,3 +21,12 @@ def load_config(config_path: str, encoding: str = 'utf-8') -> dict:
 # 全局配置字典
 chroma_config = load_config(config_path=get_abstract_path('app/config/chroma.yaml'))
 prompt_config = load_config(config_path=get_abstract_path('app/config/prompt.yaml'))
+
+# Isolated acceptance runs use a dedicated data root. Defaults are unchanged.
+_acceptance_data = os.getenv("NB_ACCEPTANCE_DATA_DIR")
+if _acceptance_data:
+    _acceptance_data = os.path.abspath(_acceptance_data)
+    chroma_config["data_path"] = _acceptance_data
+    chroma_config["persist_directory"] = os.path.join(_acceptance_data, "chromadb")
+    chroma_config["md5_hex_store"] = os.path.join(
+        _acceptance_data, "md5_hex_store", "md5_hex_store.txt")

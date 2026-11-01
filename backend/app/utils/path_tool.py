@@ -33,5 +33,11 @@ def get_abstract_path(relative_path: str) -> str:
 
 
 def get_data_path() -> str:
-    """获取数据目录（backend/data/）的绝对路径"""
+    """获取数据目录（backend/data/）的绝对路径。
+
+    隔离验收可用 NB_ACCEPTANCE_DATA_DIR 指向本轮专用目录；默认行为不变。
+    """
+    override = os.getenv("NB_ACCEPTANCE_DATA_DIR")
+    if override:
+        return os.path.abspath(override)
     return get_abstract_path('data')

@@ -9,7 +9,7 @@ import os
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logger_handler import logger
@@ -56,11 +56,11 @@ async def _fail_dispatch(job_id: str, error: Exception) -> None:
     from app.db.db_config import AsyncSessionLocal
     try:
         async with AsyncSessionLocal() as session:
-            job = await session.get(KnowledgeGenerationJob, job_id)
-            if job is not None and job.status == JobStatus.QUEUED:
-                job.status = JobStatus.FAILED
-                job.error = f"dispatch_failed: {str(error)[:200]}"
-                await session.commit()
+            await session.execute(update(KnowledgeGenerationJob).where(
+                KnowledgeGenerationJob.id == job_id,
+                KnowledgeGenerationJob.status == JobStatus.QUEUED,
+            ).values(status=JobStatus.FAILED, error=f"dispatch_failed: {str(error)[:200]}"))
+            await session.commit()
     except Exception as exc:
         logger.error("【知识洞察】队列失败状态写入失败: %s", str(exc)[:200])
 
@@ -344,7 +344,9 @@ async def _serialize_evidence(db: AsyncSession, artifact_id: str) -> dict:
     grouped: dict[str, list[dict]] = {}
     for row in rows:
         anchor = anchor_map.get(row.anchor_id)
-        if anchor is None or row.verification_status != EvidenceStatus.VERIFIED:
+        if anchor is None or row.verification_status not in (
+            EvidenceStatus.VERIFIED, EvidenceStatus.ANCHOR_VERIFIED
+        ):
             continue
         grouped.setdefault(row.target_id, []).append({
             "anchor_id": anchor.id,

@@ -12,6 +12,7 @@ from fastapi import HTTPException, UploadFile
 from app.core.logger_handler import logger
 from app.core.exceptions import KnowledgeException
 from app.rag.task_queue import TaskQueue
+from app.rag.chroma_lock import add_documents_batched
 from app.rag.sse_models import SliceResult
 from app.utils.file_handler import get_file_md5_hex_sync
 from app.services.knowledge_file_validator import (
@@ -846,7 +847,7 @@ class KnowledgeService:
                             )
 
                         await asyncio.to_thread(
-                            store.vectors_store.add_documents,
+                            add_documents_batched, store.vectors_store,
                             result.documents, ids=stable_ids)
                         await store.save_md5_hex(result.md5, result.filename, result.filename, user_id)
 

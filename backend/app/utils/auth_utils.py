@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from typing import Optional, Dict, Any
 import requests
 import redis.asyncio as redis
@@ -63,6 +64,42 @@ def decode_django_jwt(token: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+_blacklist_client = None
+_blacklist_client_url = None
+_blacklist_lock = asyncio.Lock()
+_blacklist_cache: dict[str, tuple[float, bool]] = {}
+_blacklist_cache_url = None
+_BLACKLIST_CACHE_TTL = 5.0
+_BLACKLIST_CACHE_MAX = 10000
+
+
+async def _get_blacklist_client():
+    """Reuse one pooled client; per-request connection setup timed out at 50 QPS."""
+    global _blacklist_client, _blacklist_client_url
+    if not JWT_BLACKLIST_REDIS_URL:
+        return await connect_redis()
+    if _blacklist_client is not None and _blacklist_client_url == JWT_BLACKLIST_REDIS_URL:
+        return _blacklist_client
+    async with _blacklist_lock:
+        if _blacklist_client is not None and _blacklist_client_url != JWT_BLACKLIST_REDIS_URL:
+            try:
+                await _blacklist_client.aclose()
+            except Exception:
+                pass
+            _blacklist_client = None
+        if _blacklist_client is None:
+            _blacklist_client = redis.from_url(
+                JWT_BLACKLIST_REDIS_URL,
+                decode_responses=True,
+                socket_connect_timeout=1.0,
+                socket_timeout=1.0,
+                retry_on_timeout=True,
+                health_check_interval=30,
+            )
+            _blacklist_client_url = JWT_BLACKLIST_REDIS_URL
+        return _blacklist_client
+
+
 async def _reject_if_blacklisted(payload: Dict[str, Any]) -> None:
     """
     检查 JWT 是否在黑名单中（登出/刷新撤销）。
@@ -76,24 +113,31 @@ async def _reject_if_blacklisted(payload: Dict[str, Any]) -> None:
 
     try:
         async def _check_blacklist():
-            if JWT_BLACKLIST_REDIS_URL:
-                client = redis.from_url(
-                    JWT_BLACKLIST_REDIS_URL,
-                    decode_responses=True,
-                    socket_connect_timeout=0.3,
-                    socket_timeout=0.3,
-                )
-                try:
-                    return await client.exists(f"blacklist:{jti}", f":1:blacklist:{jti}")
-                finally:
-                    await client.aclose()
-
-            client = await connect_redis()
+            global _blacklist_cache_url
+            if _blacklist_cache_url != JWT_BLACKLIST_REDIS_URL:
+                # A different backend/URL must not reuse another store's cache.
+                _blacklist_cache.clear()
+                _blacklist_cache_url = JWT_BLACKLIST_REDIS_URL
+            now = time.monotonic()
+            cached = _blacklist_cache.get(jti)
+            # Cache only POSITIVE (revoked) results. Revocation is monotonic
+            # for a JWT lifetime, while caching "not revoked" would let a token
+            # revoked immediately after the check keep working for the TTL.
+            if cached is not None and now - cached[0] < _BLACKLIST_CACHE_TTL:
+                return True
+            client = await _get_blacklist_client()
             if client is None:
                 raise RuntimeError("Redis unavailable")
-            return await client.exists(f"blacklist:{jti}", f":1:blacklist:{jti}")
+            result = await client.exists(f"blacklist:{jti}", f":1:blacklist:{jti}")
+            if result:
+                if len(_blacklist_cache) >= _BLACKLIST_CACHE_MAX:
+                    _blacklist_cache.clear()
+                _blacklist_cache[jti] = (now, True)
+            else:
+                _blacklist_cache.pop(jti, None)
+            return bool(result)
 
-        is_blacklisted = await asyncio.wait_for(_check_blacklist(), timeout=0.3)
+        is_blacklisted = await asyncio.wait_for(_check_blacklist(), timeout=1.0)
         if is_blacklisted:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -103,6 +147,16 @@ async def _reject_if_blacklisted(payload: Dict[str, Any]) -> None:
     except HTTPException:
         raise
     except Exception:
+        # Drop a client bound to a dead connection/loop so the next request
+        # can reconnect instead of failing forever.
+        global _blacklist_client, _blacklist_client_url
+        if _blacklist_client is not None:
+            try:
+                await _blacklist_client.aclose()
+            except Exception:
+                pass
+            _blacklist_client = None
+            _blacklist_client_url = None
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Could not verify token revocation status",

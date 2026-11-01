@@ -18,7 +18,7 @@ import sys
 from functools import lru_cache
 from typing import List
 
-from pydantic import ValidationError, field_validator
+from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
@@ -48,6 +48,8 @@ class AppSettings(BaseSettings):
     DEBUG_MODE: bool = True
     LOG_LEVEL: str = "INFO"
     """日志级别。异常处理器与统一日志使用。"""
+    EMBEDDING_CONNECT_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0, le=60)
+    EMBEDDING_READ_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0, le=600)
 
     # ==================== JWT 配置 ====================
     SECRET_KEY: str = ""
@@ -80,6 +82,9 @@ class AppSettings(BaseSettings):
     # ==================== 限流 ====================
     RATE_LIMIT_ENABLED: bool = True
     """限流总开关（bool）。个人开发环境可设 false 关闭。默认 true。"""
+
+    NOTE_CREATE_RATE_LIMIT: int = 10
+    """每用户每分钟新建笔记上限；默认 10。企业验收 profile 可按容量单独配置。"""
 
     TRUSTED_PROXY_IPS: str = ""
     """可信反向代理 IP（逗号分隔）。为空时限流不信任 X-Forwarded-For，只用直接对端。"""

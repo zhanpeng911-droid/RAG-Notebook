@@ -448,8 +448,16 @@ async def record_note_anchors(
         parser_version=PARSER_VERSION,
     )
     await repo.replace_anchors(version, candidates)
-    # 笔记保存后立即生效；旧版本/旧产物/旧证据同时失效
-    await repo.activate_version(version)
+    if latest is None:
+        # First version for this note: there cannot be old versions,
+        # artifacts, evidence or jobs to invalidate. Calling activate_version
+        # here issued a broad UPDATE on knowledge_artifacts for every new
+        # note and caused gap-lock contention under concurrent saves.
+        version.status = SourceVersionStatus.ACTIVE
+        await session.flush()
+    else:
+        # Existing note: old version/artifacts/evidence must be invalidated.
+        await repo.activate_version(version)
     return version
 
 

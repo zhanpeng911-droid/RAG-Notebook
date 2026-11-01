@@ -14,7 +14,7 @@ import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, insert, select, update
 
 from app.core.logger_handler import logger
 from app.models.note import Note
@@ -201,6 +201,7 @@ async def sync_note_links(db, note: Note) -> int:
 
     resolved = await _resolve_targets(db, note.user_id, parsed)
     revision = hashlib.sha256((note.content or "").encode("utf-8")).hexdigest()
+    rows = []
     for link in parsed:
         target_id, status = resolved.get(
             f"{link.target_kind}:{link.target_value.casefold()}",
@@ -214,19 +215,22 @@ async def sync_note_links(db, note: Note) -> int:
                 target_id = old_target if old_target in readable_ids else None
                 status = (NoteLinkStatus.RESOLVED if target_id
                           else NoteLinkStatus.TARGET_DELETED)
-        db.add(NoteLinkOccurrence(
-            id=str(uuid.uuid4()),
-            owner_user_id=note.user_id,
-            source_note_id=note.id,
-            source_revision=revision,
-            target_note_id=target_id,
-            raw_token=link.raw_token[:500],
-            display_text=link.display_text[:300],
-            char_start=link.char_start,
-            char_end=link.char_end,
-            context_text=link.context_text,
-            status=status,
-        ))
+        rows.append({
+            "id": str(uuid.uuid4()),
+            "owner_user_id": note.user_id,
+            "source_note_id": note.id,
+            "source_revision": revision,
+            "target_note_id": target_id,
+            "raw_token": link.raw_token[:500],
+            "display_text": link.display_text[:300],
+            "char_start": link.char_start,
+            "char_end": link.char_end,
+            "context_text": link.context_text,
+            "status": status,
+        })
+    if rows:
+        # One executemany instead of 100 ORM inserts for a 100-link note.
+        await db.execute(insert(NoteLinkOccurrence), rows)
     await db.flush()
     return len(parsed)
 

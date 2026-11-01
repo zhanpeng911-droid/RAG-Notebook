@@ -1,4 +1,6 @@
 """V2 P3/P4 笔记链接与图谱测试（不依赖 AI/embedding）。"""
+from types import SimpleNamespace
+
 import httpx
 import pytest
 import pytest_asyncio
@@ -167,6 +169,56 @@ async def test_duplicate_title_is_ambiguous(factory):
         )).scalar_one()
         assert row.target_note_id is None
         assert row.status == NoteLinkStatus.AMBIGUOUS
+
+
+@pytest.mark.asyncio
+async def test_stale_sync_cannot_overwrite_newer_content(factory):
+    """F08: an older async sync must not replace links from a newer save."""
+    await _add_note(factory, D, "新目标", "D")
+    await _add_note(factory, B, "同名", "B")
+    await _add_note(factory, A, "A", "[[同名]]")
+    # A newer save changes both the content and the link target; a duplicate
+    # title also appears, which must not retarget the stale binding.
+    async with factory() as session:
+        session.add(Note(id=C, user_id=OWNER, title="同名", content="C"))
+        note = await session.get(Note, A)
+        note.content = "[[新目标]]"
+        await session.commit()
+        await sync_note_links(session, note)
+        await session.commit()
+
+    # A detached older copy must not be treated as the persisted row. Autoflush
+    # would otherwise write the stale text back before the guard SELECT runs.
+    stale_note = SimpleNamespace(id=A, user_id=OWNER, content="[[同名]]")
+    async with factory() as session:
+        assert await sync_note_links(session, stale_note) == 0
+        await session.commit()
+        rows = list((await session.execute(
+            select(NoteLinkOccurrence).where(
+                NoteLinkOccurrence.source_note_id == A)
+        )).scalars().all())
+        assert len(rows) == 1
+        assert rows[0].target_note_id == D
+        assert rows[0].raw_token == "[[新目标]]"
+
+
+@pytest.mark.asyncio
+async def test_existing_title_binding_survives_a_new_duplicate(factory):
+    """A new same-title note must not steal an already resolved title link."""
+    await _add_note(factory, B, "重复标题", "B")
+    await _add_note(factory, A, "A", "[[重复标题]]")
+    async with factory() as session:
+        session.add(Note(id=C, user_id=OWNER, title="重复标题", content="C"))
+        await session.commit()
+        note = await session.get(Note, A)
+        await sync_note_links(session, note)
+        await session.commit()
+        row = (await session.execute(
+            select(NoteLinkOccurrence).where(
+                NoteLinkOccurrence.source_note_id == A)
+        )).scalar_one()
+        assert row.target_note_id == B
+        assert row.status == NoteLinkStatus.RESOLVED
 
 
 @pytest.mark.asyncio

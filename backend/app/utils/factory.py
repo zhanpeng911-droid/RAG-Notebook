@@ -171,11 +171,15 @@ class EmbedModelFactory(BaseModelFactory):
             model_name = settings.TEXT_EMBEDDING_MODEL_NAME
             base_url = settings.OLLAMA_BASE_URL
 
-            logger.info(f"📦 EmbedModel 使用Ollama嵌入模型: {model_name}, 地址: {base_url}")
-
+            from app.rag.vector_io import embedding_http_options, safe_endpoint
+            logger.info(
+                f"📦 EmbedModel 使用Ollama嵌入模型: {model_name}, 地址: {safe_endpoint(base_url)}")
             return OllamaEmbeddings(
                 model=model_name,
-                base_url=base_url
+                base_url=base_url,
+                client_kwargs=embedding_http_options(
+                    getattr(settings, "EMBEDDING_CONNECT_TIMEOUT_SECONDS", 5.0),
+                    getattr(settings, "EMBEDDING_READ_TIMEOUT_SECONDS", 60.0)),
             )
 
         elif embed_type == "ALIYUN":

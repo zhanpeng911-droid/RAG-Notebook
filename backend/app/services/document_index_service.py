@@ -10,11 +10,15 @@ M0 阶段关键改造：
 import os
 import uuid
 import asyncio
+import json
+import time
 from typing import Optional, List
 
 from fastapi import UploadFile, HTTPException
 
 from app.core.logger_handler import logger
+from app.rag.chroma_lock import add_documents_batched
+from app.rag.vector_io import VectorBatchError, exception_details
 from app.utils.path_tool import get_data_path
 from app.utils.file_handler import get_file_md5_hex_sync
 from app.models.document_index import DocumentIndexStatus
@@ -136,6 +140,7 @@ async def save_uploaded_file(
     file: UploadFile,
     user_id: str,
     space_id: str = "",
+    process_async: bool = False,
 ) -> dict:
     """
     保存上传文件到持久化存储，并创建索引记录。
@@ -338,6 +343,16 @@ async def save_uploaded_file(
         await repo.update_status(doc.id, DocumentIndexStatus.PARSED)
         await repo.update_status(doc.id, DocumentIndexStatus.PENDING_INDEX)
         await session.commit()
+
+        if process_async:
+            return {
+                "document_id": doc.id,
+                "filename": filename,
+                "status": DocumentIndexStatus.PENDING_INDEX.value,
+                "message": "文件已保存，等待后台索引",
+                "duplicate": False,
+                "process_async": True,
+            }
 
         # 上传时立即尝试同步索引 —— embedding 可用就当场完成。
         # 统一执行服务（R2C）返回落库状态与是否可重试：禁止把"没有抛异常"当作索引成功。
@@ -707,6 +722,10 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
     from app.repositories.document_index_repository import DocumentIndexRepository
 
     generation: Optional[int] = None
+    execution_token = None
+    stage = "claim"
+    vector_call_started = vectors_completed = False
+    started_at = time.perf_counter()
     async with AsyncSessionLocal() as session:
         repo = DocumentIndexRepository(session)
         try:
@@ -737,6 +756,7 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
             await session.commit()
 
             # 检查文件是否存在（此时必然处于 indexing，失败写回由本执行方持有）
+            stage = "prepare_document"
             if not os.path.exists(doc.file_path):
                 error_msg = f"文件已丢失: {doc.file_path}"
                 logger.error(f"【文档索引】{error_msg}, id={document_id}")
@@ -834,14 +854,19 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
                     f"id={document_id}, error={str(anchor_err)[:200]}"
                 )
 
+            stage = "vector_write"
+            vector_call_started = True
             await asyncio.to_thread(
-                store.vectors_store.add_documents, split_docs, ids=chunk_ids
+                add_documents_batched, store.vectors_store, split_docs, ids=chunk_ids
             )
+            vectors_completed = True
 
             # 保存 MD5 记录
+            stage = "record_fingerprint"
             await store.save_md5_hex(document_md5, doc.filename, doc.original_filename, user_id)
 
             # 条件发布 indexed：状态仍为 indexing 且代次匹配（执行身份）
+            stage = "publish"
             if not await repo.publish_indexed(
                 document_id, chunk_count=len(split_docs), generation=generation
             ):
@@ -929,7 +954,7 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
                             "retryable": False, "error": None}
 
                 logger.error(
-                    f"【文档索引】发布事务提交失败（未持久化）: id={document_id}, "
+                    f"【文档索引】发布事务未能确认，待协调: id={document_id}, "
                     f"error={commit_err_msg}"
                 )
                 try:
@@ -967,24 +992,39 @@ async def execute_index_document(document_id: str, user_id: str) -> dict:
         except Exception as e:
             from app.tasks.index_task import _sanitize_error_message
             error_msg = _sanitize_error_message(str(e))
-            logger.error(f"【文档索引】索引执行失败: id={document_id}, error={error_msg}")
-            # K1：异常路径结果不确定（远端可能已写入）→ 保持 unknown
+            details = {"document_id": document_id, "generation": generation,
+                       "stage": stage, "elapsed_s": round(time.perf_counter() - started_at, 3),
+                       **getattr(e, "details", exception_details(e))}
+            logger.error("【文档索引】索引执行失败 details=%s",
+                         json.dumps(details, ensure_ascii=False))
+            # Completion, an embedding-only failure, or a typed preconnect
+            # failure proves no later write from this caller. A Chroma read/
+            # write timeout does not, even after the local thread returned.
+            stopped = (not vector_call_started or vectors_completed
+                       or isinstance(e, VectorBatchError) and e.writer_stopped)
             try:
-                await execution_repo.close_execution(
-                    document_id=document_id, generation=generation or 0,
-                    token=execution_token or "", status="unknown",
-                    reason=error_msg[:200])
-                await session.commit()
+                await session.rollback()  # Release original locks before recovery writes.
             except Exception:
-                await session.rollback()
+                pass
             written = False
-            try:
-                written = await repo.mark_index_failed_if_indexing(
-                    document_id, error_msg[:500], generation=generation,
-                )
-                await session.commit()
-            except Exception:
-                await session.rollback()
+            if generation is not None:
+                try:
+                    async with AsyncSessionLocal() as recovery_session:
+                        if execution_token is not None:
+                            await _ExecutionRepository(recovery_session).close_execution(
+                                document_id=document_id, generation=generation,
+                                token=execution_token, status="closed" if stopped else "unknown",
+                                reason=f"{stage}: {error_msg[:160]}")
+                        # Close the execution and conditionally fail this document
+                        # in one transaction; a crash cannot leave just one half.
+                        changed = await DocumentIndexRepository(
+                            recovery_session).mark_index_failed_if_indexing(
+                                document_id, error_msg[:500], generation=generation)
+                        await recovery_session.commit()
+                        written = bool(changed)
+                except Exception as recovery_error:
+                    logger.error("【文档索引】执行收尾失败 details=%s",
+                                 json.dumps(exception_details(recovery_error), ensure_ascii=False))
             if written:
                 return {"status": DocumentIndexStatus.INDEX_FAILED,
                         "retryable": True, "error": error_msg[:200]}
@@ -1357,7 +1397,8 @@ async def _delete_single_record(doc_id: str, user_id: str, delete_file: bool, st
             try:
                 where_clause = {"$and": [{"user_id": user_id},
                                          {"document_id": doc_id}]}
-                await asyncio.to_thread(store.vectors_store.delete, where=where_clause)
+                await asyncio.to_thread(store.vectors_store.delete,
+                                        where=where_clause)
                 if int(doc.chunk_count or 0) > 0:
                     legacy_ids = [f"{user_id}:{doc_id}:v1:{i}"
                                   for i in range(int(doc.chunk_count))]

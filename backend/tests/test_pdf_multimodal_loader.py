@@ -189,7 +189,7 @@ async def test_batch_size_splits_calls(monkeypatch, tmp_path):
 def test_build_document_metadata_contract():
     d = pml._build_document("内容", 3, "b" * 32, "a.pdf", [], False)
     assert d.metadata == {
-        "page": 3, "md5": "b" * 32, "source": "a.pdf",
+        "page": 3, "page_number": 3, "md5": "b" * 32, "source": "a.pdf",
         "image_paths": None, "has_images": False,
     }
     d2 = pml._build_document("c", 1, "m", "s.pdf", ["i.png"], True)

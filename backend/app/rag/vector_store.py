@@ -3,7 +3,6 @@ import os
 import threading
 import shutil
 
-from langchain_chroma import Chroma
 from langchain_core.documents import Document
 
 from app.utils.config import chroma_config
@@ -14,6 +13,8 @@ from app.core.logger_handler import logger
 from .retrievers.hybrid_retriever import HybridRetriever
 from .md5_manager import MD5Store
 from .document_handler import DocumentProcessor
+from .chroma_client import build_chroma
+from .chroma_lock import lock_collection_access, write_lock
 from app.utils.image_extractor import delete_image_directory, delete_user_all_images
 
 
@@ -134,11 +135,10 @@ class VectorStoreService:
         - hybrid_retriever: 混合检索器（向量 + BM25）
         - document_processor: 文档处理器（加载、分割、向量化）
         """
-        self.vectors_store = Chroma(
-            collection_name=chroma_config['collection_name'],
-            embedding_function=embed_model,
-            persist_directory=persist_dir,
-        )
+        with write_lock():
+            self.vectors_store = build_chroma(
+                chroma_config['collection_name'], embed_model)
+        lock_collection_access(self.vectors_store)
         self.md5_store = MD5Store()
         self.hybrid_retriever = HybridRetriever(self.vectors_store)
         self.document_processor = DocumentProcessor(self.vectors_store, self.md5_store)

@@ -143,3 +143,38 @@ async def test_sse_events_without_trace_fields_unchanged():
         assert "retrieval" not in event
         assert "grading" not in event
         assert "rewrite" not in event
+
+
+@pytest.mark.asyncio
+async def test_sse_emits_answer_tokens_before_completed():
+    """流式生成器必须产出真实 answer_token 事件，再以 completed 收尾。"""
+    from app.agentic.graph import AgentGraph
+
+    graph = AgentGraph(user_id="user-1")
+
+    class StreamingGenerator:
+        async def generate_stream(self, **kwargs):
+            yield {"delta": "答"}
+            yield {"delta": "案"}
+            yield {"answer": "答案", "citations": [], "quality_scores": None,
+                   "timed_out": False}
+
+        async def generate(self, **kwargs):
+            raise AssertionError("流式路径不应回退到 generate")
+
+    with patch("app.agentic.graph.RetrievalService") as mock_rs, \
+         patch("app.agentic.graph.evidence_grader") as mock_grader, \
+         patch("app.agentic.graph.create_answer_generator") as mock_gen_factory:
+        mock_rs.return_value.retrieve = AsyncMock(return_value=[_evidence()])
+        mock_grader.grade.return_value = _sufficient_grading()
+        mock_gen_factory.return_value = StreamingGenerator()
+
+        events = [event async for event in graph.run("什么是索引")]
+
+    types = [event["type"] for event in events]
+    token_events = [event for event in events if event["type"] == "answer_token"]
+    assert [event["delta"] for event in token_events] == ["答", "案"]
+    assert types.index("completed") > max(
+        index for index, kind in enumerate(types) if kind == "answer_token")
+    assert events[-1]["type"] == "completed"
+    assert events[-1]["answer"] == "答案"

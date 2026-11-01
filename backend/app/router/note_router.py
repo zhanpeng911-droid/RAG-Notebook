@@ -1,6 +1,8 @@
 """
 笔记管理 API 路由 —— CRUD、搜索、自动标签、内联补全、写作辅助。
 """
+import asyncio
+
 from fastapi.routing import APIRouter
 from fastapi import Depends, Query
 from fastapi.responses import StreamingResponse
@@ -30,9 +32,10 @@ def _enqueue_note_vector_sync(note_id: str, user_id: str) -> None:
     if not get_settings().NOTE_VECTOR_INDEX_ENABLED:
         return
     try:
-        from app.tasks.celery_app import sync_note_vector_task
-        sync_note_vector_task.delay(note_id, user_id)
+        from app.tasks.note_vector_task import apply_note_vector_task
+        apply_note_vector_task.delay(note_id, user_id)
     except Exception as exc:
+        # The outbox row is already committed with the note; Beat will recover.
         logger.warning(f"Vector sync task was not submitted for {note_id}: {exc}")
 
 
@@ -41,10 +44,47 @@ def _enqueue_note_vector_delete(note_id: str, user_id: str) -> None:
     if not get_settings().NOTE_VECTOR_INDEX_ENABLED:
         return
     try:
-        from app.tasks.celery_app import delete_note_vector_task
-        delete_note_vector_task.delay(note_id, user_id)
+        from app.tasks.note_vector_task import apply_note_vector_task
+        apply_note_vector_task.delay(note_id, user_id)
     except Exception as exc:
+        # The delete outbox row is durable; Beat will recover.
         logger.warning(f"Vector delete task was not submitted for {note_id}: {exc}")
+
+
+_background_publishes: set[asyncio.Task] = set()
+
+
+def _schedule_background(func, *args) -> None:
+    """Run a blocking Celery publish off the request event loop.
+
+    ``delay()`` is synchronous kombu I/O. Calling it directly inside the
+    async save path blocked every request on that worker; at 20 saves/s the
+    mixed 100 QPS profile stalled for seconds and hit the in-flight limit.
+    The outbox row is already committed, so a failed/late publish is
+    recoverable by Beat.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        func(*args)
+        return
+    task = loop.create_task(asyncio.to_thread(func, *args))
+    _background_publishes.add(task)
+    task.add_done_callback(_background_publishes.discard)
+
+
+def _schedule_auto_tag(note_id: str, user_id: str, content: str,
+                       llm_config: dict | None) -> None:
+    def publish():
+        try:
+            from app.tasks.celery_app import generate_tags_task
+            generate_tags_task.delay(note_id, user_id, content, llm_config)
+        except Exception as exc:
+            # Do not fall back to in-process LLM work: it can monopolize FastAPI
+            # while a local Ollama endpoint is unavailable.
+            logger.warning(f"Auto-tag task was not submitted for {note_id}: {exc}")
+
+    _schedule_background(publish)
 
 
 
@@ -53,22 +93,17 @@ async def create_note(
     payload: NoteCreate,
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
-    _: None = Depends(rate_limit(limit=10, window=60)),
+    _: None = Depends(rate_limit(
+        limit=get_settings().NOTE_CREATE_RATE_LIMIT, window=60)),
 ):
     """Create a note quickly; non-critical AI work is queued after commit."""
     llm_config = payload.llm_config if isinstance(payload.llm_config, dict) else (payload.llm_config.model_dump() if payload.llm_config else None)
     note = await note_service.create_note(db, user_id, payload, llm_config=llm_config)
     logger.info(f"Note created user_id={user_id}, note_id={note.id}")
 
-    _enqueue_note_vector_sync(note.id, user_id)
+    # The outbox row is committed with the note; Beat drains it in batches.
     if get_settings().NOTE_AUTO_TAG_ENABLED and not payload.category and not payload.tags:
-        try:
-            from app.tasks.celery_app import generate_tags_task
-            generate_tags_task.delay(note.id, user_id, payload.content, llm_config)
-        except Exception as exc:
-            # Do not fall back to in-process LLM work: it can monopolize FastAPI
-            # while a local Ollama endpoint is unavailable.
-            logger.warning(f"Auto-tag task was not submitted for {note.id}: {exc}")
+        _schedule_auto_tag(note.id, user_id, payload.content, llm_config)
 
     return success_response(message="Note created", data=note)
 
@@ -188,8 +223,7 @@ async def update_note(
     note = await note_service.update_note(db, note_id, user_id, payload)
     if not note:
         raise NoteNotFoundException()
-    if {"title", "content"}.intersection(payload.model_fields_set):
-        _enqueue_note_vector_sync(note_id, user_id)
+    # The update outbox row is committed; Beat drains it in batches.
     return success_response(message="Note updated", data=note)
 
 
@@ -204,7 +238,7 @@ async def delete_note(
     deleted = await note_service.delete_note(db, note_id, user_id)
     if not deleted:
         raise NoteNotFoundException()
-    _enqueue_note_vector_delete(note_id, user_id)
+    # The delete outbox row is committed; Beat drains it in batches.
     return success_response(message="Note deleted")
 
 

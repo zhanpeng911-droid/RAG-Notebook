@@ -55,6 +55,10 @@ def _patch_chroma(monkeypatch):
     FakeDocument.captured = []
     import app.services.note_vector_index as m
     monkeypatch.setattr(m, "Chroma", FakeChroma)
+    monkeypatch.setattr(
+        m, "build_chroma",
+        lambda collection_name, embedding_function: FakeChroma(
+            collection_name, embedding_function))
     monkeypatch.setattr(m, "Document", FakeDocument)
     yield
 
@@ -68,6 +72,19 @@ def test_stale_client_error_detect():
     assert _looks_like_stale_client_error(Exception("Error finding id")) is True
     assert _looks_like_stale_client_error(Exception("internal error")) is True
     assert _looks_like_stale_client_error(Exception("正常错误")) is False
+
+
+def test_stale_client_classification_survives_payload_free_transport_error():
+    from app.rag.vector_io import ObservedCollection, VectorDependencyError
+
+    class Native:
+        def query(self):
+            raise RuntimeError("Error finding id; private content must not be logged")
+
+    with pytest.raises(VectorDependencyError) as error:
+        ObservedCollection(Native(), "http://localhost:8001").query()
+    assert "private" not in str(error.value)
+    assert _looks_like_stale_client_error(error.value) is True
 
 
 def test_ensure_store_creates_once():
@@ -112,20 +129,19 @@ def test_add_note():
     assert store.calls[0][1][0].metadata["user_id"] == USER_A
 
 
-def test_upsert_note():
+def test_upsert_note_uses_stable_id_without_delete():
     idx = NoteVectorIndex()
     idx.upsert_note("n1", USER_A, "标题", "内容")
     store = FakeChroma.instances[0]
-    assert store.calls[0][0] == "delete"
-    assert store.calls[1][0] == "add"
+    assert [call[0] for call in store.calls] == ["add"]
+    assert store.calls[0][2] == ["n1"]
 
 
 def test_update_note_wraps_upsert():
     idx = NoteVectorIndex()
     idx.update_note("n1", USER_A, "标题", "内容")
     store = FakeChroma.instances[0]
-    assert store.calls[0][0] == "delete"
-    assert store.calls[1][0] == "add"
+    assert [call[0] for call in store.calls] == ["add"]
 
 
 def test_delete_note():

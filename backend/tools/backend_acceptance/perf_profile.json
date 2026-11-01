@@ -1,0 +1,125 @@
+{
+  "version": "enterprise-v1",
+  "frozen": "2026-10-27",
+  "accounts": 100,
+  "notes": 100000,
+  "targets": {
+    "steady_qps": 50,
+    "peak_qps": 100,
+    "ramp_qps": [
+      10,
+      25,
+      50,
+      100,
+      200
+    ],
+    "steady_error_rate": 0.001,
+    "peak_error_rate": 0.005,
+    "steady_min_samples_per_endpoint": 1000,
+    "long_run_min_samples_per_endpoint": 10000,
+    "groups": {
+      "list": {
+        "steady_p95_ms": 300,
+        "steady_p99_ms": 800,
+        "peak_p95_ms": 600,
+        "peak_p99_ms": 1600
+      },
+      "detail": {
+        "steady_p95_ms": 300,
+        "steady_p99_ms": 800,
+        "peak_p95_ms": 600,
+        "peak_p99_ms": 1600
+      },
+      "state": {
+        "steady_p95_ms": 300,
+        "steady_p99_ms": 800,
+        "peak_p95_ms": 600,
+        "peak_p99_ms": 1600
+      },
+      "candidates": {
+        "steady_p95_ms": 300,
+        "steady_p99_ms": 800,
+        "peak_p95_ms": 600,
+        "peak_p99_ms": 1600
+      },
+      "graph_global": {
+        "steady_p95_ms": 800,
+        "steady_p99_ms": 1500,
+        "peak_p95_ms": 1600,
+        "peak_p99_ms": 3000
+      },
+      "graph_local": {
+        "steady_p95_ms": 800,
+        "steady_p99_ms": 1500,
+        "peak_p95_ms": 1600,
+        "peak_p99_ms": 3000
+      },
+      "save_0": {
+        "steady_p95_ms": 500,
+        "steady_p99_ms": 1500,
+        "peak_p95_ms": 1000,
+        "peak_p99_ms": 3000
+      },
+      "save_20": {
+        "steady_p95_ms": 500,
+        "steady_p99_ms": 1500,
+        "peak_p95_ms": 1000,
+        "peak_p99_ms": 3000
+      },
+      "save_100": {
+        "steady_p95_ms": 1000,
+        "steady_p99_ms": 2000,
+        "peak_p95_ms": 2000,
+        "peak_p99_ms": 4000
+      },
+      "analysis_accept": {
+        "steady_p95_ms": 500,
+        "steady_p99_ms": 1000,
+        "peak_p95_ms": 1000,
+        "peak_p99_ms": 2000
+      }
+    }
+  },
+  "weights": {
+    "l01_reads": {
+      "list": 20,
+      "detail": 20,
+      "graph_global": 15,
+      "graph_local": 15,
+      "state": 15,
+      "candidates": 15
+    },
+    "l03_mixed": {
+      "list": 20,
+      "detail": 20,
+      "graph_global": 10,
+      "graph_local": 10,
+      "candidates": 10,
+      "state": 10,
+      "save_20": 20
+    },
+    "l02_save": {
+      "save_0": 1
+    },
+    "l02_save_20": {
+      "save_20": 1
+    },
+    "l02_save_100": {
+      "save_100": 1
+    }
+  },
+  "measurement_schema_version": 2,
+  "measurement_revision": "2026-10-29",
+  "resource_guardrails": {
+    "max_sample_gap_s": 15,
+    "comparison_window_s": 600,
+    "rss_growth_ratio": 0.1,
+    "rss_growth_mb": 256,
+    "handles_growth": 128,
+    "threads_growth": 16,
+    "tcp_connections_growth": 10,
+    "db_connections_growth": 10,
+    "drain_timeout_s": 900,
+    "pending_queue_growth": 100
+  }
+}

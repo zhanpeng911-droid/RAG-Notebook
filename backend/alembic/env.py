@@ -24,6 +24,7 @@ import app.models.index_execution  # noqa: F401
 import app.models.legacy_mapping  # noqa: F401
 import app.models.knowledge_insight  # noqa: F401
 import app.models.note_graph  # noqa: F401
+import app.models.note_vector_task  # noqa: F401
 
 config = context.config
 

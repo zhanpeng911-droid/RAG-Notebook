@@ -16,6 +16,19 @@ SECRET = get_settings().SECRET_KEY
 USER_A = "u-aaaa-0000-0000-000000000001"
 
 
+@pytest.fixture(autouse=True)
+def _clear_blacklist_cache():
+    auth_utils._blacklist_cache.clear()
+    auth_utils._blacklist_cache_url = None
+    auth_utils._blacklist_client = None
+    auth_utils._blacklist_client_url = None
+    yield
+    auth_utils._blacklist_cache.clear()
+    auth_utils._blacklist_cache_url = None
+    auth_utils._blacklist_client = None
+    auth_utils._blacklist_client_url = None
+
+
 class _FakeBlacklistClient:
     """exists 是 async。"""
 
@@ -89,6 +102,22 @@ async def test_reject_blacklisted_miss(monkeypatch):
         return fake_client
     monkeypatch.setattr(auth_utils, "connect_redis", _conn)
     await auth_utils._reject_if_blacklisted({"jti": "j1", "user_id": USER_A})
+
+
+@pytest.mark.asyncio
+async def test_revocation_after_a_successful_check_is_seen(monkeypatch):
+    """A token accepted once must be rejected after a later Redis revocation."""
+    fake_client = _FakeBlacklistClient(0)
+
+    async def _conn():
+        return fake_client
+    monkeypatch.setattr(auth_utils, "connect_redis", _conn)
+    payload = {"jti": "revoke-after-check", "user_id": USER_A}
+    await auth_utils._reject_if_blacklisted(payload)
+    fake_client._value = 1
+    with pytest.raises(FE) as ei:
+        await auth_utils._reject_if_blacklisted(payload)
+    assert ei.value.status_code == 401
 
 
 @pytest.mark.asyncio

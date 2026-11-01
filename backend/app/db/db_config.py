@@ -40,8 +40,16 @@ async_engine = create_async_engine(
     max_overflow=20,
     pool_recycle=3600,       # 连接回收时间（秒），防止MySQL断开空闲连接
     pool_pre_ping=True,      # 使用前ping检测连接有效性
+    # REPEATABLE READ gap locks on secondary indexes caused savepoint
+    # deadlocks for concurrent new-note saves. The service relies on
+    # conditional updates/row locks, not gap locks.
+    isolation_level="READ COMMITTED",
     connect_args={
         "connect_timeout": 10,  # 连接超时10秒
+        # Compensation compares Python UTC against DATETIME columns. A
+        # non-UTC MySQL server would otherwise delay cleanup/queued work by
+        # the server offset (observed +08:00 on the local deployment).
+        "init_command": "SET time_zone = '+00:00'",
     },
     echo=False  # 关闭SQL日志减少噪音
 )

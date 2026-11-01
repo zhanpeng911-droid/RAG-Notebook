@@ -264,3 +264,29 @@ async def test_batch_submits_pending_and_failed_below_retry_cap(env):
 async def test_batch_no_work_short_circuits(env):
     await it._batch_index_pending_async(limit=5)
     assert env.delays == []
+
+
+def test_run_async_reuses_one_worker_loop_without_per_task_dispose(monkeypatch):
+    """One loop per worker keeps the pool valid and avoids per-task teardown."""
+    import asyncio
+
+    import app.db.db_config as db_config
+
+    monkeypatch.setattr(it, "_task_loop", None)
+    monkeypatch.setattr(it, "_task_loop_pid", None)
+    loops = []
+
+    async def record_dispose():
+        loops.append(asyncio.get_running_loop())
+
+    async def work():
+        return "ok"
+
+    monkeypatch.setattr(db_config, "dispose_stale_connections", record_dispose)
+    assert it._run_async(work()) == "ok"
+    first = it._task_loop
+    assert it._run_async(work()) == "ok"
+    assert len(loops) == 1
+    assert it._task_loop is first
+    assert first is not None and not first.is_closed()
+    first.close()

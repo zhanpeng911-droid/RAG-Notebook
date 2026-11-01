@@ -27,6 +27,9 @@ from app.core.logger_handler import logger
 from app.utils.prompt_loader import load_prompt
 from app.services.note_vector_index import NoteVectorIndex
 from app.repositories.note_repository import NoteRepository
+from app.repositories.note_vector_task_repository import NoteVectorTaskRepository
+from app.models.note_vector_task import NoteVectorAction
+from app.config.validator import get_settings
 
 NOTES_COLLECTION_NAME = "notes_collection"
 
@@ -115,34 +118,49 @@ class NoteService:
         )
         await self.note_repo.add(db, note)
         db.add(review)
-        await db.commit()
-        await db.refresh(note)
+        # Flush first so this transaction holds the new note row lock. The
+        # outbox lookup no longer needs a gap lock to serialize same-note saves.
+        await db.flush()
+        # The outbox row commits atomically with the note. Immediate Celery
+        # delivery is best effort; Beat can always recover this row.
+        await self._enqueue_vector_task(db, note_id, user_id, NoteVectorAction.UPSERT)
+        # Derived rows use savepoints: a failure degrades the graph/insight
+        # data but does not roll back the note. One commit keeps the hot save
+        # path at a single durability point instead of three.
         await self._sync_note_anchors(db, note, user_id)
         await self._sync_note_links(db, note)
+        await db.commit()
+        await db.refresh(note)
         return self._doc_to_response(note)
 
     @staticmethod
+    async def _enqueue_vector_task(db: AsyncSession, note_id: str, user_id: str,
+                                   action: str) -> None:
+        """Write the durable outbox row in the caller's note transaction."""
+        if not get_settings().NOTE_VECTOR_INDEX_ENABLED:
+            return
+        await NoteVectorTaskRepository(db).enqueue(
+            owner_user_id=user_id, note_id=note_id, action=action)
+
+    @staticmethod
     async def _sync_note_anchors(db: AsyncSession, note: Note, user_id: str) -> None:
-        """笔记保存后同步来源版本；失败只降级洞察，不影响笔记保存。"""
+        """同步来源版本；savepoint 失败只降级洞察，不影响笔记事务。"""
         try:
             from app.services.source_anchor_service import record_note_anchors
-            await record_note_anchors(
-                db, note_id=note.id, owner_user_id=user_id,
-                note_text=note.content or "")
-            await db.commit()
+            async with db.begin_nested():
+                await record_note_anchors(
+                    db, note_id=note.id, owner_user_id=user_id,
+                    note_text=note.content or "")
         except Exception as exc:
-            try:
-                await db.rollback()
-            except Exception:
-                pass
             logger.warning("【笔记】来源锚点同步失败（笔记已保存）: %s", str(exc)[:200])
 
     @staticmethod
     async def _sync_note_links(db: AsyncSession, note: Note) -> None:
-        """保存后重建正文链接；失败只降级图谱，不影响笔记保存。"""
+        """重建正文链接；savepoint 失败只降级图谱，不影响笔记事务。"""
         try:
-            from app.services.note_link_service import sync_note_links_safe
-            await sync_note_links_safe(db, note)
+            from app.services.note_link_service import sync_note_links
+            async with db.begin_nested():
+                await sync_note_links(db, note)
         except Exception as exc:
             logger.warning("【笔记】正文链接同步失败（笔记已保存）: %s", str(exc)[:200])
 
@@ -161,10 +179,14 @@ class NoteService:
         if payload.category is not None:
             note.category = payload.category
 
-        await db.commit()
-        await db.refresh(note)
+        await db.flush()
+        if {"title", "content"}.intersection(payload.model_fields_set):
+            await self._enqueue_vector_task(
+                db, note_id, user_id, NoteVectorAction.UPSERT)
         await self._sync_note_anchors(db, note, user_id)
         await self._sync_note_links(db, note)
+        await db.commit()
+        await db.refresh(note)
         return self._doc_to_response(note)
 
     async def delete_note(self, db: AsyncSession, note_id: str, user_id: str) -> bool:
@@ -172,27 +194,21 @@ class NoteService:
         deleted = await self.note_repo.delete_by_id(db, note_id, user_id)
         if not deleted:
             return False
-        await db.commit()
+        # The delete intent is durable even if the broker is unavailable.
+        await self._enqueue_vector_task(db, note_id, user_id, NoteVectorAction.DELETE)
         try:
             from app.services.source_anchor_service import invalidate_note
-            await invalidate_note(db, owner_user_id=user_id, note_id=note_id)
-            await db.commit()
+            async with db.begin_nested():
+                await invalidate_note(db, owner_user_id=user_id, note_id=note_id)
         except Exception as exc:
-            try:
-                await db.rollback()
-            except Exception:
-                pass
             logger.warning("【笔记】来源版本失效标记失败: %s", str(exc)[:200])
         try:
             from app.services.note_link_service import remove_note_links
-            await remove_note_links(db, note_id, user_id)
-            await db.commit()
+            async with db.begin_nested():
+                await remove_note_links(db, note_id, user_id)
         except Exception as exc:
-            try:
-                await db.rollback()
-            except Exception:
-                pass
             logger.warning("【笔记】链接关系清理失败: %s", str(exc)[:200])
+        await db.commit()
         return True
 
     async def get_note(self, db: AsyncSession, note_id: str, user_id: str) -> Optional[NoteResponse]:

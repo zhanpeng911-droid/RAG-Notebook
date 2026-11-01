@@ -135,3 +135,14 @@ TEST_REPORT.md
 
 # vitest coverage
 front/coverage/
+
+# local isolated acceptance runtime
+.acceptance/
+
+# Internal planning / acceptance documents (local only, not published)
+docs/product/
+docs/remediation/
+docs/backend-acceptance/
+docs/quality/
+docs/performance/
+docs/evidence/

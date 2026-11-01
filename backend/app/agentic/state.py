@@ -19,6 +19,7 @@ class AgentPhase(str, Enum):
     GRADING_EVIDENCE = "grading_evidence"
     REWRITING_QUERY = "rewriting_query"
     GENERATING_ANSWER = "generating_answer"
+    ANSWER_TOKEN = "answer_token"
     CITATION = "citation"
     COMPLETED = "completed"
     ERROR = "error"

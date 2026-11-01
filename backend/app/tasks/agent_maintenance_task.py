@@ -6,7 +6,6 @@ update_run_terminal 永远不会执行，这些运行若不回收会永久显示
 正常生命周期只有数十秒（Guardrails.MAX_TOTAL_TIME=45s），
 默认 15 分钟无更新即回收为 timeout（条件写，不触碰已有终态）。
 """
-import asyncio
 from datetime import datetime, timedelta, timezone
 
 from app.tasks.celery_app import celery_app
@@ -20,14 +19,13 @@ def _stale_after_minutes() -> int:
 
 
 def _run_async(coro):
-    """在同步 Celery worker 中运行异步代码（执行前清理跨循环陈旧连接）。"""
-    loop = asyncio.new_event_loop()
-    try:
-        from app.db.db_config import dispose_stale_connections
-        loop.run_until_complete(dispose_stale_connections())
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+    """Use the worker's single persistent loop, not a per-task loop.
+
+    A second loop would reuse pooled aiomysql connections from the main task
+    loop and fail with "'NoneType' object has no attribute 'send'".
+    """
+    from app.tasks.index_task import _run_async as run
+    return run(coro)
 
 
 @celery_app.task(ignore_result=True)

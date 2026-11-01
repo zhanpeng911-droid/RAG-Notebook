@@ -97,6 +97,9 @@
             <div v-if="artifact.trust_status === 'insufficient_evidence'" class="warning-banner">
               本次生成没有取得足够的可核验原文，事实性结论未被展示。请检查解析结果后重试。
             </div>
+            <div v-else-if="artifact.trust_status === 'anchor_verified'" class="warning-banner">
+              部分结论只核对了原文位置，未核验引文语义。请打开证据逐条核对。
+            </div>
 
             <template v-if="resultTab === 'summary'">
               <article v-if="artifact.overview?.text" class="analysis-card">

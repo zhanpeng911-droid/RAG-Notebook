@@ -97,6 +97,56 @@ async def test_generate_exception_returns_structured_failure():
     assert out["timed_out"] is False
 
 
+@pytest.mark.asyncio
+async def test_generate_stream_emits_deltas_then_final_result():
+    class StreamModel:
+        def __init__(self):
+            self.stream_calls = 0
+
+        async def astream(self, messages):
+            self.stream_calls += 1
+            for text in ("根据 [1]，", "Redis 默认 ", "everysec。"):
+                yield type("Chunk", (), {"content": text})()
+
+        async def ainvoke(self, messages):
+            return type("Resp", (), {"content": json.dumps({"overall_score": 0.8})})()
+
+    gen = AnswerGenerator()
+    model = StreamModel()
+    gen._chat_model = model
+
+    parts = [part async for part in gen.generate_stream("Redis 默认策略", [_ev()])]
+    deltas = [part["delta"] for part in parts if "delta" in part]
+    final = parts[-1]
+
+    assert deltas == ["根据 [1]，", "Redis 默认 ", "everysec。"]
+    assert final["answer"] == "".join(deltas)
+    assert final["timed_out"] is False
+    assert final["citations"]
+    assert final["quality_scores"]["overall_score"] == 0.8
+    assert model.stream_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_exception_returns_structured_failure():
+    class BoomStream:
+        async def astream(self, messages):
+            yield type("Chunk", (), {"content": "部分"})()
+
+    gen = AnswerGenerator()
+    gen._chat_model = BoomStream()
+    # astream 本身是 async generator；抛错必须被收敛为结构化失败
+    async def broken(messages):
+        yield type("Chunk", (), {"content": "部分"})()
+        raise RuntimeError("stream broken")
+    gen._chat_model.astream = broken
+
+    parts = [part async for part in gen.generate_stream("q", [_ev()])]
+    assert parts[0] == {"delta": "部分"}
+    assert parts[-1]["error"] == "generation_failed"
+    assert parts[-1]["answer"] is None
+
+
 # ---------- judge 容错 ----------
 
 @pytest.mark.asyncio

@@ -15,6 +15,7 @@ import pytest
 import pytest_asyncio
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy import event
 from app.models.note import Note
 from app.models.chat_history import Base
 from app.repositories.note_repository import NoteRepository
@@ -122,6 +123,20 @@ async def test_get_by_ids_empty_list(db_session):
     assert results == []
 
 
+@pytest.mark.asyncio
+async def test_batch_identities_keep_owner_and_note_id_paired(db_session):
+    a_notes = await _seed(db_session, USER_A, count=1)
+    b_notes = await _seed(db_session, USER_B, count=1)
+    repo = NoteRepository()
+    # Separate owner/id IN predicates would wrongly include B here.
+    results = await repo.get_by_identities(db_session, [
+        (USER_A, a_notes[0].id), (USER_A, b_notes[0].id),
+        (USER_B, a_notes[0].id),
+    ])
+    assert [(note.user_id, note.id) for note in results] == [(USER_A, a_notes[0].id)]
+    assert await repo.get_by_identities(db_session, []) == []
+
+
 # ==================== search_like ====================
 
 @pytest.mark.asyncio
@@ -145,3 +160,44 @@ async def test_get_category_counts_only_counts_own_notes(db_session):
     counts = await repo.get_category_counts(db_session, USER_A)
     total = sum(counts.values())
     assert total == 3, f"用户 A 应该只有 3 条笔记，实际 {total}"
+
+
+# ==================== list_by_user_paged ====================
+
+@pytest.mark.asyncio
+async def test_list_by_user_paged_uses_bounded_query(db_engine, db_session):
+    await _seed(db_session, USER_A, count=25)
+    await _seed(db_session, USER_B, count=3)
+    statements = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(db_engine.sync_engine, "before_cursor_execute", capture)
+    try:
+        repo = NoteRepository()
+        notes, total = await repo.list_by_user_paged(
+            db_session, USER_A, page=2, page_size=10)
+    finally:
+        event.remove(db_engine.sync_engine, "before_cursor_execute", capture)
+
+    assert total == 25
+    assert len(notes) == 10
+    assert all(note.user_id == USER_A for note in notes)
+    note_selects = [
+        statement for statement in statements
+        if "FROM notes" in statement and "COUNT(" not in statement.upper()
+    ]
+    assert len(note_selects) == 1
+    assert "LIMIT" in note_selects[0].upper()
+    assert "OFFSET" in note_selects[0].upper()
+
+
+@pytest.mark.asyncio
+async def test_list_by_user_paged_tag_filter_still_pages(db_session):
+    await _seed(db_session, USER_A, count=12)
+    repo = NoteRepository()
+    notes, total = await repo.list_by_user_paged(
+        db_session, USER_A, page=1, page_size=5, tag="test")
+    assert total == 12
+    assert len(notes) == 5

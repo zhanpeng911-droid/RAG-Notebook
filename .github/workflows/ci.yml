@@ -157,7 +157,7 @@ jobs:
         working-directory: backend
         # 工具原生策略：扫描到未获批准的漏洞即失败（exit 1）；网络失败不视为零漏洞。
         # pip-audit 2.10.1 无 --fail-level；豁免必须逐条 --ignore-vuln。
-        # 豁免登记（理由见 QUALITY_ASSURANCE_PLAN_R3.md 遗留登记）：
+        # 豁免登记（理由见内部质量保障方案遗留登记，本地归档）：
         # - PYSEC-2026-161/248/249/2280/2281/311/1325：见 R3 遗留登记
         # - CVE-2026-45830/31/33：chromadb/ecdsa 无修复版本
         # 已升级修复：aiohttp 3.14.3、cryptography 50.0.1、langchain 1.3.18、pyasn1/pypdf/requests/pydantic-settings

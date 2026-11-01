@@ -7,6 +7,10 @@
 - 中等查询：各 0.5
 """
 import asyncio
+import hashlib
+import json
+import threading
+from collections import OrderedDict
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
@@ -18,12 +22,61 @@ from app.core.runtime_config import get as get_runtime_config
 from .bm25_tokenizer import tokenize_for_bm25
 from .empty_retriever import EmptyRetriever
 
+# Cache index construction, never truncate the searchable corpus. Every lookup
+# reads a fresh owner/space snapshot; changes from another process invalidate it
+# by content, without relying on TTL or local write notifications.
+BM25_CACHE_ENTRIES = 4
+BM25_CACHE_PAYLOAD_BYTES = 32 * 1024 * 1024
+
 
 class HybridRetriever:
     """混合检索器（BM25 + 向量检索）"""
 
     def __init__(self, vectors_store: Chroma):
         self.vectors_store = vectors_store
+        self._bm25_cache = OrderedDict()
+        self._bm25_cache_bytes = 0
+        self._bm25_cache_lock = threading.Lock()
+
+    def _build_bm25(self, user_id, space_id, snapshot, k):
+        documents = []
+        digest = hashlib.sha256()
+        payload_bytes = 0
+        metadatas = snapshot.get('metadatas') or []
+        for i, content in enumerate(snapshot.get('documents') or []):
+            metadata = metadatas[i] if i < len(metadatas) else {}
+            metadata = metadata or {}
+            documents.append(Document(page_content=content, metadata=metadata))
+            encoded = json.dumps([content, metadata], sort_keys=True,
+                                 ensure_ascii=False).encode('utf-8')
+            digest.update(len(encoded).to_bytes(8, 'big'))
+            digest.update(encoded)
+            payload_bytes += len(encoded)
+        scope = (user_id, space_id)
+        fingerprint = digest.digest()
+        with self._bm25_cache_lock:
+            previous = self._bm25_cache.pop(scope, None)
+            if previous is not None:
+                self._bm25_cache_bytes -= previous[2]
+            if not documents:
+                return None
+            if previous is not None and previous[0] == fingerprint:
+                index = previous[1]
+            else:
+                index = BM25Retriever.from_documents(
+                    documents=documents, k=k, preprocess_func=tokenize_for_bm25)
+            if payload_bytes <= BM25_CACHE_PAYLOAD_BYTES:
+                while self._bm25_cache and (
+                    len(self._bm25_cache) >= BM25_CACHE_ENTRIES
+                    or self._bm25_cache_bytes + payload_bytes > BM25_CACHE_PAYLOAD_BYTES
+                ):
+                    _, evicted = self._bm25_cache.popitem(last=False)
+                    self._bm25_cache_bytes -= evicted[2]
+                self._bm25_cache[scope] = (fingerprint, index, payload_bytes)
+                self._bm25_cache_bytes += payload_bytes
+            # A cached index is immutable per request: concurrent calls may ask
+            # for different k. Authorization is still checked by the read path.
+            return index.model_copy(update={'k': k})
 
     async def get_bm25_retriever(
         self, user_id: str = None, space_id: str = None, k: int | None = None
@@ -45,20 +98,9 @@ class HybridRetriever:
             include=['documents', 'metadatas'],
             where=where,
         )
-        documents = []
-        for i, doc_content in enumerate(all_docs_result['documents']):
-            metadata = all_docs_result['metadatas'][i] if i < len(all_docs_result['metadatas']) else {}
-            documents.append(Document(page_content=doc_content, metadata=metadata))
-
-        if documents:
-            bm25_retriever = BM25Retriever.from_documents(
-                documents=documents,
-                k=k if k is not None else get_runtime_config("retrieval.chroma_k"),
-                preprocess_func=tokenize_for_bm25,
-            )
-            return bm25_retriever
-        else:
-            return None
+        return await asyncio.to_thread(
+            self._build_bm25, user_id, space_id, all_docs_result,
+            k if k is not None else get_runtime_config("retrieval.chroma_k"))
 
     async def _get_all_documents(self) -> list[Document]:
         """

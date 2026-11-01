@@ -16,6 +16,9 @@ from app.models.knowledge_insight import (
 from app.models.note_graph import (
     NoteLinkOccurrence, NoteManualRelation, KnowledgeMindmapEdit, NoteLinkStatus,
 )
+from app.models.note_vector_task import (
+    NoteVectorTask, NoteVectorTaskStatus, NoteVectorAction,
+)
 
 __all__ = [
     "Base", "ChatSession", "ChatMessage", "Note", "ReviewRecord",
@@ -27,4 +30,5 @@ __all__ = [
     "KnowledgeArtifact", "KnowledgeEvidence", "KnowledgeConcept", "KnowledgeRelation",
     "SourceVersionStatus", "SourceType", "ArtifactType", "JobStatus", "EvidenceStatus",
     "NoteLinkOccurrence", "NoteManualRelation", "KnowledgeMindmapEdit", "NoteLinkStatus",
+    "NoteVectorTask", "NoteVectorTaskStatus", "NoteVectorAction",
 ]

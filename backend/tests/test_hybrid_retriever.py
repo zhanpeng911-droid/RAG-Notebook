@@ -34,8 +34,8 @@ class FakeVectorStore:
         self.get_calls = []
         self.retriever_kwargs = None
 
-    def get(self, include=None, where=None):
-        self.get_calls.append({"include": include, "where": where})
+    def get(self, include=None, where=None, limit=None):
+        self.get_calls.append({"include": include, "where": where, "limit": limit})
         return {
             "documents": list(self.docs),
             "metadatas": [{"user_id": "u1", "space_id": "s1"}] * len(self.docs),
@@ -141,6 +141,8 @@ async def test_bm25_builds_with_user_filter_and_tokenizer(bm25_spy):
     req = store.get_calls[-1]
     assert set(req["include"]) == {"documents", "metadatas"}
     assert req["where"] == {"user_id": "u1"}
+    # The complete owner/space corpus must remain searchable.
+    assert req["limit"] is None
 
 
 @pytest.mark.asyncio
@@ -160,12 +162,54 @@ async def test_bm25_empty_corpus_returns_none():
 
 
 @pytest.mark.asyncio
+async def test_bm25_finds_the_only_keyword_match_after_document_200():
+    store = FakeVectorStore(docs=["ordinary background" for _ in range(205)]
+                            + ["uniqueneedle target evidence"])
+    retriever = await HybridRetriever(store).get_bm25_retriever("u1", k=1)
+    found = await retriever.ainvoke("uniqueneedle")
+    assert found[0].page_content == "uniqueneedle target evidence"
+
+
+@pytest.mark.asyncio
+async def test_bm25_cache_reuses_build_but_refreshes_snapshot_and_request_k(bm25_spy):
+    store = FakeVectorStore()
+    hybrid = HybridRetriever(store)
+    first = await hybrid.get_bm25_retriever("u1", k=1)
+    second = await hybrid.get_bm25_retriever("u1", k=7)
+    assert len(store.get_calls) == 2
+    assert len(bm25_spy["calls"]) == 1
+    assert first.k == 1 and second.k == 7
+
+
+@pytest.mark.asyncio
+async def test_bm25_cache_detects_external_edit_and_delete(bm25_spy):
+    store = FakeVectorStore(docs=["old contents"])
+    hybrid = HybridRetriever(store)
+    await hybrid.get_bm25_retriever("u1", k=1)
+    store.docs = ["replacement contents"]
+    updated = await hybrid.get_bm25_retriever("u1", k=1)
+    assert updated.docs[0]["content"] == "replacement contents"
+    assert len(bm25_spy["calls"]) == 2
+    store.docs = []
+    assert await hybrid.get_bm25_retriever("u1", k=1) is None
+
+
+@pytest.mark.asyncio
+async def test_bm25_cache_is_separate_for_owner_and_space(bm25_spy):
+    hybrid = HybridRetriever(FakeVectorStore())
+    await hybrid.get_bm25_retriever("u1", space_id="s1", k=1)
+    await hybrid.get_bm25_retriever("u1", space_id="s2", k=1)
+    await hybrid.get_bm25_retriever("u2", space_id="s1", k=1)
+    assert len(bm25_spy["calls"]) == 3
+
+
+@pytest.mark.asyncio
 async def test_bm25_missing_metadata_entry_defaults_empty_dict(bm25_spy):
     store = FakeVectorStore(docs=["只有文档没有元数据"])
     original_get = store.get
 
-    def get(include=None, where=None):
-        result = original_get(include=include, where=where)
+    def get(include=None, where=None, limit=None):
+        result = original_get(include=include, where=where, limit=limit)
         result["metadatas"] = []  # 少于 documents 数量
         return result
 
